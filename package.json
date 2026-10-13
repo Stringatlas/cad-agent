@@ -1,0 +1,30 @@
+{
+  "name": "spatial-cad-harness",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.6",
+  "engines": {
+    "node": ">=22.12.0 <23"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @spatial/web --filter @spatial/server dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck && tsc -p tests/tsconfig.json",
+    "test": "tsx --test tests/*.test.ts",
+    "verify": "pnpm typecheck && pnpm test && pnpm build && node scripts/verification-note.mjs",
+    "verify:browser": "node scripts/browser-smoke.mjs"
+  },
+  "dependencies": {
+    "@spatial/contracts": "workspace:*",
+    "@spatial/project-state": "workspace:*",
+    "@spatial/geometry": "workspace:*"
+  },
+  "devDependencies": {
+    "three": "0.186.1",
+    "@types/three": "0.186.0",
+    "typescript": "5.9.3",
+    "tsx": "4.23.15",
+    "@types/node": "22.19.15",
+    "playwright-core": "1.64.0"
+  }
+}

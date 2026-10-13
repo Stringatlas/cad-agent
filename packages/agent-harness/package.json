@@ -1,0 +1,16 @@
+{
+  "name": "@spatial/agent-harness",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@spatial/contracts": "workspace:*",
+    "@spatial/geometry": "workspace:*"
+  }
+}

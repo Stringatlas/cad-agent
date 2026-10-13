@@ -1,0 +1,96 @@
+export type { DatasetInfo, PointLod, PointObservation } from './observation';
+export { assertCropBox, assertCropSelection, containsCropPoint, intersectsCropNode, CROP_BATCH_POINTS, CROP_LINE_BYTES, CROP_PLANE_EPSILON } from './crop';
+export type { CropBox, CropSelection, CropPlane, CropStats, CropEvent } from './crop';
+
+/** All entity geometry is expressed in the project's local coordinate frame. */
+export type Vec3 = readonly [number, number, number];
+
+export interface CoordinateMetadata {
+  readonly units: 'm';
+  readonly handedness: 'right';
+  readonly upAxis: 'Z';
+  readonly localOrigin: Vec3;
+}
+
+export interface PointCloudEntity {
+  readonly id: string;
+  readonly kind: 'point-cloud';
+  readonly points: readonly Vec3[];
+}
+
+/** A declarative, axis-aligned box proposal, not a kernel CAD body. */
+export interface BoxEntity {
+  readonly id: string;
+  readonly kind: 'box';
+  readonly center: Vec3;
+  readonly dimensions: Vec3;
+}
+
+export type Entity = PointCloudEntity | BoxEntity;
+
+export interface ProjectState {
+  /** Geometry revision only: changing selection does not increment this value. */
+  readonly revision: number;
+  readonly coordinates: CoordinateMetadata;
+  readonly entities: readonly Entity[];
+  readonly selectedEntityId: string | null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function isVec3(value: unknown): value is Vec3 {
+  return Array.isArray(value) && value.length === 3 &&
+    value.every((component: unknown) => typeof component === 'number' && Number.isFinite(component));
+}
+
+export function assertVec3(value: unknown): asserts value is Vec3 {
+  if (!isVec3(value)) throw new TypeError('Expected three finite numeric coordinates');
+}
+
+export function assertCoordinateMetadata(value: unknown): asserts value is CoordinateMetadata {
+  if (!isRecord(value) || value.units !== 'm' || value.handedness !== 'right' || value.upAxis !== 'Z') {
+    throw new TypeError('Expected right-handed Z-up coordinates in meters');
+  }
+  assertVec3(value.localOrigin);
+}
+
+export function assertBoxEntity(value: unknown): asserts value is BoxEntity {
+  if (!isRecord(value) || value.kind !== 'box' || typeof value.id !== 'string' || value.id.length === 0) {
+    throw new TypeError('Expected a box entity with a nonempty ID');
+  }
+  assertVec3(value.center);
+  assertVec3(value.dimensions);
+  if (value.dimensions.some((dimension) => dimension <= 0)) {
+    throw new RangeError('Box dimensions must be strictly positive');
+  }
+}
+
+export function assertEntity(value: unknown): asserts value is Entity {
+  if (!isRecord(value)) throw new TypeError('Expected an entity');
+  if (value.kind === 'box') {
+    assertBoxEntity(value);
+    return;
+  }
+  if (value.kind !== 'point-cloud' || typeof value.id !== 'string' || value.id.length === 0 || !Array.isArray(value.points)) {
+    throw new TypeError('Expected a point-cloud entity with a nonempty ID and points');
+  }
+  for (const point of value.points) assertVec3(point);
+}
+
+export function assertProjectState(value: unknown): asserts value is ProjectState {
+  if (!isRecord(value) || typeof value.revision !== 'number' || !Number.isSafeInteger(value.revision) || value.revision < 0 || !Array.isArray(value.entities)) {
+    throw new TypeError('Expected a project with a nonnegative integer revision and entities');
+  }
+  assertCoordinateMetadata(value.coordinates);
+  const ids = new Set<string>();
+  for (const entity of value.entities) {
+    assertEntity(entity);
+    if (ids.has(entity.id)) throw new TypeError(`Duplicate entity ID: ${entity.id}`);
+    ids.add(entity.id);
+  }
+  if (value.selectedEntityId !== null && (typeof value.selectedEntityId !== 'string' || !ids.has(value.selectedEntityId))) {
+    throw new TypeError('Selection must be null or reference an existing entity');
+  }
+}
