@@ -1,5 +1,7 @@
 export { assertPointLod, sampleIndices, OBSERVATION_LIMITS } from './observation';
 export type { PointObservationSource } from './observation';
+export { executeNearestPole } from './semantic-query';
+export type { SemanticSpatialQuerySource, NearestQueryVerifier } from './semantic-query';
 import type { ProjectState } from '@spatial/contracts';
 import type { GeometryAdapter } from '@spatial/geometry';
 

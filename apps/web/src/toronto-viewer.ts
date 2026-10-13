@@ -3,9 +3,10 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { CropBox, CropSelection, PointObservation, Vec3 } from '@spatial/contracts';
 import { createCropLayer } from './crop-render';
 import { projectCropRectangle } from './crop-projection';
+import { createPolePickCache, poleGestureKind, isPoleClick, type PoleSelection } from './pole-picking';
 
 /** Disposable point projection; prepared dataset remains authoritative, not this render cache. */
-export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) => void, onSelect?: (selection: CropSelection) => void, onFailure?: (error: string) => void) {
+export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) => void, onSelect?: (selection: CropSelection) => void, onFailure?: (error: string) => void, onQuery?: (selection: PoleSelection) => void) {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x101927);
   const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 10_000);
@@ -36,18 +37,34 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
   selectionMaterials.forEach(value => { value.depthTest = false; }); selection.renderOrder = 2; scene.add(selection);
   let selectedBox: CropBox | undefined;
   const raycaster = new THREE.Raycaster();
-  let pointerStart: { x: number; y: number; id: number } | undefined;
+  let pickCache: ReturnType<typeof createPolePickCache> | undefined;
+  let disposed = false;
+  const queryMarkers = new THREE.Group(); scene.add(queryMarkers);
+  const markerGeometry = new THREE.BufferGeometry();
+  const markerMaterial = new THREE.PointsMaterial({ color: 0x72d9cd, size: 14, sizeAttenuation: false, depthTest: false });
+  const originMarker = new THREE.Points(markerGeometry, markerMaterial); originMarker.renderOrder = 4; queryMarkers.add(originMarker);
+  const winnerGeometry = new THREE.BufferGeometry();
+  const winnerMaterial = new THREE.PointsMaterial({ color: 0xff7799, size: 11, sizeAttenuation: false, depthTest: false });
+  const winnerMarker = new THREE.Points(winnerGeometry, winnerMaterial); winnerMarker.renderOrder = 5; queryMarkers.add(winnerMarker);
+  const lineGeometry = new THREE.BufferGeometry(), lineMaterial = new THREE.LineBasicMaterial({ color: 0xffd65a, depthTest: false });
+  const distanceLine = new THREE.Line(lineGeometry, lineMaterial); distanceLine.renderOrder = 3; queryMarkers.add(distanceLine);
+  queryMarkers.visible = false;
+  let queryPositions: { selected: Vec3; nearest?: Vec3 } | undefined;
+  let pointerStart: { x: number; y: number; id: number; kind: 'shift' | 'query'; travel: number; cache: typeof pickCache } | undefined;
   const pointerDown = (event: PointerEvent) => {
-    if (!event.shiftKey || event.button !== 0 || pointerStart) return;
+    const kind = poleGestureKind(event, !!onQuery);
+    if (!kind || pointerStart || disposed || gpuFailed) return;
     // Capture phase precedes OrbitControls: a Shift gesture must never rotate/pan the camera.
     event.preventDefault(); event.stopImmediatePropagation(); controls.enabled = false;
-    pointerStart = { x: event.clientX, y: event.clientY, id: event.pointerId };
-    renderer.domElement.setPointerCapture(event.pointerId); overlay.hidden = false;
+    pointerStart = { x: event.clientX, y: event.clientY, id: event.pointerId, kind, travel: 0, cache: pickCache };
+    renderer.domElement.setPointerCapture(event.pointerId); overlay.hidden = kind !== 'shift';
     pointerMove(event);
   };
   const pointerMove = (event: PointerEvent) => {
     if (!pointerStart || event.pointerId !== pointerStart.id) return;
     event.preventDefault(); event.stopImmediatePropagation();
+    pointerStart.travel = Math.max(pointerStart.travel, Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y));
+    if (pointerStart.kind === 'query') return;
     const rect = renderer.domElement.getBoundingClientRect();
     const x = Math.max(rect.left, Math.min(rect.right, event.clientX)), y = Math.max(rect.top, Math.min(rect.bottom, event.clientY));
     Object.assign(overlay.style, { left: Math.min(pointerStart.x, x) - rect.left + 'px', top: Math.min(pointerStart.y, y) - rect.top + 'px',
@@ -62,6 +79,15 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
     event.preventDefault(); event.stopImmediatePropagation();
     const start = pointerStart, rect = renderer.domElement.getBoundingClientRect(); finishGesture();
     const dx = Math.abs(event.clientX - start.x), dy = Math.abs(event.clientY - start.y);
+    if (start.kind === 'query') {
+      if (!isPoleClick(Math.max(start.travel, Math.hypot(dx, dy)), false, start.cache === pickCache) || disposed || gpuFailed) return;
+      raycaster.params.Points.threshold = camera.position.distanceTo(controls.target) * 2 * Math.tan(camera.fov * Math.PI / 360) / Math.max(rect.height, 1) * 6;
+      raycaster.setFromCamera(new THREE.Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1), camera);
+      const hit = raycaster.intersectObject(points)[0];
+      const resolved = hit?.index === undefined ? undefined : start.cache?.resolve(hit.index);
+      if (resolved) onQuery?.(resolved);
+      return;
+    }
     if (dx >= 4 && dy >= 4 && bounds) {
       onSelect?.(projectCropRectangle(camera, { left: start.x - rect.left, top: start.y - rect.top, right: event.clientX - rect.left, bottom: event.clientY - rect.top }, rect.width, rect.height, bounds));
       return;
@@ -76,6 +102,8 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       onPick?.([position.getX(hit.index), position.getY(hit.index), position.getZ(hit.index)]);
     }
   };
+  const contextMenu = (event: MouseEvent) => { if (onQuery && (event.ctrlKey || event.metaKey || pointerStart?.kind === 'query')) { event.preventDefault(); event.stopImmediatePropagation(); } };
+  renderer.domElement.addEventListener('contextmenu', contextMenu, true);
   renderer.domElement.addEventListener('pointerdown', pointerDown, true);
   renderer.domElement.addEventListener('pointermove', pointerMove, true);
   renderer.domElement.addEventListener('pointerup', pointerUp, true);
@@ -120,6 +148,8 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
     host.dataset.cropChunks = String(cropLayer.group.children.length);
     host.dataset.boxVisible = String(selection.visible);
     if (smoke) {
+      host.dataset.querySelected = String(!!queryPositions);
+      host.dataset.queryWinner = String(!!queryPositions?.nearest);
       host.dataset.camera = JSON.stringify(camera.position.toArray());
       const positions = points.geometry.getAttribute('position');
       if (positions?.count) {
@@ -131,6 +161,8 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
   animate();
   return {
     update(sample: PointObservation) {
+      if (disposed) return;
+      const nextCache = onQuery ? createPolePickCache(sample) : undefined;
       if (sample.count > 100_000 || sample.positions.length !== sample.count * 3) throw new Error('Display point limit exceeded');
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute('position', new THREE.Float32BufferAttribute(sample.positions, 3));
@@ -146,8 +178,27 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       const previous = points.geometry;
       points.geometry = geometry;
       previous.dispose();
+      pickCache?.dispose(); pickCache = nextCache;
       bounds = sample.dataset.bounds;
       if (!initialized) { initialized = true; frameDataset(); }
+    },
+    setQueryMarkers(selected?: Vec3, nearest?: Vec3) {
+      if (JSON.stringify(queryPositions) === JSON.stringify(selected ? { selected, nearest } : undefined)) return;
+      // Release previous GPU attributes before replacing this tiny disposable cache.
+      markerGeometry.dispose(); winnerGeometry.dispose(); lineGeometry.dispose();
+      queryPositions = selected ? { selected, nearest } : undefined; queryMarkers.visible = !!selected;
+      markerGeometry.setAttribute('position', new THREE.Float32BufferAttribute(selected ?? [], 3));
+      winnerGeometry.setAttribute('position', new THREE.Float32BufferAttribute(nearest ?? [], 3));
+      lineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(selected && nearest ? [...selected, ...nearest] : [], 3));
+      for (const geometry of [markerGeometry, winnerGeometry, lineGeometry]) { if (geometry.getAttribute('position').count) geometry.computeBoundingSphere(); }
+    },
+    frameResult() {
+      if (!queryPositions) return;
+      const positions = [queryPositions.selected, queryPositions.nearest ?? queryPositions.selected];
+      const previous = bounds;
+      bounds = { min: [0, 1, 2].map(i => Math.min(...positions.map(p => p[i])) - 2) as unknown as Vec3,
+        max: [0, 1, 2].map(i => Math.max(...positions.map(p => p[i])) + 2) as unknown as Vec3 };
+      frameDataset(); bounds = previous;
     },
     setBox(box?: CropBox) {
       selectedBox = box; selection.visible = !!box;
@@ -167,6 +218,9 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
     viewCenter(): Vec3 { return controls.target.toArray() as [number, number, number]; },
     frameDataset,
     dispose() {
+      disposed = true; pickCache?.dispose(); pickCache = undefined; finishGesture();
+      markerGeometry.dispose(); markerMaterial.dispose(); winnerGeometry.dispose(); winnerMaterial.dispose(); lineGeometry.dispose(); lineMaterial.dispose();
+      renderer.domElement.removeEventListener('contextmenu', contextMenu, true);
       cancelAnimationFrame(frame);
       resize.disconnect();
       controls.dispose();

@@ -1,6 +1,9 @@
 export type { DatasetInfo, PointLod, PointObservation } from './observation';
 export { assertCropBox, assertCropSelection, containsCropPoint, intersectsCropNode, CROP_BATCH_POINTS, CROP_LINE_BYTES, CROP_PLANE_EPSILON } from './crop';
 export type { CropBox, CropSelection, CropPlane, CropStats, CropEvent } from './crop';
+export { assertNearestPoleRequest, canonicalPoleRequest } from './semantic-query';
+export type { PointKey, QueryInput, SearchDomain, NearestPoleRequest, PointWitness, ScanStats, SearchEvidence,
+  QueryErrorCode, QueryFailure, CompleteQuery, QueryOutcome, VerificationEvidence, VerificationOutcome, NearestPoleToolOutcome, ArtifactReadStats } from './semantic-query';
 
 /** All entity geometry is expressed in the project's local coordinate frame. */
 export type Vec3 = readonly [number, number, number];

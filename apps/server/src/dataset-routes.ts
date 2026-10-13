@@ -2,7 +2,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { PotreeDataset } from './potree';
 import { once } from 'node:events';
-import { assertCropSelection, type CropSelection } from '@spatial/contracts';
+import { assertCropSelection, canonicalPoleRequest, type NearestPoleRequest, type CropSelection } from '@spatial/contracts';
+import { streamClosestPole } from './pole-transport';
 
 export const DEFAULT_DATASET_ROOT = fileURLToPath(new URL('../../../data/processed/toronto3d/prepared/', import.meta.url));
 
@@ -25,13 +26,21 @@ export function createDatasetRoutes(directory = DEFAULT_DATASET_ROOT) {
       send(403, { error: 'Local access only' }); return true;
     }
     // No CORS, file paths, write operations, or raw assets. Ranges are deliberately unsupported.
-    if (request.method !== 'GET' || !['/datasets/toronto3d', '/datasets/toronto3d/observation', '/datasets/toronto3d/crop'].includes(url.pathname)) {
+    if (request.method !== 'GET' || !['/datasets/toronto3d', '/datasets/toronto3d/observation', '/datasets/toronto3d/crop', '/datasets/toronto3d/closest-pole'].includes(url.pathname)) {
       send(404, { error: 'Not found' }); return true;
     }
     if (request.headers.range) { send(416, { error: 'Raw byte ranges are not exposed' }); return true; }
     if ((request.url?.length ?? 0) > 4096) { send(400, { error: 'Query too long' }); return true; }
     const metadata = url.pathname === '/datasets/toronto3d';
     const crop = url.pathname === '/datasets/toronto3d/crop';
+    const pole = url.pathname === '/datasets/toronto3d/closest-pole';
+    let poleRequest: NearestPoleRequest | undefined;
+    if (pole) {
+      try {
+        if ([...url.searchParams.keys()].length !== 1 || !url.searchParams.has('request')) throw new TypeError();
+        poleRequest = canonicalPoleRequest(JSON.parse(url.searchParams.get('request')!));
+      } catch { send(400, { error: 'Invalid closest pole request' }); return true; }
+    }
     let box: CropSelection | undefined;
     if (crop) {
       try {
@@ -50,7 +59,7 @@ export function createDatasetRoutes(directory = DEFAULT_DATASET_ROOT) {
     const keys = [...url.searchParams.keys()];
     const purpose = url.searchParams.get('purpose');
     const budget = url.searchParams.get('budget') ?? '', depth = url.searchParams.get('depth') ?? '';
-    if ((metadata && keys.length) || (!metadata && !crop && (keys.length !== 3 || new Set(keys).size !== 3 || keys.some(key => !['purpose', 'budget', 'depth'].includes(key)) ||
+    if ((metadata && keys.length) || (!metadata && !crop && !pole && (keys.length !== 3 || new Set(keys).size !== 3 || keys.some(key => !['purpose', 'budget', 'depth'].includes(key)) ||
       (purpose !== 'display' && purpose !== 'harness') || !/^[1-9]\d{0,5}$/.test(budget) || !/^[0-3]$/.test(depth)))) {
       send(400, { error: 'Expected purpose=display|harness, budget=positive integer, depth=0..3' }); return true;
     }
@@ -60,7 +69,9 @@ export function createDatasetRoutes(directory = DEFAULT_DATASET_ROOT) {
     const abort = () => controller.abort();
     response.once('close', abort);
     try {
-      if (box) {
+      if (poleRequest) {
+        await streamClosestPole(directory, poleRequest, response, controller);
+      } else if (box) {
         // Pull one bounded event at a time. Slow readers backpressure dataset reads.
         for await (const event of dataset.crop(box, controller.signal)) {
           controller.signal.throwIfAborted();

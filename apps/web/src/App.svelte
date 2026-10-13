@@ -1,14 +1,16 @@
 <script lang="ts">
   import Demo from './Demo.svelte';
   import Toronto from './Toronto.svelte';
-  let mode = $state<'demo' | 'toronto'>('demo');
+  import ClosestPole from './ClosestPole.svelte';
+  let mode = $state<'demo' | 'toronto' | 'pole'>('demo');
 </script>
 
 <nav aria-label="Scene source">
   <button aria-pressed={mode === 'demo'} onclick={() => mode = 'demo'}>Synthetic demo</button>
   <button aria-pressed={mode === 'toronto'} onclick={() => mode = 'toronto'}>Toronto3D preview</button>
+  <button aria-pressed={mode === 'pole'} onclick={() => mode = 'pole'}>Closest pole</button>
 </nav>
-{#if mode === 'demo'}<Demo />{:else}<Toronto />{/if}
+{#if mode === 'demo'}<Demo />{:else if mode === 'toronto'}<Toronto />{:else}<ClosestPole />{/if}
 
 <style>
   :global(*) { box-sizing: border-box; }

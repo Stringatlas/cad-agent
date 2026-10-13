@@ -11,6 +11,9 @@ Use [TEMPLATE.md](TEMPLATE.md) for bounded work with testable acceptance criteri
 | [003 — Web preview with independent LOD](003-web-preview-lod.md) | Implemented; browser verification blocked; fresh review pending. |
 | [004 — Full-resolution display box](004-full-resolution-box.md) | Historical bounded implementation; total crop caps superseded by task005; browser/fresh review pending. |
 | [005 — Uncapped projected-window display](005-projected-full-resolution.md) | Resolved / complete; independent bounded feedback/stream-interaction review completed, resource-failure gesture bypass fixed; 33/33 tests pass. User browser correctness/performance confirmation accepted; automated Chrome unavailable. Review-owned guard spot-check pending. |
+| [006 — Headless closest Pole-labelled point](006-closest-pole-headless.md) | Implemented/verified; 43/43 baseline tests and actual-data region query/oracle pass. Fresh-session review pending; graph analysis unavailable. |
+| [007 — Closest pole tab](007-closest-pole-ui.md) | Implemented; historical exhaustive HTTP evidence retained; interactive backend superseded by task008. Browser/fresh-session UI review pending. |
+| [008 — Interactive closest-Pole performance](008-closest-pole-performance.md) | Implemented; exact indexed HTTP/client47–54ms warm,291ms persisted startup;61/61 baseline and rendered Chrome checks pass (117–149ms instrumented UI completion). Fresh-session review pending. |
 
 ## Workflow
 
