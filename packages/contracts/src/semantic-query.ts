@@ -1,5 +1,12 @@
 import type { DatasetInfo, Vec3 } from './index';
 
+export type TorontoSemanticLabel = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+/** Prepared Toronto3D scalar_Label names, matching the preprocessing manifest. */
+export const TORONTO_SEMANTIC_LABELS = Object.freeze({
+  0: 'Unclassified', 1: 'Ground', 2: 'Road_markings', 3: 'Natural', 4: 'Building',
+  5: 'Utility_line', 6: 'Pole', 7: 'Car', 8: 'Fence',
+} as const);
+
 export interface PointKey { readonly sourceFileId: number; readonly sourceRow: number }
 export type QueryInput = { readonly kind: 'point-ref'; readonly key: PointKey } |
   { readonly kind: 'coordinate'; readonly position: Vec3 };
@@ -12,14 +19,14 @@ export interface NearestPoleRequest {
   readonly units: 'm';
   readonly frameId: 'toronto3d-local-v1';
   readonly input: QueryInput;
-  readonly filter: { readonly schema: 'toronto3d-scalar-label-v1'; readonly attribute: 'scalar_Label'; readonly value: 6 };
+  readonly filter: { readonly schema: 'toronto3d-scalar-label-v1'; readonly attribute: 'scalar_Label'; readonly value: TorontoSemanticLabel };
   readonly metric: 'euclidean-3d';
   readonly domain: SearchDomain;
 }
 export interface PointWitness {
   readonly key: PointKey;
   readonly position: Vec3;
-  readonly label: 6;
+  readonly label: TorontoSemanticLabel;
   readonly distanceSquared: number;
   readonly distanceMeters: number;
 }
@@ -35,9 +42,22 @@ export interface ScanStats {
   readonly resolutionPoints: number;
   readonly resolutionPayloadBytes: number;
 }
+/** Complete page partition: visited/excluded/strictly-distance-pruned. Cache I/O is
+ * distinct from original prepared-record witness reads. coveredPoints includes all
+ * physical records, while scannedPoints counts records in visited pages only. */
+export interface DiskCoverageEvidence {
+  readonly totalPages: number;
+  readonly visitedPages: number;
+  readonly excludedPages: number;
+  readonly prunedPages: number;
+  readonly coveredPoints: number;
+  readonly cacheBytes: number;
+  readonly maxCacheReadBytes: number;
+}
 export interface SearchEvidence extends ScanStats {
   readonly artifactRevision: string;
-  readonly algorithm: 'potree-semantic-full-scan-v1' | 'pole-category-index-v1';
+  readonly algorithm: 'potree-semantic-full-scan-v1' | 'pole-category-index-v1' | 'semantic-disk-page-index-v1';
+  readonly disk?: DiskCoverageEvidence;
   /** Complete category index binding; absent for exhaustive source-record evidence. */
   readonly index?: { readonly points: number; readonly hash: string };
   readonly arithmetic: 'xyz-binary64-v1';
@@ -58,7 +78,8 @@ export interface CompleteQuery {
 }
 export type QueryOutcome = CompleteQuery | QueryFailure;
 export interface VerificationEvidence extends ScanStats {
-  readonly verifier: 'linear-record-oracle-v1' | 'pole-category-linear-v1';
+  readonly verifier: 'linear-record-oracle-v1' | 'pole-category-linear-v1' | 'semantic-disk-page-verifier-v1';
+  readonly disk?: DiskCoverageEvidence;
   readonly index?: { readonly points: number; readonly hash: string };
   readonly artifactRevision: string;
   readonly requestHash: string;
@@ -97,7 +118,7 @@ export function assertNearestPoleRequest(value: unknown): asserts value is Neare
     r.datasetId !== 'toronto3d' || r.units !== 'm' || r.frameId !== 'toronto3d-local-v1' || r.metric !== 'euclidean-3d') throw new TypeError('Invalid query binding');
   const filter = object(r.filter);
   keys(filter, ['schema', 'attribute', 'value']);
-  if (filter.schema !== 'toronto3d-scalar-label-v1' || filter.attribute !== 'scalar_Label' || filter.value !== 6) throw new TypeError('Expected Toronto Pole filter');
+  if (filter.schema !== 'toronto3d-scalar-label-v1' || filter.attribute !== 'scalar_Label' || !Number.isInteger(filter.value) || (filter.value as number) < 0 || (filter.value as number) > 8) throw new TypeError('Expected Toronto semantic label 0..8');
   const input = object(r.input);
   if (input.kind === 'coordinate') { keys(input, ['kind', 'position']); position(input.position); }
   else if (input.kind === 'point-ref') {
@@ -120,7 +141,7 @@ export function canonicalPoleRequest(value: unknown): NearestPoleRequest {
     units: value.units, frameId: value.frameId, input: value.input.kind === 'coordinate' ?
       { kind: 'coordinate', position: [...value.input.position] as unknown as Vec3 } :
       { kind: 'point-ref', key: { sourceFileId: value.input.key.sourceFileId, sourceRow: value.input.key.sourceRow } },
-    filter: { schema: value.filter.schema, attribute: value.filter.attribute, value: 6 }, metric: value.metric,
+    filter: { schema: value.filter.schema, attribute: value.filter.attribute, value: value.filter.value }, metric: value.metric,
     domain: value.domain.kind === 'whole-dataset' ? { kind: 'whole-dataset' } :
       { kind: 'aabb', min: [...value.domain.min] as unknown as Vec3, max: [...value.domain.max] as unknown as Vec3 } };
 }

@@ -18,14 +18,14 @@ async function start(args, ready) {
 try {
   browser = await chromium.connectOverCDP(process.argv[2] ?? 'http://127.0.0.1:9222', { timeout: 5000 });
   const context = browser.contexts()[0]; assert.ok(context);
-  // Like the Toronto smoke, run with ports3001/4175 free. Kill only children owned by this script.
-  await start(['--filter', '@spatial/server', 'start'], 'Read-only demo server listening');
-  await start(['--filter', '@spatial/web', 'preview', '--port', '4175', '--strictPort'], 'http://127.0.0.1:4175');
+  // Owned ports only; never change the user's server on :3001.
+  await start(['exec', 'tsx', '-e', 'import { createDemoServer } from "./apps/server/src/index.ts"; createDemoServer().listen(3002, "127.0.0.1", () => console.log("Owned backend ready"));'], 'Owned backend ready');
+  await start(['--dir', 'apps/web', 'exec', 'node', '--input-type=module', '-e', 'import { preview } from "vite"; const server = await preview({ preview: { host: "127.0.0.1", port: 4175, strictPort: true, proxy: { "/datasets/": { target: "http://127.0.0.1:3002" } } } }); server.printUrls();'], 'http://127.0.0.1:4175');
   page = await context.newPage(); await page.setViewportSize({ width: 1440, height: 1100 });
   page.on('console', message => report.messages.push({ type: message.type(), text: message.text() })); page.on('pageerror', error => report.messages.push({ type: 'pageerror', text: String(error) })); report.consoleCaptured = true;
   const requests = [];
-  page.on('request', request => { if (request.url().includes('/closest-pole?')) requests.push(JSON.parse(new URL(request.url()).searchParams.get('request'))); });
-  await page.goto('http://127.0.0.1:4175/?smoke=1'); await page.getByRole('button', { name: 'Closest pole', exact: true }).click();
+  page.on('request', request => { if (request.url().includes('/closest-label?')) requests.push(JSON.parse(new URL(request.url()).searchParams.get('request'))); });
+  await page.goto('http://127.0.0.1:4175/?smoke=1'); await page.getByRole('button', { name: 'Closest: label', exact: true }).click();
   const viewer = page.getByTestId('pole-viewer'), status = page.getByTestId('pole-status');
   await page.waitForFunction(() => document.querySelector('[data-testid="pole-display-status"]')?.textContent?.startsWith('Ready'));
   const target = async () => { const box = await viewer.boundingBox(), p = JSON.parse(await viewer.getAttribute('data-pick-point')); assert.ok(box && p); return { x: box.x + p[0], y: box.y + p[1] }; };

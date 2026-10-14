@@ -3,7 +3,7 @@ import test from 'node:test';
 import { mkdtemp, mkdir, writeFile, rm, rename, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { canonicalPoleRequest, type NearestPoleRequest, type PointWitness, type Vec3, type NearestPoleToolOutcome } from '@spatial/contracts';
+import { canonicalPoleRequest, TORONTO_SEMANTIC_LABELS, type NearestPoleRequest, type PointWitness, type Vec3, type NearestPoleToolOutcome } from '@spatial/contracts';
 import { executeNearestPole } from '../packages/agent-harness/src/semantic-query';
 import { SemanticArtifact, SEMANTIC_LIMITS } from '../apps/server/src/semantic-artifact';
 import { queryClosestPole, PotreeSemanticSource } from '../apps/server/src/semantic-query';
@@ -39,7 +39,7 @@ async function fixture(points: FixturePoint[] = structuredClone(fixturePoints), 
   ]);
   const counts = [1, 2, 3, 4].map(file => points.filter(p => p.file === file).length);
   const manifest = { units: 'm', frame: 'right-handed Z-up', local_origin_world: [627285, 4841948, 0], potree_scale_m: [0.001, 0.001, 0.001],
-    semantic_attribute: 'scalar_Label', semantic_classes: { '6': 'Pole' }, sources: counts.map((points, i) => ({ source_file_id: i + 1, file: `L00${i + 1}.ply`, points })) };
+    semantic_attribute: 'scalar_Label', semantic_classes: TORONTO_SEMANTIC_LABELS, sources: counts.map((points, i) => ({ source_file_id: i + 1, file: `L00${i + 1}.ply`, points })) };
   await mkdir(join(root, 'octree')); await writeFile(join(root, 'manifest.json'), JSON.stringify(manifest));
   await writeFile(join(root, 'octree/metadata.json'), JSON.stringify(metadata));
   await writeFile(join(root, 'octree/hierarchy.bin'), hierarchy); await writeFile(join(root, 'octree/octree.bin'), payload);
@@ -132,6 +132,24 @@ test('independent verifier rejects forged winner, null, position, distance, coun
       assert.equal((await checker.verify(r, { ...a, ...patch } as typeof a)).status, 'rejected');
     }
     assert.equal((await executeNearestPole(r, { dataset: snapshot.dataset, nearestPole: async () => ({ ...a, nearest: null }) }, checker)).status, 'verification-rejected');
+  } finally { await snapshot.close(); await f.clean(); }
+});
+
+test('independent fullscan verifier rejects cross-category witness/evidence and tampered labels', async () => {
+  const f = await fixture(); const snapshot = await SemanticArtifact.open(f.root);
+  try {
+    const poleRequest = await request(f.root), buildingRequest: NearestPoleRequest = { ...poleRequest, filter: { ...poleRequest.filter, value: 4 } };
+    const source = new PotreeSemanticSource(snapshot), checker = new LinearRecordVerifier(snapshot);
+    const pole = await source.nearestPole(poleRequest), building = await source.nearestPole(buildingRequest);
+    assert.equal(pole.status, 'complete'); assert.equal(building.status, 'complete');
+    if (pole.status !== 'complete' || building.status !== 'complete') return;
+    assert.equal(building.nearest!.label, 4);
+    assert.equal((await checker.verify(buildingRequest, building)).status, 'verified');
+    for (const forged of [pole, { ...building, nearest: { ...building.nearest!, label: 6 as const } },
+      { ...building, evidence: pole.evidence }, { ...building, nearest: pole.nearest },
+      { ...pole, evidence: building.evidence }]) {
+      assert.equal((await checker.verify(buildingRequest, forged)).status, 'rejected');
+    }
   } finally { await snapshot.close(); await f.clean(); }
 });
 

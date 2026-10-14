@@ -1,4 +1,4 @@
-import { canonicalPoleRequest, type NearestPoleRequest, type NearestPoleToolOutcome, type Vec3 } from '@spatial/contracts';
+import { canonicalPoleRequest, type NearestPoleRequest, type NearestPoleToolOutcome, type Vec3, type TorontoSemanticLabel, TORONTO_SEMANTIC_LABELS } from '@spatial/contracts';
 import type { PoleSelection } from './pole-picking';
 
 export interface PoleProgress { phase: 'index' | 'resolve' | 'search' | 'verify-resolve' | 'verify'; scannedPoints: number; payloadBytes: number }
@@ -34,9 +34,10 @@ export function validatePoleResult(value: unknown, request: NearestPoleRequest):
         !triple(bounds.min) || !triple(bounds.max) || bounds.min.some((n, i) => n > (bounds.max as Vec3)[i]) ||
         coordinates.units !== 'm' || coordinates.handedness !== 'right' || coordinates.upAxis !== 'Z' || JSON.stringify(coordinates.localOrigin) !== '[627285,4841948,0]') throw new Error('Stale or invalid dataset');
     const search = record(r.search), verification = record(r.verification);
-    fields(search, [...statsFields, 'artifactRevision', 'algorithm', 'arithmetic', 'configHash', 'requestHash', 'traversalHash', 'completion'], ['index']);
-    fields(verification, [...statsFields, 'verifier', 'artifactRevision', 'requestHash', 'transcriptHash'], ['index']);
-    const indexed = search.algorithm === 'pole-category-index-v1';
+    fields(search, [...statsFields, 'artifactRevision', 'algorithm', 'arithmetic', 'configHash', 'requestHash', 'traversalHash', 'completion'], ['index', 'disk']);
+    fields(verification, [...statsFields, 'verifier', 'artifactRevision', 'requestHash', 'transcriptHash'], ['index', 'disk']);
+    const paged = search.algorithm === 'semantic-disk-page-index-v1';
+    const indexed = paged || search.algorithm === 'pole-category-index-v1';
     for (const stats of [search, verification]) {
       if (!statsFields.every(key => integer(stats[key])) || (stats.matchingPoints as number) > dataset.totalPoints ||
           stats.artifactRevision !== request.expectedArtifactRevision || !hash(stats.requestHash) ||
@@ -50,16 +51,34 @@ export function validatePoleResult(value: unknown, request: NearestPoleRequest):
       fields(index, ['points', 'hash']); fields(verifiedIndex, ['points', 'hash']);
       if (!integer(index.points) || index.points > dataset.totalPoints || !hash(index.hash) ||
           verifiedIndex.points !== index.points || verifiedIndex.hash !== index.hash ||
-          search.completion !== 'indexed' || verification.verifier !== 'pole-category-linear-v1' ||
-          (search.scannedPoints as number) > index.points || verification.scannedPoints !== index.points ||
+          search.completion !== 'indexed' || verification.verifier !== (paged ? 'semantic-disk-page-verifier-v1' : 'pole-category-linear-v1') ||
+          (paged ? [search, verification].some(s => (s.scannedPoints as number) > (dataset.totalPoints as number)) :
+            (search.scannedPoints as number) > index.points || verification.scannedPoints !== index.points) ||
           (search.matchingPoints as number) > index.points || (request.domain.kind === 'whole-dataset' && search.matchingPoints !== index.points) ||
-          search.payloadBytes !== 0 || (verification.payloadBytes as number) > 256 ||
+          (paged ? search.payloadBytes !== verification.payloadBytes || (search.payloadBytes as number) > 256 : search.payloadBytes !== 0) || (verification.payloadBytes as number) > 256 ||
           search.resolutionPayloadBytes !== verification.resolutionPayloadBytes ||
           (request.input.kind === 'coordinate' ? search.resolutionPayloadBytes !== 0 :
             (search.resolutionPayloadBytes as number) < 1 || (search.resolutionPayloadBytes as number) > 256) ||
           [search, verification].some(s => s.hierarchyChunks !== 0 || s.payloadNodes !== 0 || s.hierarchyBytes !== 0)) throw new Error('Invalid category-index evidence');
+      if (paged) {
+        for (const phase of [search, verification]) {
+          const disk = record(phase.disk);
+          fields(disk, ['totalPages', 'visitedPages', 'excludedPages', 'prunedPages', 'coveredPoints', 'cacheBytes', 'maxCacheReadBytes']);
+          const scanned = phase.scannedPoints as number, visited = disk.visitedPages as number;
+          const fullPages = visited * 4096, withTail = (visited - 1) * 4096 + (dataset.totalPoints % 4096 || 4096);
+          const expectedMax = visited === 0 ? 0 : visited === 1 ? scanned * 40 : 163840;
+          if (!Object.values(disk).every(integer) || disk.totalPages !== Math.ceil(dataset.totalPoints / 4096) ||
+              visited + (disk.excludedPages as number) + (disk.prunedPages as number) !== disk.totalPages ||
+              disk.coveredPoints !== dataset.totalPoints || disk.cacheBytes !== scanned * 40 ||
+              (visited === 0 ? scanned !== 0 : scanned !== withTail && (scanned !== fullPages || fullPages > dataset.totalPoints)) ||
+              disk.maxCacheReadBytes !== expectedMax ||
+              (r.status === 'verified-none' && disk.prunedPages !== 0) ||
+              (r.status === 'verified-found' ? visited === 0 || (phase.payloadBytes as number) < 1 : phase.payloadBytes !== 0)) throw new Error('Invalid disk coverage evidence');
+        }
+      } else if (search.disk !== undefined || verification.disk !== undefined) throw new Error('Unexpected disk evidence');
     } else if (search.algorithm !== 'potree-semantic-full-scan-v1' || search.completion !== 'exhausted' ||
         verification.verifier !== 'linear-record-oracle-v1' || search.index !== undefined || verification.index !== undefined ||
+        search.disk !== undefined || verification.disk !== undefined ||
         search.scannedPoints !== dataset.totalPoints || verification.scannedPoints !== dataset.totalPoints ||
         search.payloadBytes !== verification.payloadBytes) throw new Error('Invalid exhaustive evidence');
     if (request.input.kind === 'coordinate' && request.input.position.some((n, i) => n !== (r.queryPosition as Vec3)[i])) throw new Error('Query position mismatch');
@@ -68,8 +87,8 @@ export function validatePoleResult(value: unknown, request: NearestPoleRequest):
     } else {
       const n = record(r.nearest), key = record(n.key); fields(n, ['key', 'position', 'label', 'distanceSquared', 'distanceMeters']); fields(key, ['sourceFileId', 'sourceRow']);
       if (!integer(key.sourceFileId) || key.sourceFileId < 1 || key.sourceFileId > 4 || !integer(key.sourceRow) || key.sourceRow > 0xffffffff ||
-          n.label !== 6 || !triple(n.position) || search.matchingPoints === 0 || typeof n.distanceSquared !== 'number' || !Number.isFinite(n.distanceSquared) || n.distanceSquared < 0 ||
-          n.distanceMeters !== Math.sqrt(n.distanceSquared)) throw new Error('Invalid Pole witness');
+          n.label !== request.filter.value || !triple(n.position) || search.matchingPoints === 0 || typeof n.distanceSquared !== 'number' || !Number.isFinite(n.distanceSquared) || n.distanceSquared < 0 ||
+          n.distanceMeters !== Math.sqrt(n.distanceSquared)) throw new Error('Invalid category witness');
       const domain = request.domain;
       if (domain.kind === 'aabb' && n.position.some((p, i) => p < domain.min[i] || p > domain.max[i])) throw new Error('Witness outside domain');
       const [dx, dy, dz] = n.position.map((p, i) => p - (r.queryPosition as Vec3)[i]);
@@ -85,7 +104,7 @@ export function validatePoleResult(value: unknown, request: NearestPoleRequest):
 
 export const fetchClosestPole: PoleLoader = async (value, signal, publish) => {
   const request = canonicalPoleRequest(value);
-  const response = await fetch(`/datasets/toronto3d/closest-pole?${new URLSearchParams({ request: JSON.stringify(request) })}`, { signal });
+  const response = await fetch(`/datasets/toronto3d/closest-label?${new URLSearchParams({ request: JSON.stringify(request) })}`, { signal });
   if (!response.ok) throw new Error(response.status === 429 ? 'Dataset busy — retry the same selection.' : `Query HTTP ${response.status} — check local server/prepared data and retry.`);
   if (!response.body || !response.headers.get('content-type')?.startsWith('application/x-ndjson')) throw new Error('Missing query stream');
   const reader = response.body.getReader(), decoder = new TextDecoder('utf-8', { fatal: true });
@@ -138,8 +157,9 @@ export function createPoleChannel(publish: (state: PoleState) => void, loader: P
   let generation = 0, disposed = false, controller: AbortController | undefined, selection: PoleSelection | undefined;
   const cancel = () => { generation++; controller?.abort(); controller = undefined; };
   return {
-    async select(value: PoleSelection) {
+    async select(value: PoleSelection, label: TorontoSemanticLabel = 6) {
       if (disposed) return;
+      if (!Number.isInteger(label) || !Object.hasOwn(TORONTO_SEMANTIC_LABELS, label)) throw new TypeError('Invalid semantic category');
       cancel();
       // Retry can receive a reactive proxy; detach only primitive provenance fields.
       selection = { datasetId: value.datasetId, artifactRevision: value.artifactRevision,
@@ -149,7 +169,7 @@ export function createPoleChannel(publish: (state: PoleState) => void, loader: P
       const current = new AbortController(); controller = current;
       const request: NearestPoleRequest = { requestId: crypto.randomUUID(), datasetId: captured.datasetId, expectedArtifactRevision: captured.artifactRevision,
         units: 'm', frameId: 'toronto3d-local-v1', input: { kind: 'point-ref', key: captured.key },
-        filter: { schema: 'toronto3d-scalar-label-v1', attribute: 'scalar_Label', value: 6 }, metric: 'euclidean-3d', domain: { kind: 'whole-dataset' } };
+        filter: { schema: 'toronto3d-scalar-label-v1', attribute: 'scalar_Label', value: label }, metric: 'euclidean-3d', domain: { kind: 'whole-dataset' } };
       const live = () => !disposed && generation === token && !current.signal.aborted;
       publish({ phase: 'resolving', selection: captured });
       try {

@@ -19,6 +19,23 @@ function verified(value: NearestPoleToolOutcome) {
   assert.deepEqual(value.nearest!.position, [261.605, 263.00100000000003, 139.178]);
   assert.equal(value.nearest!.distanceMeters, 26.550779009287126);
   assert.deepEqual(value.queryPosition, [243.786, 243.429, 141.267]);
+  assert.equal(value.search.algorithm, 'semantic-disk-page-index-v1'); assert.equal(value.search.completion, 'indexed');
+  assert.equal(value.search.arithmetic, 'xyz-binary64-v1'); assert.equal(value.verification.verifier, 'semantic-disk-page-verifier-v1');
+  assert.equal(value.search.index!.points, 897825); assert.deepEqual(value.verification.index, value.search.index);
+  assert.match(value.search.index!.hash, /^[a-f0-9]{64}$/);
+  for (const evidence of [value.search, value.verification]) {
+    assert.equal(evidence.matchingPoints, 897825);
+    const disk = evidence.disk!; assert.ok(disk);
+    assert.ok(Object.values(disk).every(n => Number.isSafeInteger(n) && n >= 0));
+    assert.equal(disk.totalPages, Math.ceil(value.dataset.totalPoints / 4096));
+    assert.equal(disk.visitedPages + disk.excludedPages + disk.prunedPages, disk.totalPages);
+    assert.equal(disk.coveredPoints, value.dataset.totalPoints); assert.equal(disk.cacheBytes, evidence.scannedPoints * 40);
+    assert.ok(disk.visitedPages > 0 && evidence.scannedPoints >= disk.visitedPages && evidence.scannedPoints <= Math.min(value.dataset.totalPoints, disk.visitedPages * 4096));
+    const full: number = disk.visitedPages * 4096, tail: number = (disk.visitedPages - 1) * 4096 + (value.dataset.totalPoints % 4096 || 4096);
+    assert.ok((full <= value.dataset.totalPoints && evidence.scannedPoints === full) || evidence.scannedPoints === tail, 'Visited pages contain complete records, including the single possible tail page');
+    assert.equal(disk.maxCacheReadBytes, disk.visitedPages === 1 ? evidence.scannedPoints * 40 : 163840);
+    assert.equal(evidence.payloadBytes, 55); assert.equal(evidence.hierarchyBytes, 0); assert.equal(evidence.hierarchyChunks, 0); assert.equal(evidence.payloadNodes, 0);
+  }
   return value;
 }
 async function request(reference: boolean): Promise<NearestPoleRequest> {
@@ -35,7 +52,11 @@ async function measured<T>(work: () => Promise<T>) {
 async function query(reference: boolean) {
   const r = await request(reference), timing = await measured(() => queryIndexedClosestPole(root, r, signal));
   const result = verified(timing.result);
-  assert.equal(result.sourceReads!.payloadBytes, result.verification.payloadBytes + 2 * result.search.resolutionPayloadBytes);
+  for (const evidence of [result.search, result.verification]) {
+    assert.equal(evidence.resolutionPoints, reference ? 1 : 0); assert.equal(evidence.resolutionPayloadBytes, reference ? 55 : 0);
+  }
+  assert.equal(result.sourceReads!.payloadBytes, reference ? 220 : 110, 'Two independent winners plus, for point-ref, two selected original records');
+  assert.equal(result.sourceReads!.payloadBytes, result.search.payloadBytes + result.verification.payloadBytes + result.search.resolutionPayloadBytes + result.verification.resolutionPayloadBytes);
   return { ...timing, result };
 }
 async function restarted() {
@@ -53,7 +74,7 @@ if (process.argv.includes('--restart')) {
   catch (error) { console.error(error); process.exitCode = 1; }
 } else {
   const report: Record<string, unknown> = { status: 'failed', command: 'pnpm exec tsx scripts/check-pole-index.ts', node: process.version,
-    scope: 'one complete category index build; exact whole-category linear verification on every query; selected/winner original prepared record reads',
+    scope: 'offline common all-label disk index preparation (built/loaded/memory reported separately); independently ordered proof-aware page verification on every query; two original winners and two original selected records for point-ref',
     historicalBaselineMilliseconds: 79000, baselineRerun: false };
   try {
     let last = 0;

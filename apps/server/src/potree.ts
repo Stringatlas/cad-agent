@@ -196,7 +196,7 @@ export class PotreeDataset {
       const hierarchy = await safeOpen(root, 'octree/hierarchy.bin');
       try {
         yield* readFullResolutionCrop({ dataset: loaded.dataset, rootBox: loaded.layout.rootBox, scale: loaded.layout.scale,
-          stride: loaded.layout.stride, first: loaded.hierarchy, hierarchySize: loaded.hierarchySize, payloadSize: loaded.size,
+          stride: loaded.layout.stride, first: loaded.hierarchy, hierarchySize: loaded.hierarchySize, payloadSize: loaded.size, requireSourceIds: true,
           readHierarchy: (offset, size) => readRange(hierarchy, offset, size, CROP_LIMITS.chunkBytes),
           readPayload: (offset, size) => readRange(loaded.payload, offset, size, CROP_LIMITS.nodeBytes),
           decode: (bytes, index) => decodePoint(bytes, index, loaded.layout),

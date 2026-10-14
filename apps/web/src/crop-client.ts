@@ -11,7 +11,7 @@ export const fetchCrop: CropLoader = async (selection, signal, publish) => {
   if (!response.body) throw new Error('Missing full-resolution stream');
   const reader = response.body.getReader(), decoder = new TextDecoder();
   let buffer = '', started = false, ended = false, sequence = 0, count = 0;
-  let previous: CropStats | undefined;
+  let previous: CropStats | undefined, provenance: boolean | undefined;
   const statsValid = (stats: CropStats) => stats && ['count', 'bytesRead', 'scannedPoints', 'hierarchyRecords', 'hierarchyChunks', 'payloadNodes', 'maxDepth'].every(key => {
     const k = key as keyof CropStats;
     return Number.isSafeInteger(stats[k]) && stats[k] >= 0 && (!previous || stats[k] >= previous[k]);
@@ -24,6 +24,7 @@ export const fetchCrop: CropLoader = async (selection, signal, publish) => {
     if (!started) {
       if (event.type !== 'start' || event.purpose !== 'display-crop' || event.algorithm !== 'potree-inclusive-volume-v2' ||
           JSON.stringify(event.selection) !== JSON.stringify(selection) || event.dataset?.id !== 'toronto3d' ||
+          typeof event.dataset.revision !== 'string' || !/^[a-f0-9]{64}$/.test(event.dataset.revision) ||
           event.dataset.coordinates?.units !== 'm' || event.dataset.coordinates.upAxis !== 'Z' || event.dataset.coordinates.handedness !== 'right' ||
           JSON.stringify(event.dataset.coordinates.localOrigin) !== '[627285,4841948,0]') throw new Error('Invalid full-resolution start');
       started = true;
@@ -31,6 +32,10 @@ export const fetchCrop: CropLoader = async (selection, signal, publish) => {
       if (event.sequence !== sequence++ || !Array.isArray(event.positions) || event.positions.length % 3 || event.positions.length > CROP_BATCH_POINTS * 3 ||
           !event.positions.every(Number.isFinite) || !Array.isArray(event.colors) || event.colors.length !== event.positions.length ||
           !event.colors.every(n => Number.isInteger(n) && n >= 0 && n <= 255)) throw new Error('Invalid full-resolution batch');
+      const hasSourceIds = event.sourceIds !== undefined;
+      if (provenance === undefined) provenance = hasSourceIds;
+      if (hasSourceIds !== provenance || (hasSourceIds && (!Array.isArray(event.sourceIds) || event.sourceIds.length !== event.positions.length / 3 * 2 ||
+          !event.sourceIds.every((n, i) => Number.isSafeInteger(n) && n >= (i % 2 ? 0 : 1) && n <= (i % 2 ? 0xffffffff : 4))))) throw new Error('Invalid/missing full-resolution provenance');
       for (let i = 0; i < event.positions.length; i += 3) if (!containsCropPoint(selection, event.positions.slice(i, i + 3))) throw new Error('Point outside selected volume');
       count += event.positions.length / 3;
       if (!statsValid(event.stats)) throw new Error('Invalid full-resolution progress');

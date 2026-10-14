@@ -34,6 +34,10 @@ export interface CropStats {
 }
 export type CropEvent =
   | { readonly type: 'start'; readonly dataset: DatasetInfo; readonly selection: CropSelection; readonly algorithm: 'potree-inclusive-volume-v2'; readonly purpose: 'display-crop' }
-  | { readonly type: 'batch'; readonly sequence: number; readonly positions: readonly number[]; readonly colors: readonly number[]; readonly stats: CropStats }
+  | { readonly type: 'batch'; readonly sequence: number;
+      /** Original decoded binary64 local-meter XYZ, never GPU Float32 positions. */
+      readonly positions: readonly number[]; readonly colors: readonly number[];
+      /** Flat (sourceFileId 1..4, uint32 sourceRow) pairs aligned with XYZ. Optional only for legacy synthetic streams. */
+      readonly sourceIds?: readonly number[]; readonly stats: CropStats }
   | { readonly type: 'end'; readonly complete: true; readonly stats: CropStats; readonly sampleHash: string }
   | { readonly type: 'error'; readonly error: string };

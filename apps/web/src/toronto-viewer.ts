@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import type { CropBox, CropSelection, PointObservation, Vec3 } from '@spatial/contracts';
+import type { CropBox, CropSelection, PointObservation, DatasetInfo, Vec3 } from '@spatial/contracts';
 import { createCropLayer } from './crop-render';
 import { projectCropRectangle } from './crop-projection';
-import { createPolePickCache, poleGestureKind, isPoleClick, type PoleSelection } from './pole-picking';
+import { createPolePickCache, createDetailPickCache, poleGestureKind, isPoleClick, type PoleSelection } from './pole-picking';
 
 /** Disposable point projection; prepared dataset remains authoritative, not this render cache. */
 export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) => void, onSelect?: (selection: CropSelection) => void, onFailure?: (error: string) => void, onQuery?: (selection: PoleSelection) => void) {
@@ -38,6 +38,9 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
   let selectedBox: CropBox | undefined;
   const raycaster = new THREE.Raycaster();
   let pickCache: ReturnType<typeof createPolePickCache> | undefined;
+  const detailCaches = new Map<THREE.Object3D, ReturnType<typeof createDetailPickCache>>();
+  let pickVersion = 0, dataset: DatasetInfo | undefined;
+  const clearDetail = () => { pickVersion++; for (const cache of detailCaches.values()) cache.dispose(); detailCaches.clear(); cropLayer.clear(); material.transparent = false; material.opacity = 1; };
   let disposed = false;
   const queryMarkers = new THREE.Group(); scene.add(queryMarkers);
   const markerGeometry = new THREE.BufferGeometry();
@@ -50,13 +53,13 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
   const distanceLine = new THREE.Line(lineGeometry, lineMaterial); distanceLine.renderOrder = 3; queryMarkers.add(distanceLine);
   queryMarkers.visible = false;
   let queryPositions: { selected: Vec3; nearest?: Vec3 } | undefined;
-  let pointerStart: { x: number; y: number; id: number; kind: 'shift' | 'query'; travel: number; cache: typeof pickCache } | undefined;
+  let pointerStart: { x: number; y: number; id: number; kind: 'shift' | 'query'; travel: number; cache: typeof pickCache; version: number } | undefined;
   const pointerDown = (event: PointerEvent) => {
     const kind = poleGestureKind(event, !!onQuery);
     if (!kind || pointerStart || disposed || gpuFailed) return;
     // Capture phase precedes OrbitControls: a Shift gesture must never rotate/pan the camera.
     event.preventDefault(); event.stopImmediatePropagation(); controls.enabled = false;
-    pointerStart = { x: event.clientX, y: event.clientY, id: event.pointerId, kind, travel: 0, cache: pickCache };
+    pointerStart = { x: event.clientX, y: event.clientY, id: event.pointerId, kind, travel: 0, cache: pickCache, version: pickVersion };
     renderer.domElement.setPointerCapture(event.pointerId); overlay.hidden = kind !== 'shift';
     pointerMove(event);
   };
@@ -80,11 +83,13 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
     const start = pointerStart, rect = renderer.domElement.getBoundingClientRect(); finishGesture();
     const dx = Math.abs(event.clientX - start.x), dy = Math.abs(event.clientY - start.y);
     if (start.kind === 'query') {
-      if (!isPoleClick(Math.max(start.travel, Math.hypot(dx, dy)), false, start.cache === pickCache) || disposed || gpuFailed) return;
+      if (!isPoleClick(Math.max(start.travel, Math.hypot(dx, dy)), false, start.cache === pickCache && start.version === pickVersion) || disposed || gpuFailed) return;
       raycaster.params.Points.threshold = camera.position.distanceTo(controls.target) * 2 * Math.tan(camera.fov * Math.PI / 360) / Math.max(rect.height, 1) * 6;
       raycaster.setFromCamera(new THREE.Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1), camera);
-      const hit = raycaster.intersectObject(points)[0];
-      const resolved = hit?.index === undefined ? undefined : start.cache?.resolve(hit.index);
+      // Detail is the active picking layer; overview is context/fallback only.
+      const hit = raycaster.intersectObjects([...detailCaches.keys()])[0] ?? raycaster.intersectObject(points)[0];
+      const cache = hit?.object === points ? start.cache : detailCaches.get(hit?.object);
+      const resolved = hit?.index === undefined ? undefined : cache?.resolve(hit.index);
       if (resolved) onQuery?.(resolved);
       return;
     }
@@ -148,6 +153,12 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
     host.dataset.cropChunks = String(cropLayer.group.children.length);
     host.dataset.boxVisible = String(selection.visible);
     if (smoke) {
+      const detail = detailCaches.keys().next().value as THREE.Points | undefined;
+      const detailPositions = detail?.geometry.getAttribute('position');
+      if (detailPositions?.count) {
+        const point = new THREE.Vector3().fromBufferAttribute(detailPositions, 0).project(camera);
+        host.dataset.detailPickPoint = JSON.stringify([(point.x + 1) * host.clientWidth / 2, (1 - point.y) * host.clientHeight / 2]);
+      } else delete host.dataset.detailPickPoint;
       host.dataset.querySelected = String(!!queryPositions);
       host.dataset.queryWinner = String(!!queryPositions?.nearest);
       host.dataset.camera = JSON.stringify(camera.position.toArray());
@@ -178,6 +189,8 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       const previous = points.geometry;
       points.geometry = geometry;
       previous.dispose();
+      if (dataset && dataset.revision !== sample.dataset.revision) clearDetail();
+      dataset = sample.dataset; pickVersion++;
       pickCache?.dispose(); pickCache = nextCache;
       bounds = sample.dataset.bounds;
       if (!initialized) { initialized = true; frameDataset(); }
@@ -205,11 +218,20 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       if (box) { selection.box.min.set(...box.min); selection.box.max.set(...box.max); }
     },
     clearCrop() {
-      cropLayer.clear(); material.transparent = false; material.opacity = 1;
+      clearDetail();
     },
-    appendCrop(positions: readonly number[], colors: readonly number[]) {
+    appendCrop(positions: readonly number[], colors: readonly number[], sourceIds?: readonly number[], revision?: string) {
       if (gpuFailed) throw new Error('GPU unavailable; reload the scene before loading full resolution');
-      cropLayer.append(positions, colors); material.transparent = true; material.opacity = 0.25;
+      let cache: ReturnType<typeof createDetailPickCache> | undefined;
+      if (onQuery) {
+        if (!dataset || revision !== dataset.revision || !sourceIds) throw new Error('Missing or stale detail provenance');
+        cache = createDetailPickCache(dataset, positions, sourceIds);
+      }
+      try {
+        const chunk = cropLayer.append(positions, colors);
+        if (chunk && cache) { detailCaches.set(chunk, cache); pickVersion++; } else cache?.dispose();
+      } catch (error) { cache?.dispose(); throw error; }
+      material.transparent = true; material.opacity = 0.25;
     },
     frameBox() {
       if (!selectedBox) return;
@@ -218,7 +240,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
     viewCenter(): Vec3 { return controls.target.toArray() as [number, number, number]; },
     frameDataset,
     dispose() {
-      disposed = true; pickCache?.dispose(); pickCache = undefined; finishGesture();
+      disposed = true; clearDetail(); pickCache?.dispose(); pickCache = undefined; finishGesture();
       markerGeometry.dispose(); markerMaterial.dispose(); winnerGeometry.dispose(); winnerMaterial.dispose(); lineGeometry.dispose(); lineMaterial.dispose();
       renderer.domElement.removeEventListener('contextmenu', contextMenu, true);
       cancelAnimationFrame(frame);

@@ -26,20 +26,22 @@ export function createDatasetRoutes(directory = DEFAULT_DATASET_ROOT) {
       send(403, { error: 'Local access only' }); return true;
     }
     // No CORS, file paths, write operations, or raw assets. Ranges are deliberately unsupported.
-    if (request.method !== 'GET' || !['/datasets/toronto3d', '/datasets/toronto3d/observation', '/datasets/toronto3d/crop', '/datasets/toronto3d/closest-pole'].includes(url.pathname)) {
+    if (request.method !== 'GET' || !['/datasets/toronto3d', '/datasets/toronto3d/observation', '/datasets/toronto3d/crop', '/datasets/toronto3d/closest-pole', '/datasets/toronto3d/closest-label'].includes(url.pathname)) {
       send(404, { error: 'Not found' }); return true;
     }
     if (request.headers.range) { send(416, { error: 'Raw byte ranges are not exposed' }); return true; }
     if ((request.url?.length ?? 0) > 4096) { send(400, { error: 'Query too long' }); return true; }
     const metadata = url.pathname === '/datasets/toronto3d';
     const crop = url.pathname === '/datasets/toronto3d/crop';
-    const pole = url.pathname === '/datasets/toronto3d/closest-pole';
+    const legacyPole = url.pathname === '/datasets/toronto3d/closest-pole';
+    const pole = legacyPole || url.pathname === '/datasets/toronto3d/closest-label';
     let poleRequest: NearestPoleRequest | undefined;
     if (pole) {
       try {
         if ([...url.searchParams.keys()].length !== 1 || !url.searchParams.has('request')) throw new TypeError();
         poleRequest = canonicalPoleRequest(JSON.parse(url.searchParams.get('request')!));
-      } catch { send(400, { error: 'Invalid closest pole request' }); return true; }
+        if (legacyPole && poleRequest.filter.value !== 6) throw new TypeError('Legacy Pole route requires label 6');
+      } catch { send(400, { error: 'Invalid closest semantic label request' }); return true; }
     }
     let box: CropSelection | undefined;
     if (crop) {

@@ -20,7 +20,7 @@ const report = {
 let browser, page, routeHandler, gate;
 const seenObservations = new Set();
 const observations = [];
-const queryURL = url => new URL(url).pathname === '/datasets/toronto3d/closest-pole';
+const queryURL = url => new URL(url).pathname === '/datasets/toronto3d/closest-label';
 const now = () => performance.now();
 const artifact = name => fileURLToPath(new URL(name, directory));
 async function bounded(promise, label, milliseconds = TIMEOUT) {
@@ -73,22 +73,31 @@ function validateTerminal(raw, request) {
   assert.equal(result.dataset.totalPoints, 78320210);
   assert.deepEqual(result.dataset.coordinates, { units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] });
   const { search, verification } = result;
-  assert.equal(search.algorithm, 'pole-category-index-v1'); assert.equal(search.completion, 'indexed');
-  assert.equal(search.arithmetic, 'xyz-binary64-v1'); assert.equal(verification.verifier, 'pole-category-linear-v1');
+  assert.equal(search.algorithm, 'semantic-disk-page-index-v1'); assert.equal(search.completion, 'indexed');
+  assert.equal(search.arithmetic, 'xyz-binary64-v1'); assert.equal(verification.verifier, 'semantic-disk-page-verifier-v1');
   assert.equal(search.index.points, 897825); assert.match(search.index.hash, /^[a-f0-9]{64}$/);
-  assert.deepEqual(verification.index, search.index); assert.equal(verification.scannedPoints, search.index.points);
-  assert.ok(search.scannedPoints > 0 && search.scannedPoints <= search.index.points);
+  assert.deepEqual(verification.index, search.index);
   const requestHash = createHash('sha256').update(JSON.stringify(canonical(request))).digest('hex');
   const statsFields = ['scannedPoints', 'matchingPoints', 'hierarchyChunks', 'payloadNodes', 'hierarchyBytes', 'payloadBytes', 'metadataBytes', 'maxReadBytes', 'resolutionPoints', 'resolutionPayloadBytes'];
   for (const evidence of [search, verification]) {
     for (const key of statsFields) assert.ok(Number.isSafeInteger(evidence[key]) && evidence[key] >= 0, key);
     assert.equal(evidence.artifactRevision, request.expectedArtifactRevision);
     assert.equal(evidence.requestHash, requestHash); assert.equal(evidence.matchingPoints, 897825);
-    assert.equal(evidence.resolutionPoints, 1); assert.ok(evidence.resolutionPayloadBytes > 0 && evidence.resolutionPayloadBytes <= 256);
+    assert.equal(evidence.resolutionPoints, 1); assert.equal(evidence.resolutionPayloadBytes, 55);
+    assert.equal(evidence.payloadBytes, 55, 'Each phase independently checks its original winning record');
     assert.equal(evidence.hierarchyChunks, 0); assert.equal(evidence.payloadNodes, 0); assert.equal(evidence.hierarchyBytes, 0);
     assert.ok(evidence.maxReadBytes <= 4 * 1024 * 1024);
+    const disk = evidence.disk;
+    assert.deepEqual(Object.keys(disk).sort(), ['totalPages', 'visitedPages', 'excludedPages', 'prunedPages', 'coveredPoints', 'cacheBytes', 'maxCacheReadBytes'].sort());
+    assert.ok(Object.values(disk).every(n => Number.isSafeInteger(n) && n >= 0));
+    assert.equal(disk.totalPages, Math.ceil(result.dataset.totalPoints / 4096));
+    assert.equal(disk.visitedPages + disk.excludedPages + disk.prunedPages, disk.totalPages);
+    assert.equal(disk.coveredPoints, result.dataset.totalPoints); assert.equal(disk.cacheBytes, evidence.scannedPoints * 40);
+    assert.ok(disk.visitedPages > 0 && evidence.scannedPoints >= disk.visitedPages && evidence.scannedPoints <= Math.min(result.dataset.totalPoints, disk.visitedPages * 4096));
+    const full = disk.visitedPages * 4096, tail = (disk.visitedPages - 1) * 4096 + (result.dataset.totalPoints % 4096 || 4096);
+    assert.ok((full <= result.dataset.totalPoints && evidence.scannedPoints === full) || evidence.scannedPoints === tail, 'All records of visited pages, including the single possible partial tail');
+    assert.equal(disk.maxCacheReadBytes, disk.visitedPages === 1 ? evidence.scannedPoints * 40 : 163840);
   }
-  assert.equal(search.payloadBytes, 0); assert.ok(verification.payloadBytes <= 256);
   assert.equal(search.resolutionPayloadBytes, verification.resolutionPayloadBytes);
   assert.match(search.configHash, /^[a-f0-9]{64}$/); assert.match(search.traversalHash, /^[a-f0-9]{64}$/);
   assert.match(verification.transcriptHash, /^[a-f0-9]{64}$/);
@@ -101,10 +110,11 @@ function validateTerminal(raw, request) {
   const [dx, dy, dz] = nearest.position.map((n, i) => n - result.queryPosition[i]);
   assert.equal(nearest.distanceSquared, (dx * dx + dy * dy) + dz * dz);
   assert.equal(nearest.distanceMeters, Math.sqrt(nearest.distanceSquared));
-  if (result.sourceReads) {
-    for (const n of Object.values(result.sourceReads)) assert.ok(Number.isSafeInteger(n) && n >= 0);
-    assert.ok(result.sourceReads.maxReadBytes <= 4 * 1024 * 1024);
-  }
+  assert.ok(result.sourceReads);
+  for (const n of Object.values(result.sourceReads)) assert.ok(Number.isSafeInteger(n) && n >= 0);
+  assert.ok(result.sourceReads.maxReadBytes <= 4 * 1024 * 1024);
+  assert.equal(result.sourceReads.payloadBytes, 220, 'Two selected-source and two winning-source reads, each 55 bytes');
+  assert.equal(result.sourceReads.payloadBytes, search.payloadBytes + verification.payloadBytes + search.resolutionPayloadBytes + verification.resolutionPayloadBytes);
   return { frames, result };
 }
 function findProvenance(request, result) {
@@ -202,9 +212,13 @@ async function completedUI(result) {
   const returned = await page.getByTestId('pole-result').locator('dd').allTextContents();
   assert.deepEqual(returned, [String(result.nearest.distanceMeters), `${result.nearest.key.sourceFileId} / ${result.nearest.key.sourceRow}`, result.nearest.position.join(', ')]);
   const text = await page.locator('main').innerText();
-  assert.match(text, /Independent verifier: 897[,.\s]?825 indexed Pole records/);
-  assert.match(text, /Complete category index: 897[,.\s]?825 points/);
-  assert.match(text, /independently checked against all indexed Pole points/);
+  assert.ok(text.includes(`Independent verifier: ${result.verification.scannedPoints.toLocaleString()}`), 'UI reports actual independent page-record visits, not category population');
+  assert.ok(text.includes(`Complete disk coverage: ${result.dataset.totalPoints.toLocaleString()} source points.`));
+  assert.ok(text.includes(`Requested category: ${result.search.index.points.toLocaleString()} points.`));
+  assert.equal(result.search.index.points, 897825);
+  assert.match(text, /Exact search with independent verification/);
+  assert.match(text, /disk.{0,30}page|page.{0,30}disk/i);
+  assert.doesNotMatch(text, /Smaller categories build and reuse a category index|larger categories use an exhaustive bounded-read scan/);
   assert.doesNotMatch(text, /Independent verifier: [\d,.\s]+ source records/);
   assert.equal(await page.getByTestId('pole-error').count(), 0);
   assert.equal(await page.getByTestId('pole-gpu-error').count(), 0);
@@ -299,7 +313,7 @@ try {
   report.responseCapture = 'Unmodified in-page Fetch response clones; real query timings include observer overhead. Cancelled observation bodies are not used for provenance.';
   await bounded(page.setViewportSize({ width: 1440, height: 1100 }), 'wide viewport');
   await page.reload({ waitUntil: 'domcontentloaded' }); assert.equal(page.url(), exactURL);
-  await page.getByRole('button', { name: 'Closest pole', exact: true }).click(); await waitReady();
+  await page.getByRole('button', { name: 'Closest: label', exact: true }).click(); await waitReady();
   // Deterministic root LOD yields an actual visible source point, not a synthetic
   // coordinate; the raycaster may pick a neighbour, so validate its provenance.
   await page.getByTestId('pole-depth').selectOption('0'); await waitReady();
@@ -342,7 +356,7 @@ try {
       gate.error = String(error); gateReadyReject(error); await route.abort().catch(() => {});
     } finally { gate.completed = true; }
   };
-  await page.route('**/datasets/toronto3d/closest-pole?*', routeHandler);
+  await page.route('**/datasets/toronto3d/closest-label?*', routeHandler);
   const beforeGate = report.requests.length; await gesture('Control', await target());
   await bounded(gateReady, 'real cancellation response ready', QUERY_TIMEOUT + 5000);
   assert.equal(report.requests.length, beforeGate + 1);
@@ -354,7 +368,7 @@ try {
   await page.getByTestId('pole-clear').click(); await waitPhase('idle');
   gate.release();
   await bounded((async () => { while (!gate.completed) await delay(25); })(), 'gate handler completion');
-  assert.ok(!gate.error, gate.error); await page.unroute('**/datasets/toronto3d/closest-pole?*', routeHandler); routeHandler = undefined;
+  assert.ok(!gate.error, gate.error); await page.unroute('**/datasets/toronto3d/closest-label?*', routeHandler); routeHandler = undefined;
   await delay(700); await waitPhase('idle');
   assert.equal(await page.getByTestId('pole-result').count(), 0); assert.equal(await page.getByTestId('pole-selection').count(), 0);
   assert.equal(await page.getByTestId('pole-viewer').getAttribute('data-query-selected'), 'false');
@@ -413,7 +427,7 @@ try {
   await page.getByRole('button', { name: 'Synthetic demo', exact: true }).click();
   await page.waitForSelector('[data-testid="viewer"][data-ready="true"]', { timeout: TIMEOUT });
   await bounded(page.setViewportSize({ width: 1440, height: 1100 }), 'final wide viewport');
-  await page.getByRole('button', { name: 'Closest pole', exact: true }).click(); await waitReady(); await waitPhase('idle');
+  await page.getByRole('button', { name: 'Closest: label', exact: true }).click(); await waitReady(); await waitPhase('idle');
   assert.equal(await page.getByTestId('pole-viewer').getAttribute('data-query-selected'), 'false');
   assert.equal(await page.getByTestId('pole-result').count(), 0); assert.equal(report.requests.length, beforeResize);
   assert.equal(await page.getByTestId('pole-viewer').locator('canvas').count(), 1); await oldHost.dispose();
@@ -440,7 +454,7 @@ try {
   // Always release interception, including assertion failures. Never close a page,
   // context or the real browser; close() on this CDP connection only disconnects.
   gate?.release();
-  if (page && routeHandler) await bounded(page.unroute('**/datasets/toronto3d/closest-pole?*', routeHandler), 'remove gate').catch(error => { report.cleanupError = String(error); });
+  if (page && routeHandler) await bounded(page.unroute('**/datasets/toronto3d/closest-label?*', routeHandler), 'remove gate').catch(error => { report.cleanupError = String(error); });
   if (gate && !gate.completed) await bounded((async () => { while (!gate.completed) await delay(25); })(), 'gate cleanup', QUERY_TIMEOUT + 5000).catch(error => { report.cleanupError = String(error); });
   if (page && !page.isClosed()) report.cancelledObservationCaptures = await page.evaluate(() => (window.__task008Fetches ?? []).filter(entry => entry.url.includes('/observation?') && entry.error).map(({ url, error }) => ({ url, error }))).catch(() => []);
   if (browser) await bounded(browser.close(), 'disconnect CDP', 5000).catch(error => { report.disconnectError = String(error); });

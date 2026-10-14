@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { setImmediate as yieldTurn } from 'node:timers/promises';
 import { canonicalPoleRequest, type NearestPoleRequest, type PointWitness, type Vec3, type ScanStats,
-  type QueryOutcome, type NearestPoleToolOutcome } from '@spatial/contracts';
+  type QueryOutcome, type NearestPoleToolOutcome, TORONTO_SEMANTIC_LABELS } from '@spatial/contracts';
 import { executeNearestPole, type SemanticSpatialQuerySource } from '@spatial/agent-harness';
 import { decodePoint } from './potree';
 import { SemanticArtifact, SEMANTIC_LIMITS, SEMANTIC_CONFIG, SemanticFailure, requireData, digest, semanticFailure } from './semantic-artifact';
@@ -93,6 +93,8 @@ export class PotreeSemanticSource implements SemanticSpatialQuerySource {
       signal?.throwIfAborted();
       if (request.expectedArtifactRevision !== this.dataset.revision) throw new SemanticFailure('stale-revision', 'Stale input');
       await this.snapshot.check(signal);
+      requireData(JSON.parse(this.snapshot.manifestBytes.toString()).semantic_classes?.[request.filter.value] ===
+        TORONTO_SEMANTIC_LABELS[request.filter.value], 'Unsupported semantic category binding');
       let q: Vec3, resolution: Awaited<ReturnType<typeof scanHierarchy>> | undefined;
       if (request.input.kind === 'coordinate') q = request.input.position;
       else {
@@ -109,13 +111,13 @@ export class PotreeSemanticSource implements SemanticSpatialQuerySource {
       let nearest: PointWitness | null = null, matchingPoints = 0;
       const domain = request.domain;
       const search = await scanHierarchy(this.snapshot, point => {
-        if (point.label !== 6 || (domain.kind === 'aabb' && point.position.some((n, i) => n < domain.min[i] || n > domain.max[i]))) return;
+        if (point.label !== request.filter.value || (domain.kind === 'aabb' && point.position.some((n, i) => n < domain.min[i] || n > domain.max[i]))) return;
         matchingPoints++;
         const dx = point.position[0] - q[0], dy = point.position[1] - q[1], dz = point.position[2] - q[2];
         const d2 = ((dx * dx + dy * dy) + dz * dz);
         if (!nearest || d2 < nearest.distanceSquared || (d2 === nearest.distanceSquared &&
           (point.sourceFileId < nearest.key.sourceFileId || (point.sourceFileId === nearest.key.sourceFileId && point.sourceRow < nearest.key.sourceRow)))) {
-          nearest = { key: { sourceFileId: point.sourceFileId, sourceRow: point.sourceRow }, position: point.position, label: 6, distanceSquared: d2, distanceMeters: Math.sqrt(d2) };
+          nearest = { key: { sourceFileId: point.sourceFileId, sourceRow: point.sourceRow }, position: point.position, label: request.filter.value, distanceSquared: d2, distanceMeters: Math.sqrt(d2) };
         }
       }, 'search', signal, this.progress);
       await this.snapshot.check(signal);

@@ -4,8 +4,9 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
+import { createHash } from 'node:crypto';
 import * as THREE from 'three';
-import { PotreeDataset } from '../apps/server/src/potree';
+import { PotreeDataset, decodePoint, parseMetadata } from '../apps/server/src/potree';
 import { childBox, CROP_LIMITS, readFullResolutionCrop } from '../apps/server/src/crop';
 import { createDemoServer } from '../apps/server/src/index';
 import { createCropChannel, fetchCrop, type CropLoader } from '../apps/web/src/crop-client';
@@ -51,6 +52,8 @@ test('inclusive full resolution streams all ancestors/nested proxies and preserv
   try {
     const before = await f.adapter.observe({ budget: 1, depth: 0 }), result = await collect(f.adapter.crop(box));
     assert.equal(result.count, 5); assert.deepEqual(result.positions, [4, 4, 124, 2, 2, 122, 4, 4, 124, 3, 3, 123, 4, 4, 124]);
+    assert.deepEqual(result.events.flatMap(event => event.type === 'batch' ? event.sourceIds! : []), [1, 1, 1, 2, 1, 3, 1, 4, 1, 5]);
+    assert.ok(result.events.every(event => event.type !== 'batch' || event.sourceIds?.length === event.positions.length / 3 * 2));
     assert.equal(result.hierarchyChunks, 3); assert.equal(result.payloadNodes, 3); assert.equal(result.scannedPoints, 6); assert.equal(result.bytesRead, 300);
     assert.deepEqual(await collect(f.adapter.crop(box)), result);
     assert.deepEqual(await f.adapter.observe({ budget: 1, depth: 0 }), before);
@@ -198,5 +201,85 @@ test('client incrementally validates lines/batches/completion, interrupted/error
     globalThis.fetch = async () => new Response('{}', { status: 429 }); await assert.rejects(fetchCrop(box, signal, () => {}), /429/);
     globalThis.fetch = async () => chunked(text); const controller = new AbortController(); let calls = 0;
     await assert.rejects(fetchCrop(box, controller.signal, () => { if (++calls === 2) controller.abort(); }), /abort/i); assert.equal(calls, 2);
+  } finally { globalThis.fetch = original; await f.clean(); }
+});
+
+test('actual Potree crop keeps binary64 decoded positions and uint32 provenance, even in empty batches', async () => {
+  const f = await fixture();
+  try {
+    f.payload.writeInt32LE(4001, 28);
+    f.payload.writeUInt16LE(4, 28 + 18); f.payload.writeUInt32LE(0xffffffff, 28 + 20);
+    await writeFile(join(f.root, 'octree/octree.bin'), f.payload);
+    const point = decodePoint(f.payload, 1, parseMetadata(f.metadata));
+    assert.equal(point.positions[0], 4001 * 0.001);
+    assert.notEqual(point.positions[0], Math.fround(point.positions[0]), 'original JS binary64, not GPU Float32');
+    assert.deepEqual(point.sourceIds, [4, 0xffffffff]);
+    const result = await collect(f.adapter.crop(rootBox));
+    const first = result.events.find(event => event.type === 'batch'); assert.ok(first?.type === 'batch');
+    assert.equal(first.positions[3], point.positions[0]); assert.deepEqual(first.sourceIds, [1, 0, 4, 0xffffffff]);
+    const empty = await collect(f.adapter.crop({ min: [4.01, 4.01, 124.01], max: [4.02, 4.02, 124.02] }));
+    assert.equal(empty.count, 0);
+    assert.ok(empty.events.some(event => event.type === 'batch'));
+    assert.ok(empty.events.every(event => event.type !== 'batch' || Array.isArray(event.sourceIds) && event.sourceIds.length === 0));
+    f.payload.writeUInt32LE(42, 28 + 20); await writeFile(join(f.root, 'octree/octree.bin'), f.payload);
+    assert.notEqual((await collect(f.adapter.crop(rootBox))).sampleHash, result.sampleHash, 'hash binds valid provenance changes');
+    f.payload.writeUInt16LE(0, 28 + 18); await writeFile(join(f.root, 'octree/octree.bin'), f.payload);
+    await assert.rejects(collect(f.adapter.crop(rootBox)), /provenance/);
+  } finally { await f.clean(); }
+});
+
+test('crop decoder provenance is validated all-or-none; legacy synthetic hash remains stable', async () => {
+  const f = await fixture();
+  try {
+    const input = { dataset: await f.adapter.info(), rootBox, scale: [0.001, 0.001, 0.001] as const, stride: 28,
+      first: record(1, 0, 2, 0, 56), hierarchySize: 22, payloadSize: 56,
+      readHierarchy: async () => { throw new Error('Unexpected read'); }, readPayload: async () => Buffer.alloc(56),
+      decode: (_bytes: Buffer, _index: number): { positions: number[]; colors: number[]; sourceIds?: readonly number[] } => ({ positions: [3, 3, 123], colors: [255, 0, 0] }) };
+    const legacy = await collect(readFullResolutionCrop(input, box));
+    assert.ok(legacy.events.every(event => event.type !== 'batch' || event.sourceIds === undefined));
+    assert.equal(legacy.sampleHash, createHash('sha256').update(JSON.stringify(box))
+      .update(JSON.stringify({ positions: legacy.positions, colors: legacy.colors })).digest('hex'));
+    await assert.rejects(collect(readFullResolutionCrop({ ...input, requireSourceIds: true }, box)), /provenance/);
+    const withIds = await collect(readFullResolutionCrop({ ...input, decode: () => ({ positions: [3, 3, 123], colors: [255, 0, 0], sourceIds: [1, 0] }) }, box));
+    assert.notEqual(withIds.sampleHash, legacy.sampleHash);
+    for (const sourceIds of [[], [1], [1, 0, 2], [0, 0], [5, 0], [1.1, 0], [1, -1], [1, 0x100000000], [1, 0.5], [1, NaN]]) {
+      // Invalid provenance is rejected even on a decoded point outside the requested selection.
+      await assert.rejects(collect(readFullResolutionCrop({ ...input, decode: () => ({ positions: [9, 9, 129], colors: [255, 0, 0], sourceIds }) }, box)), /provenance/);
+    }
+    for (const missingFirst of [true, false]) await assert.rejects(collect(readFullResolutionCrop({ ...input,
+      decode: (_bytes, index) => ({ positions: [3, 3, 123], colors: [255, 0, 0], ...(Boolean(index) === missingFirst ? { sourceIds: [1, index] } : {}) }) }, box)), /provenance/);
+    const count = CROP_BATCH_POINTS + 1, size = count * input.stride;
+    const large = { ...input, first: record(1, 0, count, 0, size), payloadSize: size,
+      readPayload: async (_offset: number, bytes: number) => Buffer.alloc(bytes),
+      decode: (_bytes: Buffer, index: number) => ({ positions: [3, 3, 123], colors: [255, 0, 0], sourceIds: [1, index] }) };
+    const streamed = await collect(readFullResolutionCrop(large, box));
+    const batches = streamed.events.filter(event => event.type === 'batch');
+    assert.deepEqual(batches.map(event => event.sourceIds?.length), [CROP_BATCH_POINTS * 2, 2]);
+    assert.deepEqual(batches[1].sourceIds, [1, CROP_BATCH_POINTS]);
+    await assert.rejects(collect(readFullResolutionCrop({ ...large, decode: (_bytes, index) => ({ positions: [3, 3, 123], colors: [255, 0, 0],
+      ...(index < CROP_BATCH_POINTS ? { sourceIds: [1, index] } : {}) }) }, box)), /provenance/);
+  } finally { await f.clean(); }
+});
+
+test('client rejects tampered, partial and mismatched provenance or invalid start revisions; accepts wholly legacy streams', async () => {
+  const f = await fixture(), original = globalThis.fetch, signal = new AbortController().signal;
+  try {
+    const result = await collect(f.adapter.crop(box));
+    const run = async (events: unknown[]) => {
+      globalThis.fetch = async () => new Response(events.map(event => JSON.stringify(event) + '\n').join(''));
+      await fetchCrop(box, signal, () => {});
+    };
+    const modified = (change: (events: any[]) => void) => { const events = structuredClone(result.events); change(events); return events; };
+    const batchAt = result.events.findIndex(event => event.type === 'batch');
+    for (const sourceIds of [null, {}, [], [1], [1, 0, 1, 1], [0, 1], [5, 1], [1.5, 1], [1, -1], [1, 0x100000000], [1, 0.5]]) {
+      await assert.rejects(run(modified(events => { events[batchAt].sourceIds = sourceIds; })), /provenance/);
+    }
+    await assert.rejects(run(modified(events => { delete events[batchAt + 1].sourceIds; })), /provenance/);
+    await assert.rejects(run(modified(events => { delete events[batchAt].sourceIds; })), /provenance/);
+    for (const revision of [undefined, null, '', 'stale', 'A'.repeat(64), 42]) {
+      await assert.rejects(run(modified(events => { events[0].dataset.revision = revision; })), /start/);
+    }
+    await run(modified(events => { for (const event of events) if (event.type === 'batch') delete event.sourceIds; }));
+    await run(result.events);
   } finally { globalThis.fetch = original; await f.clean(); }
 });

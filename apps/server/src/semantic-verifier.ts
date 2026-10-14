@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { setImmediate } from 'node:timers/promises';
 import { canonicalPoleRequest, type CompleteQuery, type NearestPoleRequest, type PointWitness, type Vec3,
-  type VerificationOutcome, type ScanStats } from '@spatial/contracts';
+  type VerificationOutcome, type ScanStats, TORONTO_SEMANTIC_LABELS } from '@spatial/contracts';
 import type { NearestQueryVerifier } from '@spatial/agent-harness';
 import { SemanticArtifact, SEMANTIC_LIMITS, SEMANTIC_CONFIG, SemanticFailure, digest, semanticFailure } from './semantic-artifact';
 import type { SemanticProgressHandler } from './semantic-query';
@@ -31,7 +31,7 @@ export class LinearRecordVerifier implements NearestQueryVerifier {
       check(stride <= 256 && [...expected.keys()].every(key => fields.has(key)) && bounds && triple(bounds.min) && triple(bounds.max));
       check(triple(metadata.scale) && metadata.scale.every((n: number) => n > 0 && n <= 1) && triple(metadata.offset) &&
         Number.isSafeInteger(metadata.points) && metadata.points > 0 && this.snapshot.payloadSize === metadata.points * stride);
-      check(manifest.semantic_attribute === 'scalar_Label' && manifest.semantic_classes?.['6'] === 'Pole' &&
+      check(manifest.semantic_attribute === 'scalar_Label' && manifest.semantic_classes?.[request.filter.value] === TORONTO_SEMANTIC_LABELS[request.filter.value] &&
         manifest.units === 'm' && manifest.frame === 'right-handed Z-up' && JSON.stringify(manifest.local_origin_world) === '[627285,4841948,0]' &&
         JSON.stringify(manifest.potree_scale_m) === JSON.stringify(metadata.scale) && Array.isArray(manifest.sources) && manifest.sources.length === 4);
       const counts = new Map<number, number>();
@@ -101,7 +101,7 @@ export class LinearRecordVerifier implements NearestQueryVerifier {
       let winner: PointWitness | null = null;
       const domain = request.domain;
       const transcriptHash = await scan((position, file, row, label) => {
-        if (label !== 6) return;
+        if (label !== request.filter.value) return;
         if (domain.kind === 'aabb') for (let axis = 0; axis < 3; axis++) if (position[axis] < domain.min[axis] || position[axis] > domain.max[axis]) return;
         stats.matchingPoints++;
         const x = position[0] - origin[0], y = position[1] - origin[1], z = position[2] - origin[2];
@@ -110,7 +110,7 @@ export class LinearRecordVerifier implements NearestQueryVerifier {
           if (square > winner.distanceSquared) return;
           if (square === winner.distanceSquared && (file > winner.key.sourceFileId || (file === winner.key.sourceFileId && row >= winner.key.sourceRow))) return;
         }
-        winner = { key: { sourceFileId: file, sourceRow: row }, position, label: 6, distanceSquared: square, distanceMeters: Math.sqrt(square) };
+        winner = { key: { sourceFileId: file, sourceRow: row }, position, label: request.filter.value, distanceSquared: square, distanceMeters: Math.sqrt(square) };
       }, false);
       await this.snapshot.check(signal);
       const evidence = answer.evidence, requestHash = digest(JSON.stringify(request));

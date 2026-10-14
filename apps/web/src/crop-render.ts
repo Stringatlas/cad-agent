@@ -20,7 +20,9 @@ export function createCropLayer(scene: THREE.Scene) {
           color.setRGB(sourceColors[i] / 255, sourceColors[i + 1] / 255, sourceColors[i + 2] / 255, THREE.SRGBColorSpace); color.toArray(colors, i);
         }
         geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3)); geometry.computeBoundingSphere();
-        group.add(new THREE.Points(geometry, material)); count += positions.length / 3;
+        const points = new THREE.Points(geometry, material);
+        group.add(points); count += positions.length / 3;
+        return points;
       } catch (error) { geometry.dispose(); throw error; }
     },
     clear() { for (const child of [...group.children]) { (child as THREE.Points).geometry.dispose(); group.remove(child); } count = 0; },

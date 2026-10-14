@@ -14,6 +14,8 @@ Use [TEMPLATE.md](TEMPLATE.md) for bounded work with testable acceptance criteri
 | [006 — Headless closest Pole-labelled point](006-closest-pole-headless.md) | Implemented/verified; 43/43 baseline tests and actual-data region query/oracle pass. Fresh-session review pending; graph analysis unavailable. |
 | [007 — Closest pole tab](007-closest-pole-ui.md) | Implemented; historical exhaustive HTTP evidence retained; interactive backend superseded by task008. Browser/fresh-session UI review pending. |
 | [008 — Interactive closest-Pole performance](008-closest-pole-performance.md) | Implemented; exact indexed HTTP/client47–54ms warm,291ms persisted startup;61/61 baseline and rendered Chrome checks pass (117–149ms instrumented UI completion). Fresh-session review pending. |
+| [009 — Closest semantic label and Shift window](009-closest-label-window.md) | Implemented;78/78 historical baseline and nine actual-data Chrome checks pass. Performance fallback superseded by task010. Fresh-session review pending; graph unavailable. |
+| [010 — Bounded all-label closest-point index](010-all-label-disk-index.md) | Implemented;92/92 baseline, ten actual-data Chrome checks and all-nine-label production HTTP completion pass. Warm p95 Ground909ms/Building159ms/Pole42ms; cold preparation/startup separate. Fresh-session review pending; graph unavailable. |
 
 ## Workflow
 

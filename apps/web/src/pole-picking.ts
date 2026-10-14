@@ -1,4 +1,4 @@
-import type { PointKey, PointObservation, Vec3 } from '@spatial/contracts';
+import { CROP_BATCH_POINTS, type DatasetInfo, type PointKey, type PointObservation, type Vec3 } from '@spatial/contracts';
 
 export interface PoleSelection {
   readonly datasetId: 'toronto3d';
@@ -9,13 +9,22 @@ export interface PoleSelection {
 
 /** Original observation values, never a GPU float/index as authority. */
 export function createPolePickCache(sample: PointObservation) {
-  const count = sample.count;
-  if (!Number.isSafeInteger(count) || count < 0 || count > 100_000 || sample.dataset.id !== 'toronto3d' || !/^[a-f0-9]{64}$/.test(sample.dataset.revision) ||
-      sample.dataset.coordinates.units !== 'm' || sample.dataset.coordinates.upAxis !== 'Z' ||
-      sample.dataset.coordinates.handedness !== 'right' || JSON.stringify(sample.dataset.coordinates.localOrigin) !== '[627285,4841948,0]' ||
-      sample.sourceIds.length !== sample.count * 2 || sample.positions.length !== sample.count * 3) throw new Error('Invalid pick provenance');
-  const positions = sample.positions.slice(), sourceIds = sample.sourceIds.slice();
-  const artifactRevision = sample.dataset.revision;
+  if (sample.count !== sample.positions.length / 3) throw new Error('Invalid pick count');
+  return createProvenancePickCache(sample.dataset, sample.positions, sample.sourceIds, 100_000);
+}
+
+/** One bounded detail batch; no total selection cap. */
+export function createDetailPickCache(dataset: DatasetInfo, positions: readonly number[], sourceIds: readonly number[]) {
+  return createProvenancePickCache(dataset, positions, sourceIds, CROP_BATCH_POINTS);
+}
+function createProvenancePickCache(dataset: DatasetInfo, sourcePositions: readonly number[], ids: readonly number[], maximum: number) {
+  const count = sourcePositions.length / 3;
+  if (!Number.isSafeInteger(count) || count < 0 || count > maximum || dataset.id !== 'toronto3d' || !/^[a-f0-9]{64}$/.test(dataset.revision) ||
+      dataset.coordinates.units !== 'm' || dataset.coordinates.upAxis !== 'Z' ||
+      dataset.coordinates.handedness !== 'right' || JSON.stringify(dataset.coordinates.localOrigin) !== '[627285,4841948,0]' ||
+      ids.length !== count * 2) throw new Error('Invalid pick provenance');
+  const positions = sourcePositions.slice(), sourceIds = ids.slice();
+  const artifactRevision = dataset.revision;
   let live = true;
   return {
     dispose() { live = false; },

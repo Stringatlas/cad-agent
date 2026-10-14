@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { PointObservation } from '@spatial/contracts';
+  import { TORONTO_SEMANTIC_LABELS, type TorontoSemanticLabel, type PointObservation, type CropSelection, type CropStats } from '@spatial/contracts';
+  import { createCropChannel } from './crop-client';
+  import { cropFeedback, describeCropSelection, type CropPhase } from './crop-feedback';
   import { createTorontoViewer } from './toronto-viewer';
   import { createObservationChannel } from './observation-client';
   import { createPoleChannel, type PoleState } from './pole-client';
@@ -8,7 +10,12 @@
   let viewer: ReturnType<typeof createTorontoViewer> | undefined;
   let budget = $state(50_000), depth = $state(3), display = $state<PointObservation>();
   let loading = $state('Waiting'), gpuError = $state(''), queryState = $state<PoleState>({ phase: 'idle' });
-  let alive = true, displayRequest = 0;
+  let label = $state<TorontoSemanticLabel>(6);
+  const labelName = $derived(TORONTO_SEMANTIC_LABELS[label].replaceAll('_', ' '));
+  let projected = $state<CropSelection>(), crop = $state<CropStats>(), cropPhase = $state<CropPhase>('idle');
+  let cropStatus = $state('Shift-drag to load a full-resolution window for picking');
+  const feedback = $derived(cropFeedback(cropPhase, crop, !gpuError));
+  let alive = true, displayRequest = 0, cropRequest = 0, cropRevision: string | undefined;
   const completed = $derived(queryState.result?.status === 'verified-found' || queryState.result?.status === 'verified-none' ? queryState.result : undefined);
   const running = $derived(['indexing', 'resolving', 'searching', 'verifying'].includes(queryState.phase));
   const query = createPoleChannel(value => {
@@ -17,7 +24,44 @@
     try { viewer?.setQueryMarkers(value.selection?.position, result?.status === 'verified-found' ? result.nearest?.position : undefined); }
     catch (error) { gpuError = `Marker rendering failed: ${String(error)}. Server verification is shown separately.`; }
   });
+  function changeLabel(event: Event) {
+    label = Number((event.currentTarget as HTMLSelectElement).value) as TorontoSemanticLabel;
+    if (queryState.selection) void query.select(queryState.selection, label); else query.clear();
+  }
+  const cropChannel = createCropChannel(async event => {
+    if (event.type === 'start') {
+      if (event.dataset.revision !== display?.dataset.revision) throw new Error('Dataset revision changed — reload display before selecting a window.');
+      cropRevision = event.dataset.revision;
+    } else if (event.type === 'batch') {
+      viewer?.appendCrop(event.positions, event.colors, event.sourceIds, cropRevision); crop = event.stats;
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+    } else if (event.type === 'end') crop = event.stats;
+  });
+  function clearWindow() {
+    cropRequest++; cropChannel.cancel(); viewer?.clearCrop(); crop = undefined; cropRevision = undefined;
+    cropPhase = 'idle'; cropStatus = 'Overview only — frozen window retained for retry';
+  }
+  function cancelWindow() {
+    if (cropPhase !== 'loading') return;
+    cropRequest++; cropChannel.cancel(); cropPhase = 'cancelled';
+    cropStatus = 'Cancelled — partial detail retained, selection incomplete. Retry or clear; no downsampling.';
+  }
+  async function selectWindow(selection: CropSelection) {
+    if (gpuError || !display) return;
+    clearWindow(); projected = selection; const token = cropRequest;
+    cropPhase = 'loading'; cropStatus = 'Loading every point in frozen window progressively…';
+    try {
+      await cropChannel.load(selection);
+      if (alive && token === cropRequest) { cropPhase = 'complete'; cropStatus = 'Ready — full resolution in frozen window'; }
+    } catch (error) { if (alive && token === cropRequest) { cropPhase = 'error'; cropStatus = `Incomplete full resolution: ${String(error)}. Retry or clear; no downsampling.`; } }
+  }
+  function viewerFailure(message: string) {
+    cropRequest++; cropChannel.cancel(); cropPhase = 'error';
+    cropStatus = 'Viewer resource failure — detail incomplete. Reload this tab to restore rendering.';
+    gpuError = `${message} Query verification remains separate.`;
+  }
   const channel = createObservationChannel('display', sample => {
+    if (display && display.dataset.revision !== sample.dataset.revision) { clearWindow(); projected = undefined; }
     query.revision(sample.dataset.revision);
     viewer?.update(sample); display = sample;
   });
@@ -28,25 +72,24 @@
   }
   onMount(() => {
     try {
-      viewer = createTorontoViewer(host, undefined, undefined,
-        message => { gpuError = `${message} Query verification remains separate; reload this tab to restore rendering.`; },
-        selection => { void query.select(selection); });
+      viewer = createTorontoViewer(host, undefined, selection => { void selectWindow(selection); },
+        viewerFailure, selection => { void query.select(selection, label); });
       void reload();
     } catch (error) { gpuError = String(error); }
-    return () => { alive = false; channel.dispose(); query.dispose(); viewer?.dispose(); };
+    return () => { alive = false; channel.dispose(); cropChannel.dispose(); query.dispose(); viewer?.dispose(); };
   });
 </script>
-<svelte:head><title>Closest Pole-labelled point · Toronto3D</title></svelte:head>
+<svelte:head><title>Closest: {labelName} · Toronto3D</title></svelte:head>
 <main>
-  <h1>Closest pole</h1>
-  <p>Cmd/Ctrl-click a displayed point to find the closest Pole-labelled stored point across the whole prepared Toronto3D dataset.</p>
-  <p class="note">Point proxy for a pole, measured with 3D Euclidean distance. This does not detect pole instances or fit an axis. Local meters · right-handed Z-up · world origin [627285, 4841948, 0].</p>
+  <h1>Closest: {labelName}</h1>
+  <p>Cmd/Ctrl-click an overview or full-resolution point to find the closest {labelName}-labelled stored point across the whole prepared Toronto3D dataset.</p>
+  <p class="note">Semantic point proxy measured with 3D Euclidean distance, not object-instance detection or fitted geometry. Local meters · right-handed Z-up · world origin [627285, 4841948, 0].</p>
   <div class="workspace">
     <section>
-      <div class="toolbar"><span>Orbit: drag · Zoom: scroll · Query: Cmd/Ctrl-click</span><button onclick={() => viewer?.frameDataset()}>Frame dataset</button></div>
+      <div class="toolbar"><span>Orbit: drag · Zoom: scroll · Window: Shift-drag · Query: Cmd/Ctrl-click</span><button onclick={() => viewer?.frameDataset()}>Frame dataset</button></div>
       <div class="viewport" data-testid="pole-viewer" bind:this={host}></div>
       {#if gpuError}<p role="alert" data-testid="pole-gpu-error">{gpuError}</p>{/if}
-      <p class="note">Cyan: selected point · Pink: verified Pole-labelled point · Yellow: distance. Frame result moves the camera only when requested. Shift takes precedence and never queries; use Toronto3D preview for Shift box/window selections. Ctrl-click context menus are suppressed on this canvas.</p>
+      <p class="note">Cyan: selected point · Pink: verified {labelName}-labelled point · Yellow: distance. Frame result moves the camera only when requested. Shift takes precedence and never queries. Window detail is display-only; search remains whole-dataset. Ctrl-click context menus are suppressed on this canvas.</p>
     </section>
     <aside>
       <h2>Display sample</h2>
@@ -54,22 +97,34 @@
       <label>Maximum depth <select data-testid="pole-depth" bind:value={depth} onchange={event => { depth = Number(event.currentTarget.value); void reload(); }}>{#each [0, 1, 2, 3] as d}<option value={d}>{d}</option>{/each}</select></label>
       <p data-testid="pole-display-status">{loading} · {display?.count ?? 0} displayed points</p>
       <button onclick={reload}>Reload display</button>
+      <h2>Full-resolution window</h2>
+      <p class="note">Shift-drag a frozen camera volume, including occluded depth. Orbiting does not change it. Detail is preferred for picking; the faded overview remains a fallback. Loading is uncapped and may exhaust GPU memory.</p>
+      {#if projected}<p class="note" data-testid="pole-window-selection">{describeCropSelection(projected)}</p>{/if}
+      <button data-testid="pole-window-cancel" disabled={!feedback.canCancel} onclick={cancelWindow}>Cancel window loading</button>
+      <button data-testid="pole-window-clear" disabled={!feedback.canClear} onclick={clearWindow}>Clear window detail</button>
+      <button data-testid="pole-window-retry" disabled={!projected || cropPhase === 'loading' || !!gpuError} onclick={() => { if (projected) void selectWindow(projected); }}>Reload same window</button>
+      <p data-testid="pole-window-status" aria-live="polite">{cropStatus}</p>
+      <p data-testid="pole-window-count">{feedback.count}</p>
+      {#if feedback.progress}<p class="note">{feedback.progress}</p>{/if}
       <h2>Whole-dataset query</h2>
+      <label>Closest semantic category <select data-testid="closest-label" value={label} onchange={changeLabel}>
+        {#each Object.entries(TORONTO_SEMANTIC_LABELS) as [id, name]}<option value={Number(id)}>{name.replaceAll('_', ' ')}</option>{/each}
+      </select></label>
       <p data-testid="pole-status" aria-live="polite">{queryState.phase}</p>
       {#if queryState.progress}<p data-testid="pole-progress">{queryState.progress.phase}: {queryState.progress.scannedPoints.toLocaleString()} records scanned; {queryState.progress.payloadBytes.toLocaleString()} payload bytes read in this phase.</p>{/if}
-      <p class="note">Exact category-index search, independently checked against all indexed Pole points. The first query after a dataset change builds a reusable index; subsequent queries reuse it. Progress reports actual work; no percentage or ETA. Only verified-found and verified-none are complete. Display/harness LOD and camera do not restrict the answer.</p>
+      <p class="note">Exact search with independent verification. All categories share a disk-backed spatial index and source lookup; first use prepares it once with bounded reads and memory. Each query independently checks page coverage and recomputes the nearest point. Progress reports actual work; no percentage or ETA. Only verified-found and verified-none are complete. Display/harness LOD and camera do not restrict the answer.</p>
       <button data-testid="pole-cancel" disabled={!running} onclick={() => query.cancel()}>Cancel query</button>
       <button data-testid="pole-clear" onclick={() => query.clear()}>Clear query</button>
-      <button data-testid="pole-retry" disabled={!queryState.selection || running} onclick={() => { if (queryState.selection) void query.select(queryState.selection); }}>Retry same selection</button>
+      <button data-testid="pole-retry" disabled={!queryState.selection || running} onclick={() => { if (queryState.selection) void query.select(queryState.selection, label); }}>Retry same selection</button>
       <button data-testid="pole-frame" disabled={!queryState.selection || !!gpuError} onclick={() => viewer?.frameResult()}>Frame result</button>
       {#if queryState.selection}
         <dl data-testid="pole-selection"><dt>Selected source file / row (zero-based)</dt><dd>{queryState.selection.key.sourceFileId} / {queryState.selection.key.sourceRow}</dd><dt>Selected position (local m)</dt><dd>{queryState.selection.position.join(', ')}</dd><dt>Artifact revision</dt><dd>{queryState.selection.artifactRevision}</dd></dl>
       {/if}
       {#if completed}
         {#if completed.nearest}
-          <dl data-testid="pole-result"><dt>Verified distance (m)</dt><dd>{completed.nearest.distanceMeters}</dd><dt>Pole-labelled source file / row</dt><dd>{completed.nearest.key.sourceFileId} / {completed.nearest.key.sourceRow}</dd><dt>Returned position (local m)</dt><dd>{completed.nearest.position.join(', ')}</dd></dl>
-        {:else}<p data-testid="pole-result">Verified-none: no Pole-labelled point in the whole dataset.</p>{/if}
-        <p class="note">Search: {completed.search.scannedPoints.toLocaleString()} records visited. Independent verifier: {completed.verification.scannedPoints.toLocaleString()} {completed.search.index ? 'indexed Pole' : 'source'} records.{#if completed.search.index} Complete category index: {completed.search.index.points.toLocaleString()} points.{/if} Revision: {completed.dataset.revision}</p>
+          <dl data-testid="pole-result"><dt>Verified distance (m)</dt><dd>{completed.nearest.distanceMeters}</dd><dt>{labelName}-labelled source file / row</dt><dd>{completed.nearest.key.sourceFileId} / {completed.nearest.key.sourceRow}</dd><dt>Returned position (local m)</dt><dd>{completed.nearest.position.join(', ')}</dd></dl>
+        {:else}<p data-testid="pole-result">Verified-none: no {labelName}-labelled point in the whole dataset.</p>{/if}
+        <p class="note">Search: {completed.search.scannedPoints.toLocaleString()} records visited. Independent verifier: {completed.verification.scannedPoints.toLocaleString()} {completed.search.disk ? 'disk-page' : completed.search.index ? 'indexed category' : 'source'} records.{#if completed.search.disk} Complete disk coverage: {completed.verification.disk?.coveredPoints.toLocaleString()} source points. Requested category: {completed.search.index?.points.toLocaleString()} points.{:else if completed.search.index} Complete category index: {completed.search.index.points.toLocaleString()} points.{/if} Revision: {completed.dataset.revision}</p>
       {:else if queryState.result}
         <p role="alert" data-testid="pole-error">{queryState.result.status === 'error' ? queryState.result.code : queryState.result.status === 'incomplete' ? `Incomplete: ${queryState.result.reason}` : queryState.result.status === 'verification-rejected' ? `Verification rejected: ${queryState.result.reason}` : ''}</p>
       {/if}

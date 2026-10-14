@@ -8,7 +8,7 @@
 <nav aria-label="Scene source">
   <button aria-pressed={mode === 'demo'} onclick={() => mode = 'demo'}>Synthetic demo</button>
   <button aria-pressed={mode === 'toronto'} onclick={() => mode = 'toronto'}>Toronto3D preview</button>
-  <button aria-pressed={mode === 'pole'} onclick={() => mode = 'pole'}>Closest pole</button>
+  <button aria-pressed={mode === 'pole'} onclick={() => mode = 'pole'}>Closest: label</button>
 </nav>
 {#if mode === 'demo'}<Demo />{:else if mode === 'toronto'}<Toronto />{:else}<ClosestPole />{/if}
 
