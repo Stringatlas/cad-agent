@@ -1,15 +1,19 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { createDemoProject, resolveEntity, selectEntity, localToWorld } from '@spatial/project-state';
+  import { resolveEntity, selectEntity, localToWorld } from '@spatial/project-state';
+  import type { ProjectSnapshot } from '@spatial/contracts';
   import { createViewer } from './viewer';
 
-  let project = $state(createDemoProject());
+  let { snapshot }: { snapshot: ProjectSnapshot } = $props();
+  // Selection is disposable view state over the fetched geometry snapshot.
+  let selectedId = $state<string | null>(null);
+  const project = $derived(selectEntity(snapshot.project, selectedId));
   let host: HTMLDivElement;
   let error = $state('');
   let viewer: ReturnType<typeof createViewer> | undefined;
   const selected = $derived(project.selectedEntityId ? resolveEntity(project, project.selectedEntityId) : undefined);
   function select(id: string | null) {
-    project = selectEntity(project, id);
+    selectedId = id;
     viewer?.updateSelection(project);
   }
   onMount(() => {
@@ -42,6 +46,8 @@
       {#if selected?.kind === 'box'}
         <dl><dt>Dimensions (X / Y / Z)</dt><dd>{selected.dimensions.join(' / ')} m</dd><dt>Local center</dt><dd>{selected.center.join(', ')} m</dd><dt>World center</dt><dd>{localToWorld(selected.center, project.coordinates).join(', ')} m</dd></dl>
       {/if}
+      <h2>Shared server snapshot</h2>
+      <p data-testid="viewer-project-binding">Session {snapshot.sessionId}<br />Frame {snapshot.frameId} · geometry revision {project.revision}</p>
       <h2>Coordinate metadata</h2>
       <dl><dt>Units / frame</dt><dd>Meters (m) · right-handed · Z-up</dd><dt>Local origin in world</dt><dd>{project.coordinates.localOrigin.join(', ')} m</dd><dt>World conversion</dt><dd>world = local + origin</dd></dl>
       <p class="note">The box is a parameterized rendering placeholder, <strong>not an OpenCascade body</strong>. No CAD edits or model integration yet.</p>
@@ -57,7 +63,7 @@
   .eyebrow { color: #72d9cd; font-size: 11px; letter-spacing: 2px; margin: 0; }
   h1 { font-size: clamp(22px, 3vw, 34px); margin: 8px 0 0; font-weight: 600; }
   .badge { border: 1px solid #344660; border-radius: 20px; padding: 6px 14px; white-space: nowrap; }
-  .workspace { display: grid; grid-template-columns: minmax(0, 1fr) 300px; border: 1px solid #2b3b53; border-radius: 12px; overflow: hidden; }
+  .workspace { display: grid; grid-template-columns: minmax(0, 1fr) 240px; border: 1px solid #2b3b53; border-radius: 12px; overflow: hidden; }
   .scene-panel { min-width: 0; background: #101927; }
   .toolbar, .legend { padding: 12px 18px; display: flex; justify-content: space-between; gap: 12px; color: #a1b3ca; font-size: 12px; }
   .viewport { width: 100%; height: 64vh; min-height: 340px; }

@@ -1,3 +1,11 @@
+export { CAD_OPERATIONS, CAD_LIMITS, CadError, canonicalCadBodyRef, canonicalCadOperation, canonicalCadRequest } from './cad';
+export type { CadSource, CadBodyRef, CadOperation, CadRequest, CadValidation, CadBodyResult, CadResult, CadErrorCode, CadReply, CadCapabilities } from './cad';
+export { PROJECT_FRAME_ID, CHAT_BODY_BYTES, CHAT_REPLY_BYTES, inspectionCommand, canonicalChatRequest, chatOutcomeState } from './chat';
+export type { ChatState, ProjectSnapshot, ChatRequest, ChatResponse } from './chat';
+export { TOOL_SCHEMA_VERSION, TOOL_VERSION, PREPARED_ASSETS, canonicalToolRequest, nearestRequestForTool, canonicalProtocolJson,
+  detachedProtocolValue, freezeProtocolValue, assertToolBinding, assertPreparedArtifactIdentity,
+  protocolRecord, protocolKeys, protocolToken, protocolHash, protocolInteger } from './tool-protocol';
+export type { ToolName, ToolBinding, PreparedArtifactIdentity, ToolArguments, ToolRequest, ProtocolFailure, ToolOutcome, ToolReply } from './tool-protocol';
 export type { DatasetInfo, PointLod, PointObservation } from './observation';
 export { assertCropBox, assertCropSelection, containsCropPoint, intersectsCropNode, CROP_BATCH_POINTS, CROP_LINE_BYTES, CROP_PLANE_EPSILON } from './crop';
 export type { CropBox, CropSelection, CropPlane, CropStats, CropEvent } from './crop';

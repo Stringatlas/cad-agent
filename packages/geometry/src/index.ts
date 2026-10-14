@@ -1,3 +1,4 @@
+export type { CadAdapter } from './cad';
 import { assertBoxEntity, type BoxEntity, type Entity, type Vec3 } from '@spatial/contracts';
 
 /** Axis-aligned bounds in the same local frame and meter units as the entity. */

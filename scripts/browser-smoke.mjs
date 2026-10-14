@@ -10,13 +10,22 @@ const url = 'http://127.0.0.1:4173/?smoke=1';
 const directory = new URL('../artifacts/browser/', import.meta.url);
 await mkdir(directory, { recursive: true });
 const report = { status: 'failed', consoleCaptured: false, messages: [], screenshots: [], checks: [] };
-let browser, page, preview;
+let browser, page, preview, backend;
 try {
   browser = await chromium.connectOverCDP(endpoint, { timeout: 5000 });
   const context = browser.contexts()[0];
   assert.ok(context, 'Existing Chrome must expose a browser context');
+  // The integrated viewer requires /project. Own a backend; never reuse/stop :3001.
+  backend = spawn('pnpm', ['exec', 'tsx', '-e', 'import { createDemoServer } from "./apps/server/src/index.ts"; createDemoServer().listen(3012,"127.0.0.1",()=>console.log("Owned demo backend ready"));'], { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+  let backendOutput = '', backendExited = false;
+  backend.stdout.on('data', chunk => backendOutput += chunk);
+  backend.stderr.on('data', chunk => backendOutput += chunk);
+  backend.on('exit', () => backendExited = true);
+  backend.on('error', error => { backendOutput += error; backendExited = true; });
+  for (let i = 0; i < 100 && !backendOutput.includes('Owned demo backend ready'); i++) { assert.ok(!backendExited, backendOutput); await delay(100); }
+  assert.ok(backendOutput.includes('Owned demo backend ready'), 'Backend startup unavailable: ' + backendOutput);
   // Strict port avoids accidentally checking another application.
-  preview = spawn('pnpm', ['--filter', '@spatial/web', 'preview', '--port', '4173', '--strictPort'], { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+  preview = spawn('pnpm', ['--dir', 'apps/web', 'exec', 'node', '--input-type=module', '-e', 'import { preview } from "vite"; const server=await preview({preview:{host:"127.0.0.1",port:4173,strictPort:true,proxy:Object.fromEntries(["/datasets/","/project","/chat/"].map(path=>[path,{target:"http://127.0.0.1:3012"}]))}}); server.printUrls();'], { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
   let output = '';
   let exited = false;
   preview.stdout.on('data', chunk => { output += chunk; });
@@ -43,8 +52,8 @@ try {
   report.checks.push('canvas initialized; 441 points and box triangles submitted');
   await page.screenshot({ path: new URL('scene.png', directory).pathname, fullPage: true });
   report.screenshots.push('scene.png');
-  assert.ok((await page.locator('aside').textContent()).includes('Meters (m) · right-handed · Z-up'));
-  assert.ok((await page.locator('aside').textContent()).includes('1000, 2000, 10 m'));
+  assert.ok((await page.locator('.scene-source aside').textContent()).includes('Meters (m) · right-handed · Z-up'));
+  assert.ok((await page.locator('.scene-source aside').textContent()).includes('1000, 2000, 10 m'));
   report.checks.push('explicit units and local-origin metadata');
   const selected = page.getByTestId('selected-id');
   assert.equal(await selected.textContent(), 'None');
@@ -101,6 +110,6 @@ try {
   if (page) await page.close().catch(() => {});
   // On a CDP connection this disconnects the client, not the user's Chrome.
   if (browser) await browser.close().catch(() => {});
-  if (preview?.pid) { try { process.kill(-preview.pid, 'SIGTERM'); } catch {} }
+  for (const child of [preview, backend]) if (child?.pid) { try { process.kill(-child.pid, 'SIGTERM'); } catch {} }
   await writeFile(new URL('report.json', directory), JSON.stringify(report, null, 2) + '\n');
 }

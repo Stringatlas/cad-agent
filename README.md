@@ -1,6 +1,16 @@
 # Spatial CAD harness
 
-A personal-project foundation for a future VLM harness inspecting point clouds and making verified CAD edits. **Current milestone: a synthetic scene viewer plus bounded Toronto3D preview and independent harness observations, not a CAD editor or agent loop.** Pi is external development tooling.
+A personal-project foundation for a future VLM harness inspecting point clouds and making verified CAD edits. **Current milestone: a shared-project scene/chat workspace with deterministic read-only inspection, Toronto3D preview, independent observations and a real CAD sandbox API—not an approved-project CAD editor or model loop.** Pi is external development tooling.
+
+## End vision
+
+A web workspace with the **3D scene on the left and the product harness chat in a right-hand panel**. Users ask the harness to inspect the point cloud and propose edits; the chat shows tool evidence, proposed changes, approval controls and verified outcomes. Approved, revision-checked edits update authoritative project state and are reflected in the left-hand scene. A proposal preview is clearly separate from committed geometry; chat prose or a rendered mesh alone never proves edit success.
+
+Chat and viewer must use the same project state, entity IDs and geometry revision—not independent demo snapshots. The viewer remains a disposable projection, CAD operations go through geometry adapters, and Pi remains development tooling rather than the product chat runtime. The read-only scene/chat shell is implemented; model orchestration, approval and editing remain targets.
+
+The [inspection chat](docs/shared-project-chat.md) supports exact commands `metadata` and `observe B D` through the real tool dispatcher. Demo geometry and Toronto artifact frames remain explicitly separate. Scope/evidence: [task012](docs/tasks/012-shared-project-chat.md).
+
+The [CAD sandbox API](docs/cad-engine.md) adds actual OpenCascade box/cylinder solids, booleans, inspection, tessellation and meter STEP export at `/cad/capabilities` and `/cad/execute`. Bodies are ephemeral and separate from the read-only project; no chat/viewer editing or approval bypass. Scope/evidence: [task013](docs/tasks/013-cad-engine.md).
 
 ## Setup and run
 
@@ -20,7 +30,7 @@ curl http://127.0.0.1:3001/health
 curl http://127.0.0.1:3001/project
 ```
 
-No credentials or environment file is needed. The server binds only to loopback and is read-only. It owns an independent demo snapshot; the demo browser state does **not** synchronize with it. Toronto mode reads bounded dataset observations from separate read-only endpoints.
+No credentials or environment file is needed. The server binds only to loopback. Project/dataset/chat endpoints are read-only; CAD operations use a separate ephemeral sandbox. It owns the read-only demo snapshot fetched by the browser and shared with chat. Reload refetches it; there is no persistence or mutation service. Toronto mode reads bounded dataset observations from separate read-only endpoints.
 
 ## What the viewer does
 
@@ -34,7 +44,7 @@ The box is **not an OpenCascade body**. Its dimensions are `[1.8, 1.2, 1.5]` m a
 
 ## Toronto3D preview
 
-Choose **Toronto3D preview** after `pnpm dev`. Requires the existing prepared dataset under `data/processed/toronto3d/prepared/`; no data is bundled or regenerated. Display budgets (10k–100k) and harness-input budgets (256–4096), with independent depths 0–3, affect separate concrete outputs. **Shift-click-drag a screen window** to progressively load every point through that frozen camera frustum × dataset extent (near/far clipped depth, including occluded points). A visible overlay shows the gesture; ordinary drag still orbits. Tiny Shift-click places the yellow local-meter box; edit its center/size, Frame box, then **Load full resolution in box**. Both selections have **no total point/source-work cap and no downsampling**. Selection mode/local bounds and loaded/scanned/source-read progress are explicit; the selected total stays unknown until completion (no fabricated percentage). Counts stay partial until complete; Cancel retains explicitly incomplete detail, Clear releases it, Retry repeats the same selection after cancel/error, and editing clears/cancels old detail. Bounded stream/GPU chunks avoid giant responses/allocations, but large selections can exhaust browser/GPU memory; cancellation is not instantaneous. The dim overview stays for context; harness settings/sample are unchanged. This is a display selection, not a CAD box edit. Download the reproducible harness observation JSON; no model consumes it yet. Missing data/server errors are visible; the default synthetic demo remains usable.
+Choose **Toronto3D preview** after `pnpm dev`. Requires the existing prepared dataset under `data/processed/toronto3d/prepared/`; no data is bundled or regenerated. Display budgets (10k–100k) and harness-input budgets (256–4096), with independent depths 0–3, affect separate concrete outputs. **Shift-click-drag a screen window** to progressively load every point through that frozen camera frustum × dataset extent (near/far clipped depth, including occluded points). A visible overlay shows the gesture; ordinary drag still orbits. Tiny Shift-click places the yellow local-meter box; edit its center/size, Frame box, then **Load full resolution in box**. Both selections have **no total point/source-work cap and no downsampling**. Selection mode/local bounds and loaded/scanned/source-read progress are explicit; the selected total stays unknown until completion (no fabricated percentage). Counts stay partial until complete; Cancel retains explicitly incomplete detail, Clear releases it, Retry repeats the same selection after cancel/error, and editing clears/cancels old detail. Bounded stream/GPU chunks avoid giant responses/allocations, but large selections can exhaust browser/GPU memory; cancellation is not instantaneous. The dim overview stays for context; harness settings/sample are unchanged. This is a display selection, not a CAD box edit. Download the reproducible harness observation JSON; no model consumes it yet. Missing dataset errors are visible; the synthetic demo remains usable while its bootstrap server is available.
 
 Run steps, local origin, read/size/security caps and sampling limitations: [preview documentation](docs/web-preview-lod.md). Latest stream/projection/feedback evidence, user browser confirmation and bounded independent-review resolution: [task005](docs/tasks/005-projected-full-resolution.md). Built Toronto preview requires the server running too.
 
@@ -67,19 +77,19 @@ pnpm verify:browser
 pnpm verify:browser http://127.0.0.1:9222
 ```
 
-The smoke script starts/cleans up its own built-preview server on port 4173, opens/closes only its test page, checks rendered point/triangle counts, canvas picking and selected IDs, clearing, orbit drag, zoom, narrow-viewport resize, metadata, and console/runtime errors. Captures screenshots and a JSON report in ignored `artifacts/browser/`. It fails nonzero if CDP or WebGL is unavailable; this check is separate from the environment-independent baseline. Screenshots complement assertions and still need visual inspection.
+The smoke script starts/cleans up its own bootstrap backend and built-preview server on port 4173, opens/closes only its test page, checks rendered point/triangle counts, canvas picking and selected IDs, clearing, orbit drag, zoom, narrow-viewport resize, metadata, and console/runtime errors. Captures screenshots and a JSON report in ignored `artifacts/browser/`. It fails nonzero if CDP or WebGL is unavailable; this check is separate from the environment-independent baseline. Screenshots complement assertions and still need visual inspection.
 
-Latest results and limitations: [foundation task](docs/tasks/001-project-foundation.md). Large Three.js bundle warning is retained.
+Latest shared-workspace results: [task012](docs/tasks/012-shared-project-chat.md); historical foundation evidence: [task001](docs/tasks/001-project-foundation.md). Large Three.js bundle warning is retained.
 
 ## Workspace boundaries
 
 | Path | Role |
 | --- | --- |
 | `apps/web` (`@spatial/web`) | Vite 7, Svelte 5, Three.js viewer |
-| `apps/server` (`@spatial/server`) | Read-only demo API and bounded prepared-dataset adapter |
+| `apps/server` (`@spatial/server`) | Read-only demo/data/chat API and isolated ephemeral CAD sandbox endpoints |
 | `packages/contracts` | Shared types and dependency-free runtime schemas/assertions |
 | `packages/project-state` | Entities, coordinate conversion, selection and revisions |
-| `packages/geometry` | Geometry adapter interface and analytic box bounds |
+| `packages/geometry` | Geometry/CAD interfaces, analytic proposal bounds and worker-loaded OpenCascade adapter |
 | `packages/agent-harness` | Product interfaces, observation boundary and deterministic sampling policy |
 
 Package names use `@spatial/*` and `workspace:*` imports. The harness has no UI, Pi, or direct CAD-kernel dependency.
@@ -88,6 +98,6 @@ See [architecture](docs/architecture.md), [coordinate decision](docs/decisions/0
 
 ## Scope and next step
 
-No kernel, model calls, credentials, simulations, persistence, deployment or push. Toronto3D observations are read-only and separate from geometry revisions. Only demo selection transitions exist; selection does not increment geometry revision.
+Real kernel solids exist only in the ephemeral CAD sandbox. No approved project CAD edits, model calls, credentials, simulations, persistence, deployment or push. Toronto3D observations are read-only and separate from geometry revisions. Only demo selection transitions exist; selection does not increment geometry revision.
 
-Next: complete outstanding browser checks and fresh-session reviews against each task and actual changes; these implementations do not approve one another.
+Review checkpoint: complete outstanding browser checks and fresh-session reviews against each task and actual changes; these implementations do not approve one another. The first [shared-project chat shell](docs/tasks/012-shared-project-chat.md) is implemented and independently reviewed: 123/123 baseline plus chat/demo/all-label browser checks pass. Full graph certification remains unresolved; prior task reviews stay separate. [Provider/kernel direction](docs/TODO.md#provider-and-kernel-direction): OpenAI API keys plus ChatGPT subscription sign-in; actual OpenCascade sandbox implemented using pinned direct bindings in task013. Live auth/model calls and approved project CAD edits remain unimplemented. Task013 passes138/138 baseline tests and independent source review; graph coverage remains incomplete.

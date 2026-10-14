@@ -1,3 +1,7 @@
+export { ReadonlyToolRuntime, canonicalToolConfiguration, semanticToolOutcome } from './tool-protocol';
+export type { ToolBudgets, ToolConfiguration, ReadonlyToolAdapter, ProtocolHasher, ToolRecord } from './tool-protocol';
+export { EVIDENCE_VERSION, EvidenceFailure, exportRunEvidence, parseRunEvidence, replayRunEvidence } from './run-evidence';
+export type { RunEvidence, EvidenceFailureCode, ArtifactVerification, ReplayEnvironment, ReplayResult } from './run-evidence';
 export { assertPointLod, sampleIndices, OBSERVATION_LIMITS } from './observation';
 export type { PointObservationSource } from './observation';
 export { executeNearestPole } from './semantic-query';

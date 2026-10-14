@@ -12,6 +12,7 @@
   "dependencies": {
     "@spatial/project-state": "workspace:*",
     "@spatial/contracts": "workspace:*",
+    "@spatial/geometry": "workspace:*",
     "@spatial/agent-harness": "workspace:*"
   }
 }

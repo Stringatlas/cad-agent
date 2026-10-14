@@ -45,6 +45,9 @@ importers:
       '@spatial/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@spatial/geometry':
+        specifier: workspace:*
+        version: link:../../packages/geometry
       '@spatial/project-state':
         specifier: workspace:*
         version: link:../../packages/project-state
@@ -93,6 +96,9 @@ importers:
       '@spatial/contracts':
         specifier: workspace:*
         version: link:../contracts
+      replicad-opencascadejs:
+        specifier: 1.1.0
+        version: 1.1.0
 
   packages/project-state:
     dependencies:
@@ -570,6 +576,9 @@ packages:
     resolution: {integrity: sha512-GDhwkLfywWL2s6vEjyhri+eXmfH6j1L7JE27WhqLeYzoh/A3DBaYGEj2H/HFZCn/kMfim73FXxEJTw06WtxQwg==}
     engines: {node: '>= 14.18.0'}
 
+  replicad-opencascadejs@1.1.0:
+    resolution: {integrity: sha512-s0KHR5V+ivsOE4nZXfuoW70lW0/rldkb3ZDY34LpXOQRFLQN5qVydQm3BRo7boZPdFkkAZBERJ+NzB0DYxrivw==}
+
   rollup@4.64.5:
     resolution: {integrity: sha512-EAP5ZHcz2ijbgCWwPkpI7zh6bfsri2Ez5FtCy2dCp1k62duXzfG7DLGGh7RU2QQXWwavT+u4qpvDF/TWOiiGTw==}
     engines: {node: '>=18.0.0', npm: '>=8.0.0'}
@@ -980,6 +989,8 @@ snapshots:
       source-map-js: 1.2.2
 
   readdirp@4.1.2: {}
+
+  replicad-opencascadejs@1.1.0: {}
 
   rollup@4.64.5:
     dependencies:

@@ -4,12 +4,14 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./cad-kernel": "./src/cad-kernel.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@spatial/contracts": "workspace:*"
+    "@spatial/contracts": "workspace:*",
+    "replicad-opencascadejs": "1.1.0"
   }
 }

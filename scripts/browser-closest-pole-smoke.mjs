@@ -20,7 +20,7 @@ try {
   const context = browser.contexts()[0]; assert.ok(context);
   // Owned ports only; never change the user's server on :3001.
   await start(['exec', 'tsx', '-e', 'import { createDemoServer } from "./apps/server/src/index.ts"; createDemoServer().listen(3002, "127.0.0.1", () => console.log("Owned backend ready"));'], 'Owned backend ready');
-  await start(['--dir', 'apps/web', 'exec', 'node', '--input-type=module', '-e', 'import { preview } from "vite"; const server = await preview({ preview: { host: "127.0.0.1", port: 4175, strictPort: true, proxy: { "/datasets/": { target: "http://127.0.0.1:3002" } } } }); server.printUrls();'], 'http://127.0.0.1:4175');
+  await start(['--dir', 'apps/web', 'exec', 'node', '--input-type=module', '-e', 'import { preview } from "vite"; const server = await preview({ preview: { host: "127.0.0.1", port: 4175, strictPort: true, proxy: Object.fromEntries(["/datasets/", "/project", "/chat/"].map(path => [path, { target: "http://127.0.0.1:3002" }])) } }); server.printUrls();'], 'http://127.0.0.1:4175');
   page = await context.newPage(); await page.setViewportSize({ width: 1440, height: 1100 });
   page.on('console', message => report.messages.push({ type: message.type(), text: message.text() })); page.on('pageerror', error => report.messages.push({ type: 'pageerror', text: String(error) })); report.consoleCaptured = true;
   const requests = [];

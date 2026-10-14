@@ -129,9 +129,11 @@ async function screenshot(name) { await page.screenshot({ path: join(directory, 
 try {
   browser = await chromium.connectOverCDP(process.argv[2] ?? 'http://127.0.0.1:9222', { timeout: 5000 });
   await start('backend', ['exec', 'tsx', '-e', 'import { createDemoServer } from "./apps/server/src/index.ts"; createDemoServer().listen(3002,"127.0.0.1",()=>console.log("Owned backend ready"));'], 'Owned backend ready');
-  await start('preview', ['--dir', 'apps/web', 'exec', 'node', '--input-type=module', '-e', 'import { preview } from "vite"; const server=await preview({preview:{host:"127.0.0.1",port:4175,strictPort:true,proxy:{"/datasets/":{target:"http://127.0.0.1:3002"}}}}); server.printUrls();'], 'http://127.0.0.1:4175');
+  await start('preview', ['--dir', 'apps/web', 'exec', 'node', '--input-type=module', '-e', 'import { preview } from "vite"; const server=await preview({preview:{host:"127.0.0.1",port:4175,strictPort:true,proxy:Object.fromEntries(["/datasets/","/project","/chat/"].map(path=>[path,{target:"http://127.0.0.1:3002"}]))}}); server.printUrls();'], 'http://127.0.0.1:4175');
   const context = browser.contexts()[0]; assert.ok(context); page = await context.newPage(); page.setDefaultTimeout(TIMEOUT);
-  await page.setViewportSize({ width: 1440, height: 1100 });
+  // Preserve the original 1440px scene area plus the integrated 380px chat panel.
+  // This keeps the provenance fixture/camera ray stable; the narrow-layout check remains below.
+  await page.setViewportSize({ width: 1820, height: 1100 });
   page.on('console', message => report.messages.push({ type: message.type(), text: message.text() }));
   page.on('pageerror', error => report.messages.push({ type: 'pageerror', text: String(error) }));
   page.on('request', request => {
@@ -176,7 +178,7 @@ try {
     assert.deepEqual(completed.request.input, first.request.input);
     assert.deepEqual(completed.queryPosition, first.queryPosition);
     assert.equal(completed.search.index.hash, first.search.index.hash, 'Every category shares the same complete disk index');
-    assert.match(await page.locator('aside').innerText(), /Complete disk coverage: 78,320,210 source points/);
+    assert.match(await page.locator('.scene-source aside').innerText(), /Complete disk coverage: 78,320,210 source points/);
     assert.ok(!(await page.locator('body').innerText()).includes('larger categories use an exhaustive'), 'Current UI must describe the shared disk path');
     if (label === 1 || label === 4) await screenshot(`all-label-${label}-verified.png`);
   }
