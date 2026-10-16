@@ -1,9 +1,22 @@
-import type { Vec3 } from '@spatial/contracts';
+import { canonicalScenePointName, SCENE_POINT_LIMIT, type ScenePointName, type Vec3 } from '@spatial/contracts';
 import type { PoleSelection } from './pole-picking';
 
-export type PointName = 'A' | 'B';
+export type PointName = ScenePointName;
+
+/** Owned by the mounted workspace, never by a scene/list that can be reset. */
+export function createPointSequence() {
+  let next = 1;
+  return {
+    allocate(): ScenePointName {
+      if (!Number.isSafeInteger(next)) throw new Error('Point numbering exhausted; reload to start a new workspace.');
+      return `Point ${next++}`;
+    },
+  };
+}
 export interface TorontoDraftPoint extends PoleSelection {
   readonly name: PointName;
+  /** Full verified original-dataset query lineage; never an override-adjusted search. */
+  readonly evidence?: import('./point-override-client').NearestSelectionEvidence;
   readonly frameId: 'toronto3d-local-v1';
   readonly units: 'm';
   readonly handedness: 'right';
@@ -17,6 +30,7 @@ export function createDraftPointGate() {
   return {
     bind(next: string) { const changed = revision !== undefined && revision !== next; revision = next; return changed; },
     accept(point: PoleSelection, name: PointName): TorontoDraftPoint | undefined {
+      canonicalScenePointName(name);
       if (!live || !revision || point.artifactRevision !== revision || !/^[a-f0-9]{64}$/.test(revision) ||
           point.datasetId !== 'toronto3d' || !Number.isInteger(point.key.sourceFileId) || point.key.sourceFileId < 1 || point.key.sourceFileId > 4 ||
           !Number.isInteger(point.key.sourceRow) || point.key.sourceRow < 0 || point.key.sourceRow > 0xffffffff ||
@@ -30,8 +44,9 @@ export function createDraftPointGate() {
 }
 
 export function replaceDraftPoint(points: readonly TorontoDraftPoint[], point: TorontoDraftPoint): readonly TorontoDraftPoint[] {
-  return [...points.filter(value => value.name !== point.name && value.artifactRevision === point.artifactRevision), point]
-    .sort((a, b) => a.name.localeCompare(b.name));
+  if (points.length >= SCENE_POINT_LIMIT) throw new Error(`Point limit reached (${SCENE_POINT_LIMIT}); remove a point before adding another.`);
+  if (points.some(value => value.name === point.name || value.artifactRevision !== point.artifactRevision)) throw new Error('Conflicting point reference');
+  return [...points, point];
 }
 
 /** Local acknowledgement only: deliberately has no transport/tool dependency. */

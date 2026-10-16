@@ -1,15 +1,18 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { resolveEntity, selectEntity, localToWorld } from '@spatial/project-state';
-  import type { ProjectSnapshot, ScenePointReference, BoxProposal } from '@spatial/contracts';
+  import type { ProjectSnapshot, ScenePointName, ScenePointReference, BoxProposal } from '@spatial/contracts';
   import { createViewer } from './viewer';
+  import VisualObservationPanel from './VisualObservationPanel.svelte';
+  import type { VisualModelSource } from './visual-model-source';
 
-  let { snapshot, selectedId, points, proposal, onselect, onpin, onclearpoints }: {
+  let { snapshot, selectedId, points, proposal, onselect, onpin, onremovepoint, onclearpoints, onvisualsource = () => {} }: {
+    onvisualsource?: (source: VisualModelSource | undefined) => void;
     snapshot: ProjectSnapshot; selectedId: string | null; points: readonly ScenePointReference[]; proposal?: BoxProposal;
-    onselect: (id: string | null) => void; onpin: (point: ScenePointReference) => void; onclearpoints: () => void;
+    onselect: (id: string | null) => void; onpin: (point: Omit<ScenePointReference, 'name'>) => void;
+    onremovepoint: (name: ScenePointName) => void; onclearpoints: () => void;
   } = $props();
-  // Selection and named pins are disposable view state, shared with chat, never geometry.
-  let pinName = $state<'A' | 'B'>('A');
+  // Selection and numbered pins are disposable view state, shared with chat, never geometry.
   const project = $derived(selectEntity(snapshot.project, selectedId));
   let host: HTMLDivElement;
   let error = $state('');
@@ -20,12 +23,14 @@
   $effect(() => { if (mounted) { viewer?.updateSelection(project); viewer?.updateOverlays(points, proposal); } });
   onMount(() => {
     try {
-      viewer = createViewer(host, project, select, point => onpin({ ...point, name: pinName }),
-        cause => error = String(cause), () => error = '');
+      viewer = createViewer(host, project, select, point => onpin(point),
+        cause => error = String(cause), () => error = '', { sessionId: snapshot.sessionId, frameId: snapshot.frameId });
       mounted = true;
+      const current = viewer;
+      onvisualsource({ capture: () => current.capture(), isCurrent: id => current.isCaptureCurrent(id), resolvePixel: (id, x, y) => current.resolvePixel(id, x, y) });
     }
     catch (cause) { error = String(cause); console.error(cause); }
-    return () => { mounted = false; viewer?.dispose(); };
+    return () => { mounted = false; onvisualsource(undefined); viewer?.dispose(); };
   });
 </script>
 
@@ -36,10 +41,11 @@
       <div class="toolbar"><strong>Local scene</strong><span>Orbit: drag · Zoom: scroll · Select: click · Pin: Cmd/Ctrl-click</span></div>
       <div class="viewport" bind:this={host} data-testid="viewer"></div>
       {#if error}<p class="error" role="alert">Render unavailable (authority/commit status is independent): {error}</p>{/if}
+      {#if mounted}<VisualObservationPanel label="Synthetic" capture={() => viewer!.capture()} isCurrent={id => viewer!.isCaptureCurrent(id)} resolvePixel={(id, x, y) => viewer!.resolvePixel(id, x, y)} />{/if}
       <div class="legend">X <span class="red">red</span> / Y <span class="green">green</span> / Z <span class="blue">blue</span> · XY ground · meters</div>
     </div>
     <aside>
-      <details data-testid="synthetic-scene-tools"><summary>Entities, synthetic A/B &amp; coordinates</summary>
+      <details data-testid="synthetic-scene-tools"><summary>Entities, numbered points &amp; coordinates</summary>
       <h2>Authoritative entities</h2>
       {#each project.entities as entity}
         <button class:active={project.selectedEntityId === entity.id} onclick={() => select(entity.id)} aria-pressed={project.selectedEntityId === entity.id}>
@@ -52,10 +58,15 @@
       {#if selected?.kind === 'box'}
         <dl><dt>Dimensions (X / Y / Z)</dt><dd>{selected.dimensions.join(' / ')} m</dd><dt>Local center</dt><dd>{selected.center.join(', ')} m</dd><dt>World center</dt><dd>{localToWorld(selected.center, project.coordinates).join(', ')} m</dd></dl>
       {/if}
-      <h2>Named synthetic points</h2>
-      <label>Cmd/Ctrl-click names point <select aria-label="Point pin name" data-testid="pin-name" bind:value={pinName}><option>A</option><option>B</option></select></label>
-      {#each points as point}<p data-testid={`point-${point.name}`}>{point.name}: {point.entityId} / index {point.pointIndex}<br />[{point.position.join(', ')}] m (original binary64)</p>{/each}
-      <button onclick={onclearpoints}>Clear A/B pins</button>
+      <h2>Numbered synthetic points</h2>
+      <p>Cmd/Ctrl-click adds a new numbered point for chat context.</p>
+      {#each points as point (point.name)}
+        <div data-testid={`point-${point.name}`}>
+          <p>{point.name}: {point.entityId} / index {point.pointIndex}<br />[{point.position.join(', ')}] m (original binary64)</p>
+          <button onclick={() => onremovepoint(point.name)} aria-label={`Remove ${point.name}`}>Remove {point.name}</button>
+        </div>
+      {/each}
+      <button onclick={onclearpoints}>Clear all points</button>
       <h2>Shared server snapshot</h2>
       <p data-testid="viewer-project-binding">Session {snapshot.sessionId}<br />Frame {snapshot.frameId} · geometry revision {project.revision}</p>
       <h2>Coordinate metadata</h2>

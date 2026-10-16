@@ -1,17 +1,28 @@
 <script lang="ts">
-  import type { ProjectSnapshot } from '@spatial/contracts';
+  import { SCENE_POINT_LIMIT, type ProjectSnapshot, type PointOverrideSnapshot, type PointMoveProposal } from '@spatial/contracts';
   import { ChatController, type ChatEntry } from './chat-client';
   import BoxControls from './BoxControls.svelte';
   import type { ProjectController, ProjectView } from './project-client';
   import type { TorontoDraftPoint, PointName } from './draft-context';
   import ModelChat from './ModelChat.svelte';
+  import PointEdits from './PointEdits.svelte';
+  import { effectivePosition } from './point-override-client';
+  import type { VisualModelSource } from './visual-model-source';
   import { modelScene } from './model-chat-client';
-  let { snapshot, view, controller: projectController, sceneMode, points, pinName, onpinname, onclearpoint }: {
+  let { snapshot, view, controller: projectController, sceneMode, points, pointStatus, onclearpoint, visualSource, pointOverrides, onverifiedresult, onquerypoint, onpointstate, artifactRevision }: {
+    artifactRevision?: string;
+    pointOverrides?: PointOverrideSnapshot;
+    onverifiedresult: (context: unknown) => void;
+    onquerypoint: (point: Omit<TorontoDraftPoint, 'name'>) => void;
+    onpointstate: (snapshot?: PointOverrideSnapshot, proposal?: PointMoveProposal) => void;
+    visualSource?: VisualModelSource;
     snapshot?: ProjectSnapshot; view: ProjectView; controller: ProjectController; sceneMode: string;
-    points: readonly TorontoDraftPoint[]; pinName: PointName; onpinname: (name: PointName) => void; onclearpoint: (name: PointName) => void;
+    points: readonly TorontoDraftPoint[]; pointStatus: string; onclearpoint: (name: PointName) => void;
   } = $props();
   const activePoints = $derived(sceneMode === 'toronto' ? points : []);
-  const scene = $derived(modelScene(sceneMode, snapshot, view, activePoints));
+  // Query lineage stays attached locally; the strict model-reference protocol carries only original source fields.
+  const scene = $derived(modelScene(sceneMode, snapshot, view, activePoints.map(({ evidence: _evidence, ...original }) => original)));
+  const listedPoints = $derived(sceneMode === 'demo' ? view.points : activePoints);
   let command = $state('metadata');
   let entry = $state<ChatEntry>();
   let controller: ChatController | undefined;
@@ -24,6 +35,7 @@
     return () => { current.dispose(); if (controller === current) controller = undefined; };
   });
   const reply = $derived(entry?.response?.reply);
+  function effectiveCoordinates(point: TorontoDraftPoint) { try { return effectivePosition(point, pointOverrides).join(', '); } catch { return 'Source mismatch — refresh and reselect'; } }
 </script>
 
 <aside class="chat" aria-label="Scene chat" data-testid="chat">
@@ -34,23 +46,32 @@
     <p>Pin points in the scene, then describe what you want to build or inspect.</p>
     <p class="honesty">Models load automatically; choose a different model anytime before sending with explicit scene references. The model can inspect bound context, but cannot build channels or change geometry.</p>
   </div>
-  <section class="attachments" data-testid="draft-attachments" aria-label="Toronto3D draft attachments">
-    <div class="section-heading"><strong>Scene references</strong><span>{activePoints.length}/2 attached</span></div>
-    <div class="pin-target"><span>Next pin</span>{#each ['A', 'B'] as name}<button type="button" aria-pressed={pinName === name} disabled={sceneMode !== 'toronto'} onclick={() => onpinname(name as PointName)}>{name}</button>{/each}<span class="gesture">Cmd/Ctrl-click a point</span></div>
-    {#if activePoints.length}
-      {#each activePoints as point (point.name)}
-        <div class="attachment" data-testid={`draft-point-${point.name}`}>
-          <div class="attachment-heading"><span class="pin-label" class:b={point.name === 'B'}>{point.name}</span><strong>Toronto3D point {point.name}</strong><button type="button" aria-label={`Remove point ${point.name}`} data-testid={`remove-draft-point-${point.name}`} onclick={() => onclearpoint(point.name)}>×</button></div>
-          <p class="coordinates">[{point.position.join(', ')}] m</p>
+  <section class="attachments" data-testid="draft-attachments" aria-label="Scene point references">
+    <div class="section-heading"><strong>Scene references</strong><span>{listedPoints.length}/{SCENE_POINT_LIMIT} attached</span></div>
+    <p>Cmd/Ctrl-click adds a new numbered point. Removed numbers are never reused in this workspace; reload starts fresh.</p>
+    {#if pointStatus}<p role="status" data-testid="point-status">{pointStatus}</p>{/if}
+    {#if listedPoints.length}
+      <div class="point-list" role="list" aria-label="Numbered scene points">
+      {#each listedPoints as point (point.name)}
+        <div class="attachment" role="listitem" data-testid={`draft-point-${point.name}`}>
+          <div class="attachment-heading"><strong>{point.name}</strong><span>{'datasetId' in point ? 'Toronto3D' : 'Synthetic'}</span><button type="button" aria-label={`Remove ${point.name}`} data-testid={`remove-draft-point-${point.name}`} disabled={sceneMode === 'demo' && !!view.pending && ['approve', 'undo', 'load'].includes(view.pending)} onclick={() => onclearpoint(point.name)}>×</button></div>
+          <p class="coordinates">Original [{point.position.join(', ')}] m</p>
+          {#if 'datasetId' in point && pointOverrides}<p class="coordinates">Effective [{effectiveCoordinates(point)}] m · override revision {pointOverrides.revision}</p>{/if}
+          {#if 'datasetId' in point}
           <details><summary>Original source &amp; frame</summary><dl><dt>Prepared point key</dt><dd>File {point.key.sourceFileId} · row {point.key.sourceRow}</dd><dt>Artifact revision</dt><dd>{point.artifactRevision}</dd><dt>Frame / units</dt><dd>{point.frameId} · meters · right-handed Z-up</dd><dt>World origin (translation only)</dt><dd>[{point.localOrigin.join(', ')}]</dd></dl><pre data-testid={`draft-point-json-${point.name}`}>{JSON.stringify(point, null, 2)}</pre></details>
+          {:else}
+          <details><summary>Original source &amp; frame</summary><p>{point.entityId} · index {point.pointIndex}<br />{snapshot?.frameId} · revision {snapshot?.project.revision} · meters · right-handed Z-up<br />Origin [{snapshot?.project.coordinates.localOrigin.join(', ')}]</p></details>
+          {/if}
         </div>
       {/each}
-      <p class="hint">Original prepared coordinates, not GPU values. Sent only with your model request; unmapped to synthetic project and excluded from project editing tools.</p>
+      </div>
+      <p class="hint">Original coordinates, not GPU values. Model context uses original source positions even after point edits; complete query evidence remains attached locally. Toronto points remain unmapped to the synthetic project and excluded from its editing tools.</p>
     {:else}
-      <p class="empty">{sceneMode === 'toronto' ? 'Choose A or B, then Cmd/Ctrl-click any rendered overview or detail point.' : 'Switch to Toronto3D to attach dataset points. Synthetic context stays in technical tools.'}</p>
+      <p class="empty">{sceneMode === 'pole' ? 'Switch to Toronto3D or Synthetic demo to attach numbered points.' : 'Cmd/Ctrl-click any rendered cloud point to attach Point 1, Point 2, and more.'}</p>
     {/if}
   </section>
-  <ModelChat {scene} />
+  <ModelChat {scene} {visualSource} points={activePoints} {onverifiedresult} />
+  {#if sceneMode === 'toronto'}<PointEdits {artifactRevision} points={activePoints} onselect={onquerypoint} onstate={onpointstate} />{/if}
   <details class="technical" data-testid="inspection-tools">
     <summary>Technical tools <span>Deterministic inspection &amp; approved parameters</span></summary>
     {#if snapshot}
@@ -103,12 +124,11 @@
   h3 { font-weight: 500; font-size: 18px; margin: 0 0 8px; } p { color: #9badc3; font-size: 12px; }
   .introduction p { margin: 8px 0; } .introduction .honesty { color: #7e93ad; font-size: 11px; }
   .attachments { border-top: 1px solid #2c394b; padding-top: 18px; } .section-heading strong { font-size: 12px; font-weight: 550; } .section-heading span { color: #7f93ad; font-size: 10px; }
-  .pin-target { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin: 12px 0; font-size: 11px; color: #98acc5; } .pin-target button { padding: 3px 9px; } .gesture { margin-left: auto; font-size: 10px; }
-  .pin-target button[aria-pressed="true"] { border-color: #7bd7c4; color: #a5efdf; background: #233f43; }
   .empty { border: 1px dashed #344660; border-radius: 8px; padding: 14px; color: #8096b0; }
   .attachment { background: #172638; border: 1px solid #344b61; border-radius: 8px; margin: 10px 0; padding: 10px; }
   .attachment-heading { font-size: 11px; justify-content: start; } .attachment-heading > button { margin-left: auto; border: 0; padding: 0 5px; font-size: 18px; }
-  .pin-label { display: inline-grid; place-items: center; background: #8be6d4; color: #122b2d; border-radius: 50%; width: 21px; height: 21px; font-weight: 700; } .pin-label.b { background: #efb5db; }
+  .point-list { max-height: 360px; overflow: auto; }
+  .attachment-heading strong { overflow-wrap: anywhere; }
   .coordinates { color: #c3d8e7; font-family: ui-monospace, monospace; font-size: 11px; overflow-wrap: anywhere; } .attachment summary, .hint { font-size: 10px; color: #91a7bf; }
   label { display: block; font-size: 12px; margin: 12px 0 8px; color: #c1cfe0; }
   input { width: 100%; background: #0d1724; color: #e4ecf7; border: 1px solid #3b506a; border-radius: 8px; padding: 12px; }
@@ -118,6 +138,6 @@
   .technical section { border-top: 1px solid #344660; margin-top: 16px; padding-top: 14px; font-size: 12px; } .box-tools { margin-top: 20px; font-size: 12px; }
   dt, .help { color: #91a6c0; font-size: 11px; } dt { margin-top: 8px; } dd { margin: 0; overflow-wrap: anywhere; font-size: 11px; }
   .actions { display: flex; gap: 8px; flex-wrap: wrap; } pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; font-size: 10px; }
-  @media (max-width: 1000px) { .chat { padding: 18px; } .gesture { margin-left: 0; width: 100%; } }
+  @media (max-width: 1000px) { .chat { padding: 18px; } }
   @media (max-width: 760px) { .chat { min-height: auto; padding: 24px 18px; } .introduction { padding: 24px 0 16px; } }
 </style>

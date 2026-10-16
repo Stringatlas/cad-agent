@@ -1,15 +1,17 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { MODEL_CHAT_LIMITS as L, canonicalModelTurnRequest, type ModelChatEvent, type ModelTurnRequest } from '@spatial/contracts';
+import { MODEL_CHAT_LIMITS as L, MODEL_VISUAL_LIMITS, canonicalModelTurnRequest, type ModelChatEvent, type ModelTurnRequest } from '@spatial/contracts';
 import { ProviderModel, ModelError, type ModelAuth, type ModelTransport, type BoundModelScene } from './provider-model';
+import { ModelVisualBroker } from './model-visual-broker';
+import { validateModelVisual } from './model-visual';
 import { bindModelScene } from './model-scene';
 import { ProjectSession, ProjectError } from './project-session';
 
-function readBody(request: IncomingMessage, signal: AbortSignal): Promise<unknown> {
+function readBody(request: IncomingMessage, signal: AbortSignal, maxBytes: number = L.requestBytes): Promise<unknown> {
   return new Promise((resolve, reject) => {
     let size = 0; const chunks: Buffer[] = [];
     const clean = () => { request.off('data', data); request.off('end', end); request.off('error', fail); signal.removeEventListener('abort', fail); };
     const fail = () => { clean(); request.pause(); reject(new ModelError(signal.aborted ? 'cancelled' : 'invalid-request')); };
-    const data = (chunk: Buffer) => { size += chunk.length; if (size > L.requestBytes) fail(); else chunks.push(chunk); };
+    const data = (chunk: Buffer) => { size += chunk.length; if (size > maxBytes) fail(); else chunks.push(chunk); };
     const end = () => { clean(); try { resolve(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)))); } catch { reject(new ModelError('invalid-request')); } };
     request.on('data', data); request.once('end', end); request.once('error', fail); signal.addEventListener('abort', fail, { once: true });
     if (signal.aborted) fail();
@@ -31,21 +33,41 @@ async function writeEvent(response: ServerResponse, event: ModelChatEvent, signa
 export function createModelChatRoutes(auth: ModelAuth, authority: ProjectSession, directory: string, transport?: ModelTransport) {
   const model = new ProviderModel(auth, transport);
   let active: AbortController | undefined, closed = false, windowStart = Date.now(), calls = 0;
+  let broker: ModelVisualBroker | undefined, boundActive: BoundModelScene | undefined, readingToolResult = false;
   const unsubscribe = auth.onCredentialChange(() => active?.abort());
   return {
     close() { closed = true; active?.abort(); unsubscribe(); model.close(); },
     async handle(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1');
-      if (url.pathname !== '/chat/models' && url.pathname !== '/chat/turn') return false;
+      if (!['/chat/models', '/chat/turn', '/chat/tool-result'].includes(url.pathname)) return false;
       response.setHeader('Cache-Control', 'no-store'); response.setHeader('X-Content-Type-Options', 'nosniff');
       const send = (status: number, code: string) => { response.statusCode = status; response.setHeader('Connection', 'close'); response.end(JSON.stringify({ error: { code } })); };
       const origins = new Set([`http://127.0.0.1:${request.socket.localPort}`, 'http://127.0.0.1:5173']);
       if (!origins.has(`http://${request.headers.host ?? ''}`) || (request.headers.origin !== undefined && !origins.has(request.headers.origin)) ||
         (request.headers['sec-fetch-site'] !== undefined && !['same-origin', 'same-site', 'none'].includes(String(request.headers['sec-fetch-site'])))) { send(403, 'local-only'); return true; }
-      const catalog = url.pathname === '/chat/models';
+      const catalog = url.pathname === '/chat/models', toolResult = url.pathname === '/chat/tool-result';
+      const requestLimit = toolResult ? MODEL_VISUAL_LIMITS.resultBytes : MODEL_VISUAL_LIMITS.requestBytes;
       if (request.method !== (catalog ? 'GET' : 'POST') || url.search || (request.url?.length ?? 0) > 512 || request.headers['content-encoding'] ||
         (catalog && (request.headers['transfer-encoding'] || Number(request.headers['content-length'] ?? 0) !== 0)) ||
-        (!catalog && (!/^application\/json(?:\s*;\s*charset=utf-8)?$/iu.test(request.headers['content-type'] ?? '') || Number(request.headers['content-length'] ?? 0) > L.requestBytes))) { send(400, 'invalid-request'); return true; }
+        (!catalog && (!/^application\/json(?:\s*;\s*charset=utf-8)?$/iu.test(request.headers['content-type'] ?? '') || Number(request.headers['content-length'] ?? 0) > requestLimit))) { send(400, 'invalid-request'); return true; }
+      if (toolResult) {
+        // Browser-only callback; never admit a new model operation or credential call here.
+        if (!request.headers.origin || !origins.has(request.headers.origin)) { send(403, 'local-only'); return true; }
+        const current = broker, bound = boundActive, turn = active;
+        if (closed || !turn || turn.signal.aborted || !current?.waiting || !bound || readingToolResult) { send(400, 'invalid-tool-result'); return true; }
+        readingToolResult = true;
+        const timeout = new AbortController(); const timer = setTimeout(() => timeout.abort(), 5000); timer.unref();
+        const signal = AbortSignal.any([turn.signal, timeout.signal]);
+        const abort = () => timeout.abort(); request.once('aborted', abort); response.once('close', abort);
+        try {
+          const body = await readBody(request, signal, MODEL_VISUAL_LIMITS.resultBytes); signal.throwIfAborted();
+          await bound.check(); signal.throwIfAborted();
+          if (broker !== current || active !== turn) throw new ModelError('invalid-tool-result');
+          current.accept(body); response.statusCode = 204; response.end();
+        } catch { if (!response.destroyed && !response.writableEnded) send(400, 'invalid-tool-result'); }
+        finally { clearTimeout(timer); request.off('aborted', abort); response.off('close', abort); readingToolResult = false; }
+        return true;
+      }
       if (closed || active) { send(429, 'busy'); return true; }
       if (Date.now() - windowStart >= 60000) { windowStart = Date.now(); calls = 0; }
       if (++calls > L.requestsPerMinute) { send(429, 'rate-limit'); return true; }
@@ -65,10 +87,26 @@ export function createModelChatRoutes(auth: ModelAuth, authority: ProjectSession
           const result = await model.models(controller.signal); controller.signal.throwIfAborted();
           response.end(JSON.stringify(result)); return true;
         }
-        call = canonicalModelTurnRequest(await readBody(request, controller.signal));
+        const raw = await readBody(request, controller.signal, MODEL_VISUAL_LIMITS.requestBytes);
+        const suppliedVisual = raw && typeof raw === 'object' ? (raw as Record<string, unknown>).visualObservation : undefined;
+        const suppliedImage = suppliedVisual && typeof suppliedVisual === 'object' ? (suppliedVisual as Record<string, unknown>).image : undefined;
+        if (suppliedImage && typeof suppliedImage === 'object') {
+          const image = suppliedImage as Record<string, unknown>;
+          const prefixLength = image.mimeType === 'image/jpeg' ? 'data:image/jpeg;base64,'.length : 'data:image/png;base64,'.length;
+          if (typeof image.byteLength === 'number' && image.byteLength > MODEL_VISUAL_LIMITS.imageBytes ||
+            typeof image.dataUrl === 'string' && image.dataUrl.length > Math.ceil(MODEL_VISUAL_LIMITS.imageBytes / 3) * 4 + prefixLength) throw new ModelError('image-too-large');
+        }
+        call = canonicalModelTurnRequest(raw);
+        if (!call.visualObservation && Buffer.byteLength(JSON.stringify(raw)) > L.requestBytes) throw new ModelError('invalid-request');
+        const visual = await validateModelVisual(call, controller.signal);
         if (call.generation !== auth.credentialGeneration()) throw new ModelError('stale-account');
         // Binding uses only authoritative synthetic context or revision-checked unmapped dataset metadata.
-        bound = await bindModelScene(call.scene, authority, directory, controller.signal);
+        bound = await bindModelScene(call.scene, authority, directory, controller.signal, visual);
+        boundActive = bound;
+        if (visual) {
+          broker = new ModelVisualBroker(call.requestId, controller.signal, emit);
+          bound = { ...bound, resolveVisualPixel: (args, toolCallId) => broker!.resolve(args, toolCallId) };
+        }
         await model.turn(call, bound, emit, controller.signal);
         response.end();
       } catch (error) {
@@ -84,6 +122,7 @@ export function createModelChatRoutes(auth: ModelAuth, authority: ProjectSession
         }
       } finally {
         clearTimeout(timer); response.off('close', abort); request.off('aborted', abort);
+        broker = undefined; boundActive = undefined;
         await bound?.close().catch(() => undefined); if (active === controller) active = undefined;
       }
       return true;

@@ -2,10 +2,12 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { ProjectState, ScenePointReference, BoxProposal } from '@spatial/contracts';
 import { createEntityObject, highlight, resolvePickedEntityId } from './entities';
+import { createVisualCapture } from './visual-capture';
+import { updateStableOrbitControls } from './orbit-stability';
 
 export function createViewer(host: HTMLElement, initial: ProjectState, onSelect: (id: string | null) => void,
   onPoint?: (point: Omit<ScenePointReference, 'name'>) => void, onRenderError?: (cause: unknown) => void,
-  onRenderRecovered?: () => void) {
+  onRenderRecovered?: () => void, binding?: { sessionId: string; frameId: string }) {
   let state = initial;
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x101927);
@@ -43,6 +45,23 @@ export function createViewer(host: HTMLElement, initial: ProjectState, onSelect:
   }
   const raycaster = new THREE.Raycaster();
   raycaster.params.Points.threshold = 0.12;
+  const visual = createVisualCapture({ renderer, scene, camera,
+    binding: () => ({ sourceId: binding?.sessionId ?? 'synthetic-preview', sourceRevision: state.revision,
+      frameId: binding?.frameId ?? 'synthetic-local', units: 'm', origin: state.coordinates.localOrigin }),
+    coverage: () => ({ kind: 'synthetic-project-display', complete: true,
+      displayedPointCount: state.entities.reduce((n, entity) => n + (entity.kind === 'point-cloud' ? entity.points.length : 0), 0),
+      wholeDatasetCoverage: false, geometry: 'mesh-proposal-not-CAD', overlays: overlays.children.length }),
+    points: () => objects,
+    resolve: (object, index) => {
+      const id = resolvePickedEntityId(state, object), entity = state.entities.find(entity => entity.id === id);
+      const position = entity?.kind === 'point-cloud' ? entity.points[index] : undefined;
+      return position ? { entityId: id!, pointIndex: index, position, geometryRevision: state.revision,
+        sessionId: binding?.sessionId ?? 'synthetic-preview', frameId: binding?.frameId ?? 'synthetic-local', units: 'm' } : undefined;
+    },
+    available: () => !disposed && !contextLost && !renderUnavailable && host.dataset.ready === 'true',
+  });
+  const viewChanged = () => visual.invalidate();
+  controls.addEventListener('change', viewChanged);
   let down: [number, number] | null = null;
   const pointerDown = (event: PointerEvent) => { down = [event.clientX, event.clientY]; };
   const pointerUp = (event: PointerEvent) => {
@@ -66,6 +85,7 @@ export function createViewer(host: HTMLElement, initial: ProjectState, onSelect:
   const resize = new ResizeObserver(() => {
     const { width, height } = host.getBoundingClientRect();
     if (width <= 0 || height <= 0) return;
+    visual.invalidate();
     renderer.setSize(width, height);
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
@@ -74,6 +94,7 @@ export function createViewer(host: HTMLElement, initial: ProjectState, onSelect:
   let frame = 0, contextLost = false, disposed = false, renderUnavailable = false;
   host.dataset.ready = 'false';
   function reportRenderError(cause: unknown) {
+    visual.invalidate();
     cancelAnimationFrame(frame); renderUnavailable = true; host.dataset.ready = 'false';
     host.dataset.renderError = String(cause); onRenderError?.(cause);
   }
@@ -92,7 +113,7 @@ export function createViewer(host: HTMLElement, initial: ProjectState, onSelect:
   function animate() {
     if (disposed || contextLost) return;
     frame = requestAnimationFrame(animate);
-    controls.update();
+    updateStableOrbitControls(camera, controls);
     try {
       renderer.render(scene, camera); host.dataset.ready = 'true';
       if (renderUnavailable) { renderUnavailable = false; delete host.dataset.renderError; onRenderRecovered?.(); }
@@ -119,21 +140,34 @@ export function createViewer(host: HTMLElement, initial: ProjectState, onSelect:
   }
   animate();
   return {
+    capture: () => {
+      // Finish residual damping before freezing the view; it otherwise moves after the click.
+      const damping = controls.enableDamping;
+      controls.enableDamping = false; controls.update(); controls.enableDamping = damping;
+      return visual.capture();
+    },
+    isCaptureCurrent: (id: string) => visual.isCurrent(id),
+    resolvePixel: (id: string, x: number, y: number) => visual.resolvePixel(id, x, y),
     updateSelection(next: ProjectState) {
-      state = next;
+      visual.invalidate(); state = next;
       objects.forEach(object => highlight(object, object.userData.entityId === next.selectedEntityId));
     },
     updateOverlays(points: readonly ScenePointReference[], proposal?: BoxProposal) {
-      clearOverlays();
+      visual.invalidate(); clearOverlays();
       for (const point of points) {
-        const marker = new THREE.Mesh(new THREE.SphereGeometry(0.09, 12, 8), new THREE.MeshBasicMaterial({ color: point.name === 'A' ? 0xffc766 : 0xff77dd, depthTest: false }));
+        const marker = new THREE.Mesh(new THREE.SphereGeometry(0.09, 12, 8), new THREE.MeshBasicMaterial({ color: 0xffc766, depthTest: false }));
         marker.position.set(...point.position); marker.userData.pointName = point.name; marker.renderOrder = 10; overlays.add(marker);
-        const canvas = document.createElement('canvas'); canvas.width = 64; canvas.height = 64;
+        const canvas = document.createElement('canvas'), number = point.name.slice('Point '.length);
         const context = canvas.getContext('2d');
         if (context) {
-          context.fillStyle = point.name === 'A' ? '#ffc766' : '#ff77dd'; context.font = 'bold 48px sans-serif'; context.textAlign = 'center'; context.fillText(point.name, 32, 50);
+          // Size from measured text so even large monotonic point numbers cannot clip.
+          context.font = 'bold 48px sans-serif';
+          canvas.width = Math.ceil(context.measureText(number).width) + 24; canvas.height = 72;
+          context.fillStyle = '#ffc766'; context.font = 'bold 48px sans-serif'; context.textAlign = 'center'; context.textBaseline = 'middle';
+          context.fillText(number, canvas.width / 2, canvas.height / 2);
           const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false }));
-          label.position.set(point.position[0], point.position[1], point.position[2] + 0.3); label.scale.set(0.4, 0.4, 1); label.renderOrder = 11; overlays.add(label);
+          label.position.set(point.position[0], point.position[1], point.position[2] + 0.3);
+          label.scale.set(0.45 * canvas.width / canvas.height, 0.45, 1); label.renderOrder = 11; overlays.add(label);
         }
       }
       if (proposal) {
@@ -143,6 +177,7 @@ export function createViewer(host: HTMLElement, initial: ProjectState, onSelect:
       }
     },
     dispose() {
+      visual.dispose(); controls.removeEventListener('change', viewChanged);
       disposed = true; host.dataset.ready = 'false';
       cancelAnimationFrame(frame); clearOverlays();
       resize.disconnect();

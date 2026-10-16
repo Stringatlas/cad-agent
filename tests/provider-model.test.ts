@@ -5,6 +5,7 @@ import { ProviderModel, ModelError, type ModelAuth, type ModelTransport, type Bo
 import { ProviderAuth, type ProviderCredential } from '../apps/server/src/provider-auth';
 import { MODEL_CHAT_LIMITS as L, type ModelChatEvent, type ModelTurnRequest } from '@spatial/contracts';
 
+const legacyKinds = (events: ModelChatEvent[]) => events.filter(e => e.kind !== 'request-inspection' && e.kind !== 'request-phase').map(e => e.kind);
 const signal = () => new AbortController().signal;
 class FakeAuth implements ModelAuth {
   generation = 'fake-generation'; listeners = new Set<() => void>();
@@ -42,7 +43,7 @@ function fixture(mode: 'api-key' | 'chatgpt' = 'api-key', now = Date.now) {
   return { auth, model, requests, queue, call };
 }
 async function turn(f: ReturnType<typeof fixture>, call = f.call(), scene = bound) {
-  const events: ModelChatEvent[] = []; await f.model.turn(call, scene, async e => { events.push(e); }, signal()); return events;
+  const events: ModelChatEvent[] = []; await f.model.turn(call, scene, async e => { events.push(e); }, signal()); return events.filter(e => e.kind !== 'request-inspection' && e.kind !== 'request-phase');
 }
 const code = (name: string) => (e: unknown) => e instanceof ModelError && e.code === name;
 
@@ -51,7 +52,7 @@ test('backpressure awaits downstream delta publication before tool continuation 
   f.queue.push(sse(complete([{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Before tool' }] }, { type: 'function_call', namespace: 'scene', name: 'inspect_scene', call_id: 'call_backpressure', arguments: '{}' }])), sse(complete()));
   let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; }); const emitted: ModelChatEvent[] = [];
   const pending = f.model.turn(f.call(), bound, async e => { emitted.push(e); if (e.kind === 'delta') await gate; }, signal());
-  await tick(); assert.equal(f.requests.length, 2); assert.deepEqual(emitted.map(e => e.kind), ['start', 'delta']);
+  await tick(); assert.equal(f.requests.length, 2); assert.deepEqual(legacyKinds(emitted), ['start', 'delta']);
   await assert.rejects(f.model.models(signal()), code('busy'));
   release(); await pending; assert.equal(f.requests.length, 3); assert.equal(emitted.at(-1)?.kind, 'done'); f.model.close();
 });
@@ -251,7 +252,7 @@ test('completion is not published or committed until SSE EOF', async () => {
   const f = fixture(); await f.model.models(signal()); let upstream!: ReadableStreamDefaultController<Uint8Array>;
   f.queue.push(new Response(new ReadableStream({ start(c) { upstream = c; c.enqueue(new TextEncoder().encode(complete())); } }), { headers: { 'content-type': 'text/event-stream' } }));
   const events: ModelChatEvent[] = []; const pending = f.model.turn(f.call(), bound, async e => { events.push(e); }, signal());
-  await tick(); assert.deepEqual(events.map(e => e.kind), ['start', 'delta']); upstream.close(); await pending;
+  await tick(); assert.deepEqual(legacyKinds(events), ['start', 'delta']); upstream.close(); await pending;
   assert.equal(events.at(-1)?.kind, 'done'); f.model.close();
 });
 test('caller abort while credentials await prevents any delayed model request', async () => {
@@ -438,7 +439,7 @@ for (const mode of ['api-key', 'chatgpt'] as const) test(`${mode}: non-SSE heade
     const events: ModelChatEvent[] = [], before = warnings.mock.calls.length;
     await assert.rejects(f.model.turn(f.call({ conversationId, text: secret }), bound, async e => { events.push(e); }, signal()), code(`provider-format-${format}`));
     assert.equal(pulls, 16); assert.equal(cancelled, 1); assert.equal(f.requests.length, 3);
-    assert.deepEqual(events.map(e => e.kind), ['start']);
+    assert.deepEqual(legacyKinds(events), ['start']);
     assert.deepEqual(warnings.mock.calls.slice(before).map(c => c.arguments), [[
       `[model-provider] ${JSON.stringify({ operation: 'responses', check: 'content-type', httpStatus: 200, responseFormat: format })}`,
     ]]);
@@ -524,7 +525,7 @@ test('empty terminal tool snapshots wait for EOF before dispatch and retain comp
   const pending = f.model.turn(f.call(), bound, async e => { events.push(e); }, signal());
   await tick(); assert.equal(f.requests.length, 2); assert.equal(events.some(e => e.kind === 'tool' || e.kind === 'done'), false);
   upstream.close(); await pending;
-  assert.deepEqual(events.map(e => e.kind), ['start', 'tool', 'delta', 'done']);
+  assert.deepEqual(legacyKinds(events), ['start', 'tool', 'delta', 'done']);
   assert.deepEqual((f.requests[2].body!.input as unknown[])[2], tool); f.model.close();
 });
 

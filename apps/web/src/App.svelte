@@ -6,13 +6,42 @@
   import Chat from './Chat.svelte';
   import ProviderAccount from './ProviderAccount.svelte';
   import { ProjectController, type ProjectView } from './project-client';
-  import type { PointName, TorontoDraftPoint } from './draft-context';
+  import { createPointSequence, replaceDraftPoint, type TorontoDraftPoint } from './draft-context';
+  import type { ScenePointReference, PointOverrideSnapshot, PointMoveProposal } from '@spatial/contracts';
+  import { verifiedNearestSelection } from './point-override-client';
+  let pointOverrides = $state<PointOverrideSnapshot>();
+  let pointPreview = $state<PointMoveProposal>();
+  let torontoRevision = $state<string>();
+  let sourceGeneration = 0;
+  async function selectVerified(context: unknown) {
+    const generation = sourceGeneration, binding = JSON.stringify(points);
+    try {
+      const result = await verifiedNearestSelection(context, points);
+      if (generation !== sourceGeneration || binding !== JSON.stringify(points) || result.point.artifactRevision !== torontoRevision) throw new Error('Result context changed; select a fresh result.');
+      if (mode !== 'toronto') switchSource('toronto');
+      pinToronto({ ...result.point, name: pointSequence.allocate() });
+    } catch (error) { pointStatus = String(error); }
+  }
+  function addQueryPoint(point: Omit<TorontoDraftPoint, 'name'>) {
+    if (mode !== 'toronto' || point.artifactRevision !== torontoRevision) { pointStatus = 'Stale query result; select a fresh source.'; return; }
+    pinToronto({ ...point, name: pointSequence.allocate() });
+  }
+  import type { VisualModelSource } from './visual-model-source';
+  let visualSource = $state<VisualModelSource>();
   let mode = $state<'demo' | 'toronto' | 'pole'>('toronto');
   let points = $state<readonly TorontoDraftPoint[]>([]);
-  let pinName = $state<PointName>('A');
+  const pointSequence = createPointSequence();
+  let pointStatus = $state('');
+  function pinToronto(point: TorontoDraftPoint) {
+    try { points = replaceDraftPoint(points, point); pointStatus = ''; }
+    catch (error) { pointStatus = (error as Error).message; }
+  }
+  function pinSynthetic(point: Omit<ScenePointReference, 'name'>) {
+    controller.pin({ ...point, name: pointSequence.allocate() });
+  }
   let view = $state<ProjectView>({ selectedId: null, points: [], needsRefresh: false, status: 'Loading authoritative project…', undoAvailable: false });
   const controller = new ProjectController(value => view = value);
-  function switchSource(next: typeof mode) { if (mode !== next) points = []; mode = next; }
+  function switchSource(next: typeof mode) { if (mode !== next) { sourceGeneration++; points = []; pointStatus = ''; visualSource = undefined; pointOverrides = undefined; pointPreview = undefined; torontoRevision = undefined; } mode = next; }
   onMount(() => { void controller.refresh(); return () => controller.dispose(); });
 </script>
 
@@ -29,14 +58,14 @@
 <div id="workspace" class="integrated-workspace" data-testid="shared-workspace">
   <div class="scene-source">
     {#if mode === 'toronto'}
-      <Toronto {points} {pinName} onpinname={name => pinName = name} onpoints={value => points = value} />
+      <Toronto {pointOverrides} {pointPreview} onrevision={value => { if (torontoRevision && torontoRevision !== value) { sourceGeneration++; pointOverrides = undefined; pointPreview = undefined; points = []; } torontoRevision = value; }} onvisualsource={value => visualSource = value} {points} allocatePointName={() => pointSequence.allocate()} onpoint={pinToronto} onpoints={value => { points = value; pointStatus = ''; }} />
     {:else if mode === 'demo'}
       {#if view.snapshot}
-        {#key view.snapshot}<Demo snapshot={view.snapshot} selectedId={view.selectedId} points={view.points} proposal={view.proposal} onselect={id => controller.select(id)} onpin={point => controller.pin(point)} onclearpoints={() => controller.clearPoints()} />{/key}
+        {#key view.snapshot}<Demo onvisualsource={value => visualSource = value} snapshot={view.snapshot} selectedId={view.selectedId} points={view.points} proposal={view.proposal} onselect={id => controller.select(id)} onpin={pinSynthetic} onremovepoint={name => controller.removePoint(name)} onclearpoints={() => controller.clearPoints()} />{/key}
       {:else}<section class="unavailable" role="status">Synthetic project unavailable. Open project controls below to refresh; no local fallback.</section>{/if}
     {:else}<ClosestPole />{/if}
   </div>
-  <Chat snapshot={view.snapshot} {view} {controller} sceneMode={mode} {points} {pinName} onpinname={name => pinName = name} onclearpoint={name => points = points.filter(point => point.name !== name)} />
+  <Chat artifactRevision={torontoRevision} {pointOverrides} onverifiedresult={selectVerified} onquerypoint={addQueryPoint} onpointstate={(snapshot, proposal) => { pointOverrides = snapshot; pointPreview = proposal; }} {visualSource} snapshot={view.snapshot} {view} {controller} sceneMode={mode} {points} {pointStatus} onclearpoint={name => { if (mode === 'demo') controller.removePoint(name); else { points = points.filter(point => point.name !== name); pointStatus = ''; } }} />
 </div>
 <details class="project-controls" data-testid="project-controls">
   <summary>Project &amp; persistence <span>Separate synthetic authority · explicit Save / Load</span></summary>

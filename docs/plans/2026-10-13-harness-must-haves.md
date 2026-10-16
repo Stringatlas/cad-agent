@@ -1,6 +1,6 @@
 # Product harness: must-have roadmap
 
-Status: **User approved all seven proposals as roadmap TODOs. Item1 assigned via [task011](../tasks/011-tool-protocol-evidence.md); user also authorized the first shared-project chat-shell steps and agent handoff. The later task013 sandbox and tasks014/015 local authority/approved box path are now implemented and independently reviewed; task019 subsequently implements a separately authorized read-only provider-chat slice. Item2 visual inputs, item3 evaluation, broader item4 orchestration and project-integrated item7 remain queued.**
+Status: **User approved all seven proposals as roadmap TODOs. Item1 assigned via [task011](../tasks/011-tool-protocol-evidence.md); user also authorized the first shared-project chat-shell steps and agent handoff. The later task013 sandbox and tasks014/015 local authority/approved box path are now implemented and independently reviewed; task019 subsequently implements a separately authorized read-only provider-chat slice. Task027 implements local fixed-view item2 observations and task028 adds opt-in model image/pixel grounding; item3 evaluation, broader item4 orchestration and project-integrated item7 remain queued.**
 
 Discoverable queue: [project TODOs](../TODO.md). Approval of this roadmap is not approval of earlier implementations or a completed fresh-session review.
 
@@ -45,6 +45,8 @@ Source basis: [architecture](../architecture.md), [task index](../tasks/README.m
 **Dependencies:** existing observation and query adapters. This is independently useful before model selection.
 
 ### 2. Reproducible visual observations and spatial grounding
+
+Checkpoint: [task027](../tasks/027-visual-observations.md) implements the local fixed-view adapter, original-provenance pixel resolution and scene capture UI. Final569/569 baseline,110 isolated browser checks and independent corrective review pass. Task027's observation panel remains local-only. [Task028](../tasks/028-model-visual-grounding.md) subsequently adds explicit screenshot attachments and the read-only pixel tool, with595/595 baseline,64 fixture browser checks and independent incremental review. Evaluation remains separate. Whole-checkout fresh-session review is still pending. Original acceptance below describes the capability; no autonomous navigation or segmentation was added.
 
 **Purpose:** give a VLM actual images plus enough metadata to interpret them safely.
 

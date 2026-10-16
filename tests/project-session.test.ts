@@ -68,14 +68,14 @@ test('corrupt/missing/oversized/symlink snapshots and stale cross-instance write
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('A/B context resolves exact original point indices and project IDs; selections never change geometry', () => {
+test('Numbered point context resolves exact original point indices and project IDs; selections never change geometry', () => {
   const root = directory();
   try {
     const s = new ProjectSession(join(root, 'project.json')), before = s.snapshot();
     const cloud = before.project.entities.find(e => e.kind === 'point-cloud')!; assert.equal(cloud.kind, 'point-cloud'); if (cloud.kind !== 'point-cloud') throw new Error('fixture');
     const call = { ...s.binding(), entityIds: ['proposal-box', cloud.id], points: [
-      { name: 'A', entityId: cloud.id, pointIndex: 0, position: cloud.points[0] },
-      { name: 'B', entityId: cloud.id, pointIndex: 440, position: cloud.points[440] },
+      { name: 'Point 1', entityId: cloud.id, pointIndex: 0, position: cloud.points[0] },
+      { name: 'Point 2', entityId: cloud.id, pointIndex: 440, position: cloud.points[440] },
     ] };
     const result = s.context(call); assert.equal(result.points[0].position, cloud.points[0]);
     assert.equal(result.units, 'm'); assert.equal(result.source, 'synthetic-project'); assert.deepEqual(result.coordinates, before.project.coordinates);

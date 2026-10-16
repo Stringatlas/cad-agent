@@ -34,7 +34,7 @@ async function fixture(t: { after(fn: () => unknown): void }, transport?: typeof
   const post = (body: unknown, headers: Record<string, string> = {}) => fetch(base + '/chat/turn', { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
   return { root, server, base, catalog, requests, post };
 }
-async function events(response: Response): Promise<ModelChatEvent[]> { assert.equal(response.status, 200); assert.match(response.headers.get('content-type') ?? '', /application\/x-ndjson/u); return (await response.text()).trim().split('\n').map(line => canonicalModelChatEvent(JSON.parse(line))); }
+async function events(response: Response): Promise<ModelChatEvent[]> { assert.equal(response.status, 200); assert.match(response.headers.get('content-type') ?? '', /application\/x-ndjson/u); return (await response.text()).trim().split('\n').map(line => canonicalModelChatEvent(JSON.parse(line))).filter(e => e.kind !== 'request-inspection' && e.kind !== 'request-phase'); }
 
 test('HTTP route propagates wrong-format and missing-MIME invalid-stream errors without provider details or retry', async t => {
   const warnings = t.mock.method(console, 'warn', () => {});
@@ -77,7 +77,7 @@ test('HTTP route completes missing-MIME finalized items with empty terminal outp
 
 test('canonical contract rejects extra fields/client history, frame mixing, duplicate names, wrong units and bounds', () => {
   assert.deepEqual(canonicalModelTurnRequest(call()), call());
-  const point = { name: 'A', datasetId: 'toronto3d', artifactRevision: 'a'.repeat(64), key: { sourceFileId: 1, sourceRow: 0 }, position: [0, 0, 120], frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] };
+  const point = { name: 'Point 1', datasetId: 'toronto3d', artifactRevision: 'a'.repeat(64), key: { sourceFileId: 1, sourceRow: 0 }, position: [0, 0, 120], frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] };
   for (const value of [{ ...call(), history: [] }, { ...call(), model: 'model?key=secret' }, { ...call(), text: 'x'.repeat(L.textChars + 1) }, { ...call(), text: ' ' }, { ...call(), generation: '' }]) assert.throws(() => canonicalModelTurnRequest(value));
   const scene = { mode: 'toronto', project: null, toronto: [point] };
   assert.deepEqual(canonicalModelScene(scene), scene);
@@ -104,11 +104,11 @@ test('non-demo empty authoritative revision bindings are retained, hidden select
   const project = { sessionId: 'session', projectRevision: 3, frameId: 'demo-local-v1', units: 'm', entityIds: [], points: [] };
   for (const mode of ['toronto', 'pole']) {
     assert.deepEqual(canonicalModelScene({ mode, project, toronto: [] }), { mode, project, toronto: [] });
-    for (const hidden of [{ ...project, entityIds: ['proposal-box'] }, { ...project, points: [{ name: 'A', entityId: 'cloud', pointIndex: 0, position: [0, 0, 0] }] }]) {
+    for (const hidden of [{ ...project, entityIds: ['proposal-box'] }, { ...project, points: [{ name: 'Point 1', entityId: 'cloud', pointIndex: 0, position: [0, 0, 0] }] }]) {
       assert.throws(() => canonicalModelScene({ mode, project: hidden, toronto: [] }), TypeError);
     }
   }
-  const point = { name: 'A', datasetId: 'toronto3d', artifactRevision: 'a'.repeat(64), key: { sourceFileId: 1, sourceRow: 0 }, position: [0, 0, 120], frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] };
+  const point = { name: 'Point 1', datasetId: 'toronto3d', artifactRevision: 'a'.repeat(64), key: { sourceFileId: 1, sourceRow: 0 }, position: [0, 0, 120], frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] };
   assert.throws(() => canonicalModelScene({ mode: 'pole', project, toronto: [point] }), TypeError);
 });
 test('HTTP rejects coercible scene modes before provider inference', async t => {
@@ -151,7 +151,7 @@ test('HTTP admission denies foreign origins/hosts, methods/query, body bounds/sc
 test('synthetic context requires exact authoritative point/ID/revision and includes selected box parameters', async t => {
   const f = await fixture(t); const info = await (await fetch(f.base + '/project/session')).json(); const snapshot = info.result.snapshot;
   const cloud = snapshot.project.entities.find((e: { kind: string }) => e.kind === 'point-cloud');
-  const project = { sessionId: snapshot.sessionId, projectRevision: snapshot.project.revision, frameId: snapshot.frameId, units: 'm', entityIds: ['proposal-box'], points: [{ name: 'A', entityId: cloud.id, pointIndex: 0, position: cloud.points[0] }] };
+  const project = { sessionId: snapshot.sessionId, projectRevision: snapshot.project.revision, frameId: snapshot.frameId, units: 'm', entityIds: ['proposal-box'], points: [{ name: 'Point 1', entityId: cloud.id, pointIndex: 0, position: cloud.points[0] }] };
   const request = { ...call(f.catalog.generation), scene: { mode: 'demo', project, toronto: [] } };
   await events(await f.post(request));
   const input = f.requests[0].input as { role: string; content: string }[];
@@ -216,7 +216,7 @@ async function datasetFixture(t: { after(fn: () => unknown): void }) {
 }
 test('Toronto attachments revision-check original source metadata, stay unmapped and never claim exact record verification', async t => {
   const root = await datasetFixture(t); const info = await new PotreeDataset(root).info(); const authority = new ProjectSession(join(root, 'project.json'));
-  const scene: ModelScene = { mode: 'toronto', project: null, toronto: [{ name: 'A', datasetId: 'toronto3d', artifactRevision: info.revision, key: { sourceFileId: 1, sourceRow: 0 }, position: [1, 2, 120], frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] }] };
+  const scene: ModelScene = { mode: 'toronto', project: null, toronto: [{ name: 'Point 1', datasetId: 'toronto3d', artifactRevision: info.revision, key: { sourceFileId: 1, sourceRow: 0 }, position: [1, 2, 120], frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] }] };
   const result = await bindModelScene(scene, authority, root, freshSignal());
   const context = result.context as { project: null; toronto: { position: unknown; recordValidation: string; mapping: string }[] };
   assert.equal(context.project, null); assert.equal(context.toronto[0].recordValidation, 'unverified'); assert.equal(context.toronto[0].mapping, 'unmapped-to-project'); assert.deepEqual(context.toronto[0].position, [1, 2, 120], 'user attachment retained without pretending actual original [0,0,120] was validated');

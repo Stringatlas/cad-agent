@@ -3,7 +3,7 @@ import test from 'node:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { PROJECT_LIMITS, type BoxEdit } from '@spatial/contracts';
+import { PROJECT_LIMITS, SCENE_POINT_LIMIT, type ScenePointName, type BoxEdit } from '@spatial/contracts';
 import { ProjectSession } from '../apps/server/src/project-session';
 import { ProjectController, ProjectRejection, projectBinding, projectTransport, validateSession, validateProposal,
   validateCommit, validateContext, type ProjectTransport, type ProjectView } from '../apps/web/src/project-client';
@@ -28,17 +28,88 @@ function fixture(wrap?: (transport: ProjectTransport) => ProjectTransport) {
 }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => resolve = r); return { promise, resolve }; }
 
-test('scene A/B/entity context is original bound provenance and never a geometry mutation', async () => {
+test('numbered scene points/entity context is original bound provenance and never a geometry mutation', async () => {
   const f = fixture(); try {
     await f.client.refresh(); const original = f.authority.snapshot(), cloud = original.project.entities.find(e => e.kind === 'point-cloud')!;
     assert.equal(cloud.kind, 'point-cloud'); if (cloud.kind !== 'point-cloud') throw new Error('fixture');
     f.client.select('proposal-box');
-    f.client.pin({ name: 'A', entityId: cloud.id, pointIndex: 17, position: cloud.points[17]! });
-    f.client.pin({ name: 'B', entityId: cloud.id, pointIndex: 42, position: cloud.points[42]! });
-    f.client.pin({ name: 'A', entityId: cloud.id, pointIndex: 0, position: [99, 99, 99] });
+    f.client.pin({ name: 'Point 1', entityId: cloud.id, pointIndex: 17, position: cloud.points[17]! });
+    f.client.pin({ name: 'Point 2', entityId: cloud.id, pointIndex: 42, position: cloud.points[42]! });
+    f.client.pin({ name: 'Point 3', entityId: cloud.id, pointIndex: 0, position: [99, 99, 99] });
     await f.client.context(); assert.equal(f.client.view.context!.points[0]!.pointIndex, 17);
     assert.deepEqual(f.client.view.context!.entityIds, ['proposal-box']); assert.deepEqual(f.authority.snapshot(), original);
     f.client.select(null); assert.equal(f.client.view.context, undefined);
+  } finally { f.dispose(); }
+});
+
+test('numbered pins append, reject duplicate names and explicitly bound the collection without replacing provenance', async () => {
+  const f = fixture(); try {
+    await f.client.refresh(); const snapshot = f.authority.snapshot(), cloud = snapshot.project.entities.find(e => e.kind === 'point-cloud')!;
+    if (cloud.kind !== 'point-cloud') throw new Error('fixture');
+    const pin = (number: number, index = number) => ({ name: `Point ${number}` as ScenePointName,
+      entityId: cloud.id, pointIndex: index, position: cloud.points[index]! });
+    assert.equal(f.client.pin(pin(1)), true);
+    assert.equal(f.client.pin(pin(1, 42)), false);
+    assert.equal(f.client.view.points[0]!.pointIndex, 1); assert.match(f.client.view.status, /already exists/);
+    assert.equal(f.client.pin({ ...pin(2), name: 'Point 01' as ScenePointName }), false);
+    for (let number = 2; number <= SCENE_POINT_LIMIT; number++) assert.equal(f.client.pin(pin(number)), true);
+    const full = f.client.view.points;
+    assert.equal(f.client.pin(pin(33)), false); assert.match(f.client.view.status, /Point limit reached \(32\)/);
+    assert.deepEqual(f.client.view.points, full);
+    await f.client.context(); assert.equal(f.client.view.context!.points.length, SCENE_POINT_LIMIT);
+    assert.equal(f.client.removePoint('Point 2'), true);
+    assert.equal(f.client.view.context, undefined);
+    assert.equal(f.client.view.points.length, 31); assert.equal(f.client.view.points[1]!.name, 'Point 3');
+    assert.equal(f.client.pin(pin(33)), true);
+    assert.equal(f.client.view.points.at(-1)!.name, 'Point 33');
+    await f.client.propose(edit); assert.ok(f.client.view.proposal);
+    assert.equal(f.client.removePoint('Point 1'), true); assert.equal(f.client.view.proposal, undefined);
+    assert.equal(f.client.removePoint('Point 100'), false);
+    assert.deepEqual(f.authority.snapshot(), snapshot);
+  } finally { f.dispose(); }
+});
+
+test('individual point removal aborts pending context/proposal reads and suppresses noncooperative late replies', async () => {
+  for (const endpoint of ['/project/context', '/project/proposals']) {
+    const gate = deferred<unknown>(), received = deferred<void>(); let delayed: unknown, signal: AbortSignal | undefined;
+    const f = fixture(transport => async (path, body, requestSignal) => {
+      const result = await transport(path, body, requestSignal);
+      if (path === endpoint) { delayed = result; signal = requestSignal; received.resolve(); return gate.promise; }
+      return result;
+    });
+    try {
+      await f.client.refresh(); const cloud = f.authority.snapshot().project.entities.find(e => e.kind === 'point-cloud')!;
+      if (cloud.kind !== 'point-cloud') throw new Error('fixture');
+      f.client.pin({ name: 'Point 1', entityId: cloud.id, pointIndex: 17, position: cloud.points[17]! });
+      f.client.pin({ name: 'Point 2', entityId: cloud.id, pointIndex: 42, position: cloud.points[42]! });
+      const pending = endpoint === '/project/context' ? f.client.context() : f.client.propose(edit); await received.promise;
+      assert.equal(f.client.removePoint('Point 1'), true); assert.equal(signal!.aborted, true);
+      assert.deepEqual(f.client.view.points.map(p => p.name), ['Point 2']);
+      assert.equal(f.client.view.pending, undefined); assert.equal(f.client.view.context, undefined); assert.equal(f.client.view.proposal, undefined);
+      const count = f.states.length; gate.resolve(delayed); await pending;
+      assert.equal(f.states.length, count); assert.equal(f.client.view.needsRefresh, false);
+    } finally { f.dispose(); }
+  }
+});
+
+test('point append/removal/clear are disabled during an authoritative mutation', async () => {
+  const gate = deferred<unknown>(), received = deferred<void>(); let delayed: unknown, signal: AbortSignal | undefined;
+  const f = fixture(transport => async (path, body, requestSignal) => {
+    const result = await transport(path, body, requestSignal);
+    if (path === '/project/save') { delayed = result; signal = requestSignal; received.resolve(); return gate.promise; }
+    return result;
+  });
+  try {
+    await f.client.refresh(); const cloud = f.authority.snapshot().project.entities.find(e => e.kind === 'point-cloud')!;
+    if (cloud.kind !== 'point-cloud') throw new Error('fixture');
+    const point = { name: 'Point 1' as const, entityId: cloud.id, pointIndex: 17, position: cloud.points[17]! };
+    assert.equal(f.client.pin(point), true); const pending = f.client.save(); await received.promise;
+    const before = f.client.view;
+    assert.equal(f.client.pin({ ...point, name: 'Point 2' }), false);
+    assert.equal(f.client.removePoint('Point 1'), false); f.client.clearPoints();
+    assert.deepEqual(f.client.view, before); assert.equal(signal!.aborted, false);
+    gate.resolve(delayed); await pending; assert.equal(f.client.view.needsRefresh, false);
+    assert.equal(f.client.removePoint('Point 1'), true);
   } finally { f.dispose(); }
 });
 

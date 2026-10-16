@@ -8,8 +8,18 @@ export const PROJECT_LIMITS = Object.freeze({ requestBytes: 16 * 1024, snapshotB
 export interface ProjectBinding {
   readonly sessionId: string; readonly projectRevision: number; readonly frameId: typeof PROJECT_FRAME_ID; readonly units: 'm';
 }
+/** Retained point references per active scene; names are not reused after removal. */
+export const SCENE_POINT_LIMIT = 32;
+export type ScenePointName = `Point ${number}`;
+/** Exact positive safe-integer decimal spelling, without leading zeros. */
+export function canonicalScenePointName(value: unknown): ScenePointName {
+  if (typeof value !== 'string' || !/^Point [1-9][0-9]{0,15}$/u.test(value) || !Number.isSafeInteger(Number(value.slice(6)))) {
+    throw new TypeError('Expected Point followed by a positive safe integer');
+  }
+  return value as ScenePointName;
+}
 export interface ScenePointReference {
-  readonly name: 'A' | 'B'; readonly entityId: string; readonly pointIndex: number; readonly position: Vec3;
+  readonly name: ScenePointName; readonly entityId: string; readonly pointIndex: number; readonly position: Vec3;
 }
 export interface SceneContextRequest extends ProjectBinding {
   readonly entityIds: readonly string[]; readonly points: readonly ScenePointReference[];
@@ -76,14 +86,14 @@ export function canonicalProjectUndoRequest(value: unknown): ProjectUndoRequest 
 }
 export function canonicalSceneContextRequest(value: unknown): SceneContextRequest {
   const r = protocolRecord(value); protocolKeys(r, [...BINDING_KEYS, 'entityIds', 'points']);
-  if (!Array.isArray(r.entityIds) || r.entityIds.length > PROJECT_LIMITS.maxReferences || !Array.isArray(r.points) || r.points.length > 2) throw new TypeError('Bounded explicit selections required');
+  if (!Array.isArray(r.entityIds) || r.entityIds.length > PROJECT_LIMITS.maxReferences || !Array.isArray(r.points) || r.points.length > SCENE_POINT_LIMIT) throw new TypeError('Bounded explicit selections required');
   const entityIds = r.entityIds.map(id => { protocolToken(id); return id; });
   if (new Set(entityIds).size !== entityIds.length) throw new TypeError('Duplicate entity selection');
   const points: ScenePointReference[] = r.points.map(value => {
     const p = protocolRecord(value); protocolKeys(p, ['name', 'entityId', 'pointIndex', 'position']);
-    if (p.name !== 'A' && p.name !== 'B') throw new TypeError('Expected named A/B point');
+    const name = canonicalScenePointName(p.name);
     protocolToken(p.entityId); protocolInteger(p.pointIndex, PROJECT_LIMITS.maxPoints - 1); assertVec3(p.position);
-    return { name: p.name, entityId: p.entityId, pointIndex: p.pointIndex, position: [...p.position] as Vec3 };
+    return { name, entityId: p.entityId, pointIndex: p.pointIndex, position: [...p.position] as Vec3 };
   });
   if (new Set(points.map(p => p.name)).size !== points.length) throw new TypeError('Duplicate point name');
   return { ...binding(r), entityIds, points };

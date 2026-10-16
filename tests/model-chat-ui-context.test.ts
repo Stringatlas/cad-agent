@@ -8,9 +8,9 @@ import type { TorontoDraftPoint } from '../apps/web/src/draft-context';
 
 const snapshot: ProjectSnapshot = { sessionId: 'scene-session', frameId: PROJECT_FRAME_ID, project: createDemoProject() };
 const cloud = snapshot.project.entities.find(e => e.kind === 'point-cloud')!;
-const pin: ScenePointReference = { name: 'A', entityId: cloud.id, pointIndex: 0, position: cloud.points[0]! };
+const pin: ScenePointReference = { name: 'Point 1', entityId: cloud.id, pointIndex: 0, position: cloud.points[0]! };
 const view = { selectedId: 'proposal-box', points: [pin], needsRefresh: false };
-const toronto: TorontoDraftPoint = { name: 'B', datasetId: 'toronto3d', artifactRevision: 'a'.repeat(64), key: { sourceFileId: 1, sourceRow: 123 },
+const toronto: TorontoDraftPoint = { name: 'Point 2', datasetId: 'toronto3d', artifactRevision: 'a'.repeat(64), key: { sourceFileId: 1, sourceRow: 123 },
   position: [1.2345678912345, 2.3456789123456, 3.4567891234567], frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] };
 
 test('demo model context carries exact current snapshot selection and original synthetic points only', () => {
@@ -26,6 +26,24 @@ test('Toronto includes only explicit original dataset references plus empty-sele
     frameId: snapshot.frameId, units: 'm', entityIds: [], points: [] });
   assert.equal(result.toronto[0]!.position[0], toronto.position[0]); assert.equal(result.toronto[0]!.key.sourceRow, 123);
   assert.ok(!JSON.stringify(result).includes(cloud.id)); assert.ok(!JSON.stringify(result).includes('proposal-box'));
+});
+
+test('active scene retains more than two precise references and removals are reflected without leaking inactive references', () => {
+  const synthetic = Array.from({ length: 4 }, (_, index): ScenePointReference => ({ ...pin, name: `Point ${index + 3}` }));
+  const originals = Array.from({ length: 4 }, (_, index): TorontoDraftPoint => ({ ...toronto, name: `Point ${index + 7}` }));
+  const fullView = { ...view, points: synthetic };
+  const demo = modelScene('demo', snapshot, fullView, originals);
+  assert.deepEqual(demo.project!.points, synthetic); assert.deepEqual(demo.toronto, []);
+  const dataset = modelScene('toronto', snapshot, fullView, originals);
+  assert.deepEqual(dataset.toronto, originals); assert.deepEqual(dataset.project!.points, []);
+  assert.deepEqual(dataset.project!.entityIds, []);
+  assert.equal(dataset.toronto[3]!.position[0], 1.2345678912345);
+  assert.notEqual(dataset.toronto[3]!.position[0], Math.fround(dataset.toronto[3]!.position[0]));
+  const remainingSynthetic = synthetic.filter(point => point.name !== 'Point 4');
+  const remainingToronto = originals.filter(point => point.name !== 'Point 8');
+  assert.deepEqual(modelScene('demo', snapshot, { ...fullView, points: remainingSynthetic }, originals).project!.points, remainingSynthetic);
+  assert.deepEqual(modelScene('toronto', snapshot, fullView, remainingToronto).toronto, remainingToronto);
+  assert.equal(demo.project!.points.length, 4); assert.equal(dataset.toronto.length, 4);
 });
 
 test('closest-label mode has no hidden Toronto or synthetic refs', () => {
@@ -50,15 +68,26 @@ test('scene/selection/session/revision/provenance changes retain display history
       { kind: 'delta', requestId: r.requestId, text: 'Complete' }, { kind: 'done', requestId: r.requestId, conversationId: 'fixture-conversation' },
     ].map(e => JSON.stringify(e) + '\n').join(''), { headers: { 'Content-Type': 'application/x-ndjson' } }); })());
   client.bind(modelScene('demo', snapshot, view, [])); await client.refreshModels(); client.selectModel('fixture-model');
-  const alternatives = [modelScene('demo', snapshot, { ...view, selectedId: null }, []),
+  const extraPins: ScenePointReference[] = [pin, { ...pin, name: 'Point 3' }, { ...pin, name: 'Point 4' }];
+  const alternatives = [modelScene('demo', snapshot, { ...view, points: extraPins }, []),
+    modelScene('demo', snapshot, { ...view, points: extraPins.filter(point => point.name !== 'Point 3') }, []),
+    modelScene('demo', snapshot, { ...view, selectedId: null }, []),
     modelScene('demo', { ...snapshot, sessionId: 'new-session' }, view, []),
     modelScene('demo', { ...snapshot, project: { ...snapshot.project, revision: snapshot.project.revision + 1 } }, view, []),
     modelScene('demo', snapshot, { ...view, points: [] }, []),
     modelScene('toronto', undefined, view, [toronto]),
     modelScene('toronto', undefined, view, [{ ...toronto, artifactRevision: 'b'.repeat(64) }])];
   try {
+    let turns = 0;
     for (const [index, next] of alternatives.entries()) {
-      await client.send('hello'); assert.equal(handles.at(-1), null); assert.equal(client.view.messages.length, (index + 1) * 2);
+      await client.send('hello'); turns++;
+      assert.equal(handles.at(-1), null); assert.equal(client.view.messages.length, turns * 2);
+      // Prove continuation before append/removal, while staying within the per-chat turn budget.
+      if (index < 2) {
+        await client.send('same-context'); turns++;
+        assert.equal(handles.at(-1), 'fixture-conversation');
+        assert.equal(client.view.messages.length, turns * 2);
+      }
       const messages = client.view.messages;
       client.bind(next); assert.deepEqual(client.view.messages, messages);
       const bound = client.view; client.bind(JSON.parse(JSON.stringify(next))); assert.equal(client.view, bound);
@@ -78,13 +107,23 @@ test('model UI renders plain text, keeps local draft IDs and exposes explicit ca
   assert.ok(source.includes("window.addEventListener('focus', revalidate)")); assert.ok(source.includes("window.removeEventListener('focus', revalidate)"));
   assert.ok(source.includes("document.addEventListener('visibilitychange', visibility)")); assert.ok(source.includes("document.removeEventListener('visibilitychange', visibility)"));
   assert.match(source, /const revalidate = \(\) => \{ void controller\.refreshModels\(\); \}/);
-  assert.match(source, /const changed = \(\) => \{ controller\.accountChanged\(\); revalidate\(\); \}/);
+  assert.match(source, /const changed = \(\) => \{ removeAttachment\(\); controller\.accountChanged\(\); revalidate\(\); \}/);
   assert.match(source, /if \(document\.visibilityState === 'visible'\) revalidate\(\)/);
   assert.match(source, /document\.addEventListener\('visibilitychange', visibility\);\s*revalidate\(\);/);
   assert.match(source, /view\.catalogPhase === 'ready' && view\.catalog\?\.ready/);
   assert.ok(source.includes('data-testid="model-history-notice"')); assert.ok(source.includes('{view.historyNotice}'));
   assert.ok(!/draft\s*=\s*''/.test(source.replace("let draft = $state('');", '')));
   const integration = readFileSync(new URL('../apps/web/src/Chat.svelte', import.meta.url), 'utf8');
-  assert.ok(integration.includes('<ModelChat {scene} />')); assert.ok(integration.includes('<BoxControls {view} controller={projectController} />'));
+  assert.ok(integration.includes('<ModelChat {scene} {visualSource} points={activePoints} {onverifiedresult} />'));
+  assert.ok(integration.includes('activePoints.map(({ evidence: _evidence, ...original }) => original)'));
+  assert.ok(integration.includes('<PointEdits {artifactRevision} points={activePoints}'));
+  assert.ok(source.includes('data-testid="model-select-nearest"'));
+  const crop = readFileSync(new URL('../apps/web/src/ScreenshotCrop.svelte', import.meta.url), 'utf8');
+  for (const id of ['model-attach-screenshot', 'model-remove-screenshot', 'model-image-preview', 'model-image-status']) assert.ok(source.includes(`data-testid="${id}"`));
+  for (const id of ['model-crop-dialog', 'model-crop-attach', 'model-image-capability-notice']) assert.ok(crop.includes(`data-testid="${id}"`));
+  assert.ok(!source.includes('supported vision-model list')); assert.ok(!source.includes('modelSupportsVisualInput'));
+  assert.ok(crop.includes('the provider catalog does not verify image capability')); assert.ok(crop.includes('the provider may reject it'));
+  assert.ok(source.includes('!catalogModelSelected')); assert.ok(crop.includes('Images are never silently removed or retried as text-only.'));
+  assert.ok(source.includes('controller.send(draft, current)')); assert.ok(integration.includes('<BoxControls {view} controller={projectController} />'));
   assert.ok(integration.includes('void projectController.context()')); assert.ok(integration.includes('void controller?.submit(command)'));
 });

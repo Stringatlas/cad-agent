@@ -44,7 +44,6 @@ scenes and making verified CAD edits.
 - Before stopping or transferring work: inspect and use handoff.
 - Use GitNexus for cross-module exploration and impact analysis.
   Verify findings against source; refresh stale indexes only when needed.
-  No index exists yet; do not generate one for routine foundation checks.
 
 ## Verification
 - Run checks appropriate to the change.

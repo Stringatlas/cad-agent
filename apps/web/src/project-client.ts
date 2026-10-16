@@ -1,8 +1,8 @@
-import { PROJECT_FRAME_ID, PROJECT_LIMITS, canonicalPersistentProject, canonicalProjectBinding,
+import { PROJECT_FRAME_ID, PROJECT_LIMITS, SCENE_POINT_LIMIT, canonicalScenePointName, canonicalPersistentProject, canonicalProjectBinding,
   canonicalBoxProposalRequest, canonicalBoxApprovalRequest, canonicalProjectUndoRequest, canonicalSceneContextRequest,
   canonicalProtocolJson, freezeProtocolValue, protocolRecord, protocolKeys, protocolToken, protocolHash, protocolInteger,
   type ProjectSnapshot, type ProjectBinding, type ProjectState, type ProjectSessionInfo, type BoxEdit, type BoxProposal,
-  type SceneContextRequest, type SceneContext, type ScenePointReference, type ProjectCommitResult } from '@spatial/contracts';
+  type SceneContextRequest, type SceneContext, type ScenePointName, type ScenePointReference, type ProjectCommitResult } from '@spatial/contracts';
 
 const equal = (a: unknown, b: unknown) => canonicalProtocolJson(a) === canonicalProtocolJson(b);
 export const projectBinding = (snapshot: ProjectSnapshot): ProjectBinding => ({ sessionId: snapshot.sessionId,
@@ -116,12 +116,27 @@ export class ProjectController {
     if (this.active) this.cancel();
     this.emit({ selectedId: id, context: undefined, proposal: undefined });
   }
-  pin(point: ScenePointReference) {
-    if (this.state.pending && this.mutation) return;
+  pin(point: ScenePointReference): boolean {
+    if (this.disposed || this.mutation) return false;
+    try { canonicalScenePointName(point.name); protocolInteger(point.pointIndex); }
+    catch { this.emit({ status: 'Invalid numbered point reference. No point added.' }); return false; }
+    if (this.state.points.some(p => p.name === point.name)) {
+      this.emit({ status: `${point.name} already exists. Existing points were preserved.` }); return false;
+    }
+    if (this.state.points.length >= SCENE_POINT_LIMIT) {
+      this.emit({ status: `Point limit reached (${SCENE_POINT_LIMIT}). Remove a point before adding another.` }); return false;
+    }
     const entity = this.state.snapshot?.project.entities.find(e => e.id === point.entityId);
-    if (entity?.kind !== 'point-cloud' || !equal(entity.points[point.pointIndex], point.position)) return;
+    if (entity?.kind !== 'point-cloud' || point.pointIndex >= entity.points.length || !equal(entity.points[point.pointIndex], point.position)) return false;
     if (this.active) this.cancel();
-    this.emit({ points: [...this.state.points.filter(p => p.name !== point.name), point], context: undefined, proposal: undefined });
+    this.emit({ points: [...this.state.points, point], context: undefined, proposal: undefined, status: `${point.name} added to scene context.` });
+    return true;
+  }
+  removePoint(name: ScenePointName): boolean {
+    if (this.disposed || this.mutation || !this.state.points.some(point => point.name === name)) return false;
+    if (this.active) this.cancel();
+    this.emit({ points: this.state.points.filter(point => point.name !== name), context: undefined, proposal: undefined, status: `${name} removed from scene context.` });
+    return true;
   }
   clearPoints() { if (this.mutation) return; if (this.active) this.cancel(); this.emit({ points: [], context: undefined, proposal: undefined }); }
   private async run(name: string, mutation: boolean, work: (signal: AbortSignal, current: () => boolean) => Promise<void>) {

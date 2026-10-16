@@ -10,10 +10,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@spatial/project-state": "workspace:*",
+    "@spatial/agent-harness": "workspace:*",
     "@spatial/contracts": "workspace:*",
     "@spatial/geometry": "workspace:*",
-    "@spatial/agent-harness": "workspace:*",
-    "jose": "6.2.2"
+    "@spatial/project-state": "workspace:*",
+    "jose": "6.2.2",
+    "jpeg-js": "0.4.4"
   }
 }

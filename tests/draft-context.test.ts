@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { DatasetInfo, PointObservation } from '@spatial/contracts';
-import { createDraftPointGate, replaceDraftPoint, localDraftFeedback } from '../apps/web/src/draft-context';
+import { createDraftPointGate, createPointSequence, replaceDraftPoint, localDraftFeedback, type TorontoDraftPoint } from '../apps/web/src/draft-context';
 import { createPolePickCache, createDetailPickCache, isPoleClick, poleGestureKind, type PoleSelection } from '../apps/web/src/pole-picking';
 
 const revision = 'a'.repeat(64), nextRevision = 'b'.repeat(64);
@@ -18,7 +18,7 @@ test('Toronto local draft overview and detail attachments retain original binary
     purpose: 'display', lod: { budget: 1, depth: 0 }, algorithm: 'potree-bfs-even-v1', candidatePoints: 2, bytesRead: 0, nodes: ['r'], sampleHash: '0'.repeat(64) };
   const overview = createPolePickCache(sample), detail = createDetailPickCache(dataset, [...position], [4, 0xffffffff]);
   const gate = createDraftPointGate(); gate.bind(revision);
-  for (const [cache, name] of [[overview, 'A'], [detail, 'B']] as const) {
+  for (const [cache, name] of [[overview, 'Point 1'], [detail, 'Point 2']] as const) {
     const point = gate.accept(cache.resolve(0)!, name)!;
     assert.deepEqual(point.position, position); assert.notEqual(point.position[0], Math.fround(position[0]));
     assert.deepEqual(point.key, source.key); assert.equal(point.artifactRevision, revision);
@@ -31,40 +31,66 @@ test('Toronto local draft overview and detail attachments retain original binary
 });
 
 test('draft point gate rejects unbound/stale/disposed/source-switched picks and detaches original values', () => {
-  const gate = createDraftPointGate(); assert.equal(gate.accept(source, 'A'), undefined);
+  const gate = createDraftPointGate(); assert.equal(gate.accept(source, 'Point 1'), undefined);
   assert.equal(gate.bind(revision), false); assert.equal(gate.bind(revision), false);
   const mutable = { ...source, key: { ...source.key }, position: [...position] as [number, number, number] };
-  const point = gate.accept(mutable, 'A')!;
+  const point = gate.accept(mutable, 'Point 1')!;
   mutable.key.sourceRow = 10; mutable.position[0] = 99;
   assert.deepEqual(point.key, source.key); assert.deepEqual(point.position, position);
-  assert.equal(gate.bind(nextRevision), true); assert.equal(gate.accept(source, 'B'), undefined);
-  assert.equal(gate.accept({ ...source, artifactRevision: nextRevision }, 'B')?.artifactRevision, nextRevision);
-  gate.dispose(); gate.bind(revision); assert.equal(gate.accept(source, 'A'), undefined);
-  const switched = createDraftPointGate(); assert.equal(switched.accept(source, 'A'), undefined); switched.dispose();
+  assert.equal(gate.bind(nextRevision), true); assert.equal(gate.accept(source, 'Point 2'), undefined);
+  assert.equal(gate.accept({ ...source, artifactRevision: nextRevision }, 'Point 2')?.artifactRevision, nextRevision);
+  gate.dispose(); gate.bind(revision); assert.equal(gate.accept(source, 'Point 1'), undefined);
+  const switched = createDraftPointGate(); assert.equal(switched.accept(source, 'Point 1'), undefined); switched.dispose();
 });
 
-test('named attachments replace deliberately, remain ordered and cannot mix artifact revisions', () => {
+test('attachments append in insertion order and reject duplicate names and mixed artifacts', () => {
   const gate = createDraftPointGate(); gate.bind(revision);
-  const a = gate.accept(source, 'A')!, b = gate.accept({ ...source, key: { sourceFileId: 1, sourceRow: 2 } }, 'B')!;
-  const both = replaceDraftPoint(replaceDraftPoint([], b), a);
-  assert.deepEqual(both.map(point => point.name), ['A', 'B']);
-  const replacement = gate.accept({ ...source, key: { sourceFileId: 3, sourceRow: 7 } }, 'A')!;
-  const replaced = replaceDraftPoint(both, replacement);
-  assert.equal(replaced.length, 2); assert.equal(replaced[0].key.sourceRow, 7); assert.equal(both[0].key.sourceRow, 0xffffffff);
-  const clearedA = replaced.filter(point => point.name !== 'A'); assert.deepEqual(clearedA.map(point => point.name), ['B']);
-  gate.bind(nextRevision); const newPoint = gate.accept({ ...source, artifactRevision: nextRevision }, 'A')!;
-  assert.deepEqual(replaceDraftPoint(both, newPoint), [newPoint]); gate.dispose();
+  const a = gate.accept(source, 'Point 1')!, b = gate.accept(source, 'Point 2')!;
+  const first = replaceDraftPoint([], b), both = replaceDraftPoint(first, a);
+  assert.deepEqual(both.map(point => point.name), ['Point 2', 'Point 1']);
+  assert.deepEqual(first, [b]);
+  const duplicate = gate.accept({ ...source, key: { sourceFileId: 3, sourceRow: 7 } }, 'Point 1')!;
+  assert.throws(() => replaceDraftPoint(both, duplicate), /Conflicting point reference/);
+  gate.bind(nextRevision);
+  const other = gate.accept({ ...source, artifactRevision: nextRevision }, 'Point 3')!;
+  assert.throws(() => replaceDraftPoint(both, other), /Conflicting point reference/);
+  assert.deepEqual(both, [b, a]); assert.deepEqual(replaceDraftPoint([], other), [other]); gate.dispose();
+});
+
+test('workspace numbers survive removal, clear and simulated scene/artifact switches without reuse', () => {
+  const sequence = createPointSequence(), gate = createDraftPointGate(); gate.bind(revision);
+  let points: readonly TorontoDraftPoint[] = [];
+  for (let index = 1; index <= 32; index++) {
+    points = replaceDraftPoint(points, gate.accept(source, sequence.allocate())!);
+    assert.equal(points.at(-1)!.name, `Point ${index}`);
+  }
+  assert.equal(points.length, 32);
+  assert.ok(points.every(point => point.key.sourceRow === source.key.sourceRow));
+  assert.throws(() => replaceDraftPoint(points, gate.accept(source, 'Point 33')!), /Point limit reached \(32\)/);
+  points = points.filter(point => point.name !== 'Point 7');
+  points = replaceDraftPoint(points, gate.accept(source, sequence.allocate())!);
+  assert.equal(points.length, 32); assert.equal(points.at(-1)!.name, 'Point 33');
+  assert.ok(!points.some(point => point.name === 'Point 7'));
+  points = []; // Explicit clear does not reset the mounted workspace sequence.
+  points = replaceDraftPoint(points, gate.accept(source, sequence.allocate())!);
+  assert.equal(points[0]!.name, 'Point 34');
+  points = []; gate.dispose(); // Switch to synthetic and back; allocator remains mounted.
+  assert.equal(sequence.allocate(), 'Point 35');
+  const nextGate = createDraftPointGate(); nextGate.bind(nextRevision);
+  points = replaceDraftPoint(points, nextGate.accept({ ...source, artifactRevision: nextRevision }, sequence.allocate())!);
+  assert.equal(points[0]!.name, 'Point 36'); assert.equal(points[0]!.artifactRevision, nextRevision);
+  nextGate.dispose();
 });
 
 test('local send honestly acknowledges unavailable model without network or draft/context mutation', () => {
   const gate = createDraftPointGate(); gate.bind(revision);
-  const points = [gate.accept(source, 'A')!], draft = 'Build a channel from point A to point B';
+  const points = [gate.accept(source, 'Point 1')!], draft = 'Build a channel from Point 1 to Point 2';
   const before = JSON.stringify(points), originalFetch = globalThis.fetch;
   let requests = 0; globalThis.fetch = (() => { requests++; throw new Error('Local draft must not fetch'); }) as typeof fetch;
   try {
     const status = localDraftFeedback(draft, points);
     assert.match(status, /Not connected/); assert.match(status, /no AI\/model or edit request was sent/); assert.match(status, /remain here/);
-    assert.equal(draft, 'Build a channel from point A to point B'); assert.equal(JSON.stringify(points), before); assert.equal(requests, 0);
+    assert.equal(draft, 'Build a channel from Point 1 to Point 2'); assert.equal(JSON.stringify(points), before); assert.equal(requests, 0);
     assert.match(localDraftFeedback('  ', points), /Write a request first/); assert.equal(requests, 0);
   } finally { globalThis.fetch = originalFetch; gate.dispose(); }
 });

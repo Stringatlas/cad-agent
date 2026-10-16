@@ -29,7 +29,13 @@ Use [TEMPLATE.md](TEMPLATE.md) for bounded work with testable acceptance criteri
 
 | [020 — Redacted provider protocol diagnostics](020-model-protocol-diagnostics.md) | Implemented;397/397 baseline and83 focused fake-provider tests pass, independent bounded review READY. Fixed backend tags and refusal-delta fix; live root cause/compatibility, complete graph and whole-checkout fresh-session review remain pending. |
 
-Approved remaining product TODOs: [queue](../TODO.md), [full roadmap](../plans/2026-10-13-harness-must-haves.md). Item2 visual inputs, item3 evaluation, broader item4 verified-tool orchestration and project-integrated item7 remain unassigned. Tasks014/015 implement the authorized bounded items5–6; task013 independently implements the CAD sandbox foundation.
+| [031 — Verified query selection and approved point moves](031-verified-point-overrides.md) | Implemented;641/641 tests, typechecks/build and isolated built-browser query/select/approve/Undo pass. Independent bounded review found no blockers; whole-checkout fresh review, production-scale/live-model checks and graph certification remain pending. |
+| [030 — Chat camera and compressed crop](030-chat-screenshot-crop.md) | Implemented;607/607 baseline and36 guarded browser checks pass. Independent corrective sign-off READY; whole-checkout review separate. |
+| [029 — Catalog-listed image inputs](029-catalog-model-image-input.md) | Implemented;596/596 baseline and72 guarded fixture browser checks pass; fresh independent review pending. Removes inferred model-name capability gate, preserves catalog admission and explicit provider errors. |
+| [028 — Model screenshot and pixel grounding](028-model-visual-grounding.md) | Implemented and independently incremental-reviewed;595/595 baseline and64 isolated fixture browser checks pass. Opt-in image inputs/read-only pixel tool only; no live-provider compatibility or whole-checkout review claim. |
+| [027 — Fixed-view visual observations](027-visual-observations.md) | Implemented and independently corrective-reviewed;569/569 baseline and110 isolated fixture browser checks pass. Local capture/grounding only; no provider image transport. Whole-checkout review and complete graph certification remain pending. |
+
+Approved remaining product TODOs: [queue](../TODO.md), [full roadmap](../plans/2026-10-13-harness-must-haves.md). Provider visual integration, item3 evaluation, broader item4 verified-tool orchestration and project-integrated item7 remain unassigned. Tasks014/015 implement the authorized bounded items5–6; task013 independently implements the CAD sandbox foundation.
 
 ## Workflow
 

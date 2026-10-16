@@ -1,22 +1,37 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { assertCropBox, type CropBox, type CropSelection, type CropStats, type PointObservation, type Vec3 } from '@spatial/contracts';
+  import { assertCropBox, type CropBox, type CropSelection, type CropStats, type PointObservation, type PointOverrideSnapshot, type PointMoveProposal, type Vec3 } from '@spatial/contracts';
   import { createCropChannel } from './crop-client';
   import { cropFeedback, describeCropSelection, nextCropPhase, type CropPhase } from './crop-feedback';
   import { createTorontoViewer } from './toronto-viewer';
+  import VisualObservationPanel from './VisualObservationPanel.svelte';
+  import type { VisualModelSource } from './visual-model-source';
   import { createObservationChannel } from './observation-client';
-  import { createDraftPointGate, replaceDraftPoint, type TorontoDraftPoint, type PointName } from './draft-context';
+  import { createDraftPointGate, type TorontoDraftPoint, type PointName } from './draft-context';
   import type { PoleSelection } from './pole-picking';
+  import { effectivePosition } from './point-override-client';
 
-  let { points = [], pinName = 'A', onpinname = () => {}, onpoints = () => {} }: {
-    points?: readonly TorontoDraftPoint[]; pinName?: PointName; onpinname?: (name: PointName) => void; onpoints?: (points: readonly TorontoDraftPoint[]) => void;
+  let { points = [], pointOverrides, pointPreview, onrevision = () => {}, allocatePointName, onpoint, onpoints = () => {}, onvisualsource = () => {} }: {
+    pointOverrides?: PointOverrideSnapshot; pointPreview?: PointMoveProposal; onrevision?: (revision: string) => void;
+    onvisualsource?: (source: VisualModelSource | undefined) => void;
+    points?: readonly TorontoDraftPoint[]; allocatePointName: () => PointName;
+    onpoint: (point: TorontoDraftPoint) => void; onpoints?: (points: readonly TorontoDraftPoint[]) => void;
   } = $props();
   const draftGate = createDraftPointGate();
   let mounted = $state(false);
-  $effect(() => { if (mounted) viewer?.setDraftMarkers(points); });
+  const effectiveMarkers = $derived(points.map(point => {
+    let position = point.position;
+    try { position = effectivePosition(point, pointOverrides); } catch { /* A mismatched source stays original until explicit refresh/reselection. */ }
+    return { name: point.name, artifactRevision: point.artifactRevision, position };
+  }));
+  $effect(() => { if (mounted) viewer?.setDraftMarkers(effectiveMarkers); });
+  // Svelte deep-state proxies must not cross the renderer's structuredClone boundary.
+  $effect(() => { if (mounted) viewer?.setPointOverrides(pointOverrides ? $state.snapshot(pointOverrides) : undefined); });
+  $effect(() => { if (mounted) viewer?.setPointMovePreview(pointPreview ? $state.snapshot(pointPreview) : undefined); });
   function pinPoint(selection: PoleSelection) {
-    const point = draftGate.accept(selection, pinName);
-    if (point && alive && !viewerError) onpoints(replaceDraftPoint(points, point));
+    if (!alive || viewerError) return;
+    const point = draftGate.accept(selection, allocatePointName());
+    if (point) onpoint(point);
   }
   let host: HTMLDivElement;
   let viewer: ReturnType<typeof createTorontoViewer> | undefined;
@@ -37,6 +52,7 @@
   });
   let cropRequest = 0, boxInitialized = false;
   let cropRevision: string | undefined;
+  $effect(() => { if (mounted) viewer?.setDetailState(cropPhase); });
   const cropChannel = createCropChannel(async event => {
     if (event.type === 'start') {
       if (!display || event.dataset.revision !== display.dataset.revision) throw new Error('Artifact changed; reload display before selecting detail');
@@ -48,8 +64,9 @@
   });
   const displayChannel = createObservationChannel('display', sample => {
     if (draftGate.bind(sample.dataset.revision)) { onpoints([]); clearCrop(); }
-    viewer?.update(sample); display = sample;
-    viewer?.setDraftMarkers(points);
+    viewer?.update(sample); display = sample; onrevision(sample.dataset.revision);
+    viewer?.setPointOverrides(pointOverrides ? $state.snapshot(pointOverrides) : undefined); viewer?.setPointMovePreview(pointPreview ? $state.snapshot(pointPreview) : undefined);
+    viewer?.setDraftMarkers(effectiveMarkers);
     if (!boxInitialized && sample.count) { boxInitialized = true; placeBox(sample.positions.slice(0, 3) as unknown as Vec3); }
   });
   const harnessChannel = createObservationChannel('harness', sample => { observation = sample; });
@@ -117,21 +134,27 @@
     setTimeout(() => URL.revokeObjectURL(url), 0);
   }
   onMount(() => {
-    try { viewer = createTorontoViewer(host, placeBox, selectWindow, viewerFailure, pinPoint); mounted = true; void loadDisplay(); void loadHarness(); }
+    try {
+      viewer = createTorontoViewer(host, placeBox, selectWindow, viewerFailure, pinPoint); mounted = true;
+      const current = viewer;
+      onvisualsource({ capture: () => current.capture(), isCurrent: id => current.isCaptureCurrent(id), resolvePixel: (id, x, y) => current.resolvePixel(id, x, y) });
+      void loadDisplay(); void loadHarness();
+    }
     catch (error) { viewerError = String(error); }
-    return () => { alive = false; mounted = false; draftGate.dispose(); onpoints([]); displayChannel.dispose(); harnessChannel.dispose(); cropChannel.dispose(); viewer?.dispose(); };
+    return () => { alive = false; mounted = false; onvisualsource(undefined); draftGate.dispose(); onpoints([]); displayChannel.dispose(); harnessChannel.dispose(); cropChannel.dispose(); viewer?.dispose(); };
   });
 </script>
 
 <main>
-  <header class="scene-heading"><div><p class="eyebrow">LIVE SCENE / READ-ONLY DATASET</p><h1>Toronto3D <span>Point cloud</span></h1></div><span class="scene-badge">{display?.count.toLocaleString() ?? '…'} overview points</span></header>
+  <header class="scene-heading"><div><p class="eyebrow">LIVE SCENE / ORIGINAL DATA + VOLATILE OVERRIDES</p><h1>Toronto3D <span>Point cloud</span></h1></div><span class="scene-badge">{display?.count.toLocaleString() ?? '…'} overview points</span></header>
   <div class="workspace">
     <section class="scene-panel">
       <div class="toolbar"><span>Drag to orbit <span class="divider">·</span> Scroll to zoom</span><button onclick={() => viewer?.frameDataset()}>Frame dataset</button></div>
       <div class="viewport" data-testid="toronto-viewer" bind:this={host}></div>
       {#if viewerError}<p role="alert">Viewer unavailable: {viewerError}</p>{/if}
-      <div class="selection-bar"><label>Pin target <select aria-label="Toronto point pin name" data-testid="toronto-pin-name" value={pinName} onchange={event => onpinname(event.currentTarget.value as PointName)}><option>A</option><option>B</option></select></label><span>Cmd/Ctrl-click to attach or replace {pinName}</span><button data-testid="clear-toronto-pins" disabled={!points.length} onclick={() => onpoints([])}>Clear A/B</button></div>
+      <div class="selection-bar"><span>Cmd/Ctrl-click to add a new numbered point · remove points in Scene references</span><button data-testid="clear-toronto-pins" disabled={!points.length} onclick={() => onpoints([])}>Clear points</button></div>
       <div class="scene-footer"><span>Shift-drag a window for full-resolution detail</span><span>Toronto local frame · meters · Z-up</span></div>
+      {#if mounted}<VisualObservationPanel label="Toronto" capture={() => viewer!.capture()} isCurrent={id => viewer!.isCaptureCurrent(id)} resolvePixel={(id: string, x: number, y: number) => viewer!.resolvePixel(id, x, y)} />{/if}
       <p class="crop-summary" data-testid="crop-summary" aria-live="polite">{cropStatus}</p>
       {#if cropPhase === 'loading'}<div class="inline-crop-actions"><button data-testid="quick-cancel-crop" onclick={cancelCrop}>Cancel detail loading</button><span>{feedback.count}</span></div>{/if}
     </section>
@@ -179,7 +202,7 @@
       {/if}
       <p class="note">Deterministic evenly spaced points across breadth-first levels 0–depth. Camera-independent, not screen-space LOD or an unbiased whole-cloud sample. Display first shows level 0. JSON contains local XYZ, RGB, semantic labels and stable source IDs; no model consumes it yet.</p>
       </details>
-      <p class="note">Read-only prepared cloud · 78.3M source points. Local meters · right-handed Z-up · world = local + [627285, 4841948, 0]. No Toronto-to-project mapping or CAD edits.</p>
+      <p class="note">Read-only prepared cloud · 78.3M source points. Local meters · right-handed Z-up · world = local + [627285, 4841948, 0]. Session-only point overrides are separate from original semantic queries. No Toronto-to-project mapping or CAD edits.</p>
       <p class="note">CC BY-NC 4.0 · <a href="https://github.com/WeikaiTan/Toronto-3D">Toronto-3D</a>. Source UTM; no reprojection or independent CRS certification.</p>
       </details>
     </aside>
@@ -199,7 +222,6 @@
   .viewport { position: relative; width: 100%; height: clamp(380px, calc(100vh - 330px), 900px); min-height: 340px; }
   :global(canvas) { display: block; touch-action: none; }
   .selection-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; border-top: 1px solid #2a3c50; padding: 8px 14px; font-size: 11px; color: #aac0d7; }
-  .selection-bar label { display: flex; gap: 8px; align-items: center; margin: 0; } .selection-bar select { display: inline; width: auto; margin: 0; padding: 3px 8px; }
   .selection-bar button { margin-left: auto; padding: 4px 8px; }
   .scene-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 5px; padding: 0 14px 10px; font-size: 10px; color: #7f97b2; }
   .crop-summary { font-size: 10px; color: #a4bad0; border-top: 1px solid #223246; padding: 8px 14px; margin: 0; overflow-wrap: anywhere; }
