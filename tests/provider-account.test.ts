@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { ProviderAccountController, canonicalWorkspace, validateProviderStatus, accountDescription, PROVIDER_AUTH_URL, type AccountView } from '../apps/web/src/provider-account';
+import { ProviderAccountController, canonicalWorkspace, validateProviderStatus, accountDescription, accountHeader, PROVIDER_AUTH_URL, PROVIDER_USAGE_URL, type AccountView } from '../apps/web/src/provider-account';
 
 const disabled = { mode: 'disabled', authenticated: false, ready: false, planUsageEnabled: false };
 const signedOut = { ...disabled, mode: 'chatgpt' };
@@ -173,10 +173,42 @@ test('dispose aborts pending requests immediately, suppresses callbacks and futu
   }
 });
 
-test('workspace markup keeps native sign-in separate and guides explicit model discovery with lifecycle invalidation', () => {
+test('account header distinguishes connection, provider mode and transient states without identity claims', () => {
+  const label = (state: unknown) => accountHeader({ phase: 'available', status: validateProviderStatus(state) });
+  assert.equal(label(signedOut), 'ChatGPT disconnected');
+  assert.equal(label(identity), 'ChatGPT connected');
+  assert.equal(label(ready), 'ChatGPT connected');
+  assert.equal(label(disabled), 'Not connected');
+  assert.equal(label(key), 'API key configured');
+  assert.equal(label({ ...key, authenticated: false, ready: false }), 'API key not configured');
+  assert.equal(accountHeader({ phase: 'loading', status: validateProviderStatus(ready) }), 'Checking connection…');
+  assert.equal(accountHeader({ phase: 'unavailable', status: validateProviderStatus(ready) }), 'Connection unavailable');
+  assert.equal(accountHeader({ phase: 'logging-out' }), 'Disconnecting…');
+  assert.equal(accountHeader({ phase: 'available' }), 'Connection unavailable');
+  assert.match(accountDescription(validateProviderStatus(ready)), /plan usage is enabled for eligible requests/);
+  assert.doesNotMatch(accountDescription(validateProviderStatus(identity)), /plan usage is enabled/);
+});
+
+test('workspace account follows SIWC continuation and usage-settings guidance without inventing usage', () => {
+  assert.equal(PROVIDER_USAGE_URL, 'https://chatgpt.com/settings/usage');
+  const panel = readFileSync(new URL('../apps/web/src/ProviderAccount.svelte', import.meta.url), 'utf8');
+  assert.match(panel, /\{accountHeader\(view\)\}/);
+  assert.match(panel, /view\.status\?\.mode === 'chatgpt' && view\.status\.authenticated && view\.status\.planUsageEnabled/);
+  assert.match(panel, /href=\{PROVIDER_USAGE_URL\} target="_blank" rel="noopener noreferrer">Manage usage/);
+  assert.match(panel, /!view\.status\.authenticated \|\| !view\.status\.ready/);
+  assert.match(panel, /href=\{PROVIDER_AUTH_URL\} target="_blank" rel="noopener noreferrer">[\s\S]*?Continue with ChatGPT\s*<\/a>/);
+  assert.match(panel, /chatgpt-logo-black\.svg/);
+  assert.match(panel, /<svg width="21" height="21" viewBox="0 0 21 21" fill="none" aria-hidden="true">/);
+  assert.doesNotMatch(panel, /<img[^>]+https?:/);
+  assert.match(panel, /this link alone does not sign you in/);
+  assert.match(panel, /view\.status\?\.mode === 'chatgpt' \? 'Disconnect ChatGPT'/);
+  assert.doesNotMatch(panel, /email|selectedAccount|credits balance|requests remaining/);
+});
+
+test('workspace markup keeps native sign-in separate and guides model discovery with lifecycle invalidation', () => {
   const panel = readFileSync(new URL('../apps/web/src/ProviderAccount.svelte', import.meta.url), 'utf8');
   assert.match(panel, /target="_blank" rel="noopener noreferrer"/);
-  assert.doesNotMatch(panel, /Model chat is not available/); assert.match(panel, /Refresh models and choose a model/);
+  assert.doesNotMatch(panel, /Model chat is not available/); assert.match(panel, /Available models load in Scene chat/);
   assert.match(panel, /Credential readiness alone does not prove model availability/);
   assert.match(panel, /value\.phase === 'logging-out'/); assert.match(panel, /status !== previousStatus/);
   assert.match(panel, /dispatchEvent\(new Event\('spatial-provider-change'\)\)/);

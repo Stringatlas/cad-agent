@@ -88,9 +88,11 @@ async function readResponse(response: Response, signal: AbortSignal, budget: Bud
     try { return work(); } catch (error) { report(check); throw error; }
   };
   const contentType = response.headers.get('content-type');
-  if (!/^text\/event-stream(?:;|$)/iu.test(contentType ?? '')) {
-    // Header classification remains the rejection authority. Bounded body appearance
-    // diagnostics never relax acceptance or expose provider content.
+  // Some plan responses omit this header. Absence is not proof of a bad body:
+  // require the same strict SSE/completion/EOF validation below, never JSON fallback.
+  // An explicitly incompatible media type still fails before any publication.
+  if (contentType?.trim() && !/^text\/event-stream(?:;|$)/iu.test(contentType)) {
+    // Bounded body appearance diagnostics never authorize acceptance or expose content.
     const mediaType = contentType?.split(';', 1)[0]?.trim().toLowerCase();
     const format: ResponseFormat = !mediaType ? 'missing' : mediaType === 'application/json' ? 'json' :
       mediaType === 'text/html' ? 'html' : mediaType === 'text/plain' ? 'text' : 'other';
@@ -156,10 +158,16 @@ async function readResponse(response: Response, signal: AbortSignal, budget: Bud
       const result = checked('terminal-shape', () => record(event.response));
       if (result.status !== 'completed' || !Array.isArray(result.output)) reject('terminal-shape');
       checked('terminal-json', () => canonicalProtocolJson(result.output, itemLimits));
-      const outputLength = result.output.length;
+      // Plan streams can finalize each item but omit them from the completed array.
+      // Recover ONLY that empty-array case from full done snapshots, never added/deltas.
+      // The index check below still requires contiguous done items and no unfinished added
+      // items. Nonempty terminal snapshots retain all existing identity/conflict checks.
+      const terminalOutput = result.output.length === 0 && done.size > 0
+        ? [...done.entries()].sort(([a], [b]) => a - b).map(([, item]) => item) : result.output;
+      const outputLength = terminalOutput.length;
       if ([...added.keys(), ...done.keys()].some(index => index >= outputLength)) reject('terminal-index');
       const terminalIds = new Set<string>();
-      const output = result.output.map((value, index) => {
+      const output = terminalOutput.map((value, index) => {
         const terminal = outputItem(value, true);
         if (Object.hasOwn(terminal, 'id')) {
           identity(terminal, index);

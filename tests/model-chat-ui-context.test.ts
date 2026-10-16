@@ -41,10 +41,11 @@ test('unavailable or ambiguous authority never fabricates snapshot/project selec
   const result = modelScene('demo', undefined, view, [toronto]); assert.equal(result.project, null); assert.deepEqual(result.toronto, []);
 });
 
-test('scene/selection/session/revision/provenance changes reset completed history, while unchanged binding is stable', async () => {
+test('scene/selection/session/revision/provenance changes retain display history but start a new server conversation', async () => {
+  const handles: (string | null)[] = [];
   const client = new ModelChatController(() => {}, async (path, init) => path === '/chat/models'
     ? new Response(JSON.stringify({ mode: 'api-key', ready: true, generation: 'generation-fixture', code: 'ready', models: [{ id: 'fixture-model', label: 'Fixture' }] }))
-    : (() => { const r = JSON.parse(init!.body as string); return new Response([
+    : (() => { const r = JSON.parse(init!.body as string); handles.push(r.conversationId); return new Response([
       { kind: 'start', requestId: r.requestId, conversationId: 'fixture-conversation', model: r.model },
       { kind: 'delta', requestId: r.requestId, text: 'Complete' }, { kind: 'done', requestId: r.requestId, conversationId: 'fixture-conversation' },
     ].map(e => JSON.stringify(e) + '\n').join(''), { headers: { 'Content-Type': 'application/x-ndjson' } }); })());
@@ -55,8 +56,18 @@ test('scene/selection/session/revision/provenance changes reset completed histor
     modelScene('demo', snapshot, { ...view, points: [] }, []),
     modelScene('toronto', undefined, view, [toronto]),
     modelScene('toronto', undefined, view, [{ ...toronto, artifactRevision: 'b'.repeat(64) }])];
-  for (const next of alternatives) { await client.send('hello'); assert.equal(client.view.messages.length, 2); client.bind(next); assert.equal(client.view.messages.length, 0); }
-  client.dispose();
+  try {
+    for (const [index, next] of alternatives.entries()) {
+      await client.send('hello'); assert.equal(handles.at(-1), null); assert.equal(client.view.messages.length, (index + 1) * 2);
+      const messages = client.view.messages;
+      client.bind(next); assert.deepEqual(client.view.messages, messages);
+      const bound = client.view; client.bind(JSON.parse(JSON.stringify(next))); assert.equal(client.view, bound);
+      assert.ok(client.view.messages.every(message => message.state === 'complete'));
+      assert.match(client.view.historyNotice!, /Scene context changed/); assert.match(client.view.historyNotice!, /reference only, not sent to the model/);
+    }
+    await client.send('latest-context'); assert.equal(handles.at(-1), null);
+    client.newChat(); assert.deepEqual(client.view.messages, []); assert.equal(client.view.historyNotice, undefined);
+  } finally { client.dispose(); }
 });
 
 test('model UI renders plain text, keeps local draft IDs and exposes explicit catalog/model/cancel/reset controls', () => {
@@ -64,6 +75,15 @@ test('model UI renders plain text, keeps local draft IDs and exposes explicit ca
   for (const id of ['local-draft', 'send-local-draft', 'local-draft-form', 'local-draft-status', 'model-refresh', 'model-select', 'model-cancel', 'model-new-chat', 'model-history', 'model-scene-context']) assert.ok(source.includes(`data-testid="${id}"`));
   assert.ok(source.includes('{message.text ||')); assert.ok(!source.includes('{@html')); assert.ok(!/localStorage|sessionStorage|indexedDB/.test(source));
   assert.ok(source.includes("window.addEventListener('spatial-provider-change'")); assert.ok(source.includes('void controller.refreshModels()'));
+  assert.ok(source.includes("window.addEventListener('focus', revalidate)")); assert.ok(source.includes("window.removeEventListener('focus', revalidate)"));
+  assert.ok(source.includes("document.addEventListener('visibilitychange', visibility)")); assert.ok(source.includes("document.removeEventListener('visibilitychange', visibility)"));
+  assert.match(source, /const revalidate = \(\) => \{ void controller\.refreshModels\(\); \}/);
+  assert.match(source, /const changed = \(\) => \{ controller\.accountChanged\(\); revalidate\(\); \}/);
+  assert.match(source, /if \(document\.visibilityState === 'visible'\) revalidate\(\)/);
+  assert.match(source, /document\.addEventListener\('visibilitychange', visibility\);\s*revalidate\(\);/);
+  assert.match(source, /view\.catalogPhase === 'ready' && view\.catalog\?\.ready/);
+  assert.ok(source.includes('data-testid="model-history-notice"')); assert.ok(source.includes('{view.historyNotice}'));
+  assert.ok(!/draft\s*=\s*''/.test(source.replace("let draft = $state('');", '')));
   const integration = readFileSync(new URL('../apps/web/src/Chat.svelte', import.meta.url), 'utf8');
   assert.ok(integration.includes('<ModelChat {scene} />')); assert.ok(integration.includes('<BoxControls {view} controller={projectController} />'));
   assert.ok(integration.includes('void projectController.context()')); assert.ok(integration.includes('void controller?.submit(command)'));

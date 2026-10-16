@@ -190,12 +190,14 @@ export interface ModelMessage {
 export interface ModelChatView {
   readonly catalogPhase: 'idle' | 'loading' | 'ready' | 'error'; readonly catalog?: ModelCatalog; readonly model: string;
   readonly phase: 'idle' | 'streaming' | 'completed' | 'error' | 'cancelled'; readonly code: string; readonly messages: readonly ModelMessage[];
+  readonly historyNotice?: string;
 }
 /** Volatile conversation handles only. No assistant history, credentials, or tools are sent by this client. */
 export class ModelChatController {
   view: ModelChatView = { catalogPhase: 'idle', model: '', phase: 'idle', code: 'refresh-models', messages: [] };
   private scene?: ModelScene; private sceneKey = ''; private conversationId: string | null = null;
   private sequence = 0; private generation = 0; private active?: AbortController; private disposed = false;
+  private catalogActive?: AbortController; private catalogSequence = 0;
   constructor(private publish: (view: ModelChatView) => void,
     private fetcher: typeof fetch = (input, init) => globalThis.fetch(input, init),
     private deadlineMs: number = MODEL_CLIENT_LIMITS.deadlineMs, private catalogDeadlineMs: number = MODEL_CLIENT_LIMITS.catalogDeadlineMs) {}
@@ -205,38 +207,61 @@ export class ModelChatController {
     const key = canonicalProtocolJson(canonicalModelScene(scene));
     if (this.sceneKey === key) return;
     this.invalidate(); this.scene = freezeProtocolValue(JSON.parse(key) as ModelScene); this.sceneKey = key; this.conversationId = null;
-    this.set({ phase: 'idle', messages: [], code: 'scene-context-reset', ...(this.view.catalogPhase === 'loading' ? { catalogPhase: 'idle' as const } : {}) });
+    this.contextReset('Scene context changed');
   }
-  /** Called on account lifecycle notification or return from another tab; never fetches automatically. */
-  accountChanged() { this.invalidate(); this.conversationId = null; this.set({ catalogPhase: 'idle', catalog: undefined, model: '', messages: [], phase: 'idle', code: 'refresh-models' }); }
-  newChat() { this.invalidate(); this.conversationId = null; this.set({ messages: [], phase: 'idle', code: 'new-chat', ...(this.view.catalogPhase === 'loading' ? { catalogPhase: 'idle' as const } : {}) }); }
+  /** Retained messages are display-only: only the volatile handle can continue server history. */
+  private contextReset(reason: string) {
+    this.invalidate(); this.conversationId = null;
+    this.set({ phase: 'idle', code: 'new-conversation-context',
+      historyNotice: this.view.messages.length ? `${reason}. Messages from the previous context are kept for reference only, not sent to the model. New messages use the current scene, model and account.` : this.view.historyNotice,
+      messages: this.view.messages.map(m => m.state === 'streaming' ? { ...m, state: 'incomplete', failureCode: 'cancelled-new-conversation-required' } : m) });
+  }
+  /** Explicit lifecycle notification blocks readiness immediately; ordinary focus only revalidates. */
+  accountChanged() {
+    ++this.catalogSequence; this.catalogActive?.abort(); this.catalogActive = undefined;
+    this.contextReset('Account connection changed');
+    this.set({ catalogPhase: 'idle', catalog: undefined, model: '', code: 'refresh-models' });
+  }
+  newChat() { this.invalidate(); this.conversationId = null; this.set({ messages: [], historyNotice: undefined, phase: 'idle', code: 'new-chat' }); }
   selectModel(model: string) {
     if (!this.view.catalog?.ready || (model !== '' && !this.view.catalog.models.some(m => m.id === model))) return;
     if (model === this.view.model) return;
-    this.invalidate(); this.conversationId = null; this.set({ model, messages: [], phase: 'idle', code: 'model-changed' });
+    this.contextReset('Selected model changed'); this.set({ model, code: 'model-changed' });
   }
   cancel() {
-    if (!this.active) return; this.invalidate(); this.conversationId = null;
+    if (!this.active && !this.catalogActive) return;
+    ++this.catalogSequence; this.catalogActive?.abort(); this.catalogActive = undefined;
+    this.invalidate(); this.conversationId = null;
     this.set({ phase: 'cancelled', code: 'cancelled-new-conversation-required',
       catalogPhase: this.view.catalogPhase === 'loading' ? 'idle' : this.view.catalogPhase,
       messages: this.view.messages.map(m => m.state === 'streaming' ? { ...m, state: 'incomplete', failureCode: 'cancelled-new-conversation-required' } : m) });
   }
-  dispose() { this.disposed = true; this.invalidate(); }
+  dispose() { this.disposed = true; this.invalidate(); ++this.catalogSequence; this.catalogActive?.abort(); }
   async refreshModels() {
-    if (this.disposed) return; this.invalidate(); this.conversationId = null;
-    const currentGeneration = this.generation, controller = this.active = new AbortController();
-    this.set({ catalogPhase: 'loading', catalog: undefined, model: '', phase: 'idle', messages: [], code: 'loading-models' });
+    if (this.disposed) return;
+    this.catalogActive?.abort();
+    const sequence = ++this.catalogSequence, controller = this.catalogActive = new AbortController();
+    const previous = this.view.catalog;
+    this.set({ catalogPhase: 'loading' });
     const timer = setTimeout(() => controller.abort(), this.catalogDeadlineMs);
     try {
       const catalog = await fetchModelCatalog(controller.signal, this.fetcher);
-      if (this.disposed || currentGeneration !== this.generation) return;
-      this.set({ catalogPhase: 'ready', catalog, code: catalog.code });
-    } catch { if (!this.disposed && currentGeneration === this.generation) this.set({ catalogPhase: 'error', code: 'catalog-unavailable' }); }
-    finally { clearTimeout(timer); if (currentGeneration === this.generation) this.active = undefined; }
+      if (this.disposed || sequence !== this.catalogSequence) return;
+      const model = catalog.ready ? (catalog.models.some(m => m.id === this.view.model) ? this.view.model : catalog.models[0]?.id ?? '') : '';
+      if (previous && (previous.generation !== catalog.generation || previous.mode !== catalog.mode || !catalog.ready || model !== this.view.model)) {
+        this.contextReset('Account or available model changed');
+      }
+      this.set({ catalogPhase: 'ready', catalog, model });
+    } catch {
+      if (!this.disposed && sequence === this.catalogSequence) {
+        this.contextReset('Account readiness could not be verified');
+        this.set({ catalogPhase: 'error', code: 'catalog-unavailable' });
+      }
+    } finally { clearTimeout(timer); if (sequence === this.catalogSequence) this.catalogActive = undefined; }
   }
   async send(text: string): Promise<boolean> {
     const { catalog, model, messages } = this.view;
-    if (this.disposed || this.active || !this.scene || !catalog?.ready || !model || !text.trim() || text.length > MODEL_CLIENT_LIMITS.textChars) return false;
+    if (this.disposed || this.active || this.view.catalogPhase !== 'ready' || !this.scene || !catalog?.ready || !model || !text.trim() || text.length > MODEL_CLIENT_LIMITS.textChars) return false;
     if (messages.filter(m => m.role === 'user').length >= MODEL_CLIENT_LIMITS.maxTurns ||
       encoder.encode(JSON.stringify(messages)).length + encoder.encode(text).length > MODEL_CLIENT_LIMITS.historyBytes - 65536) {
       this.set({ code: 'history-limit-new-chat-required' }); return false;

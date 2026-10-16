@@ -9,17 +9,17 @@
   $effect(() => controller.bind(scene));
   const canSend = $derived(view.catalogPhase === 'ready' && view.catalog?.ready && !!view.model && view.phase !== 'streaming' && !!draft.trim());
   onMount(() => {
-    // Returning from the separate account utility invalidates readiness, but never discovers or sends automatically.
-    const invalidate = () => controller.accountChanged();
-    const visibility = () => { if (document.visibilityState === 'hidden') invalidate(); };
-    window.addEventListener('spatial-provider-change', invalidate);
-    window.addEventListener('focus', invalidate);
-    window.addEventListener('pagehide', invalidate);
+    // Discovery is read-only. Focus alone never erases a conversation or retries inference.
+    const revalidate = () => { void controller.refreshModels(); };
+    const changed = () => { controller.accountChanged(); revalidate(); };
+    const visibility = () => { if (document.visibilityState === 'visible') revalidate(); };
+    window.addEventListener('spatial-provider-change', changed);
+    window.addEventListener('focus', revalidate);
     document.addEventListener('visibilitychange', visibility);
+    revalidate();
     return () => {
-      window.removeEventListener('spatial-provider-change', invalidate);
-      window.removeEventListener('focus', invalidate);
-      window.removeEventListener('pagehide', invalidate);
+      window.removeEventListener('spatial-provider-change', changed);
+      window.removeEventListener('focus', revalidate);
       document.removeEventListener('visibilitychange', visibility);
       controller.dispose();
     };
@@ -37,7 +37,7 @@
     {#each view.catalog?.models ?? [] as model (model.id)}<option value={model.id}>{model.label}</option>{/each}
   </select>
   <p class="catalog-status" role="status" data-testid="model-catalog-status">
-    {#if view.catalogPhase === 'idle'}Refresh models explicitly, then choose a configured model. No model request is sent automatically.
+    {#if view.catalogPhase === 'idle'}Models load automatically. No message is sent until you choose Send.
     {:else if view.catalogPhase === 'loading'}Discovering models from the server's configured provider…
     {:else if view.catalogPhase === 'error'}Model catalog unavailable. Check Account, server connectivity and permissions, then refresh. No fallback provider was used.
     {:else if !view.catalog?.ready}Model unavailable · {view.catalog?.mode} · {view.catalog?.code}. Account readiness alone does not authorize inference.
@@ -48,6 +48,7 @@
     <p>Only active-scene references are sent. Toronto coordinates remain unmapped; attachment provenance is not CAD verification.</p>
     <pre data-testid="model-scene-context">{JSON.stringify(scene, null, 2)}</pre>
   </details>
+  {#if view.historyNotice}<p class="history-notice" role="status" data-testid="model-history-notice">{view.historyNotice}</p>{/if}
   {#if view.messages.length}
     <div class="history" aria-live="polite" data-testid="model-history">
       {#each view.messages as message, index (index)}
@@ -71,7 +72,7 @@
   <form class="composer" data-testid="local-draft-form" onsubmit={event => { event.preventDefault(); if (canSend) void controller.send(draft); }}>
     <label for="local-draft">Describe your request</label>
     <textarea id="local-draft" data-testid="local-draft" bind:value={draft} rows="4" maxlength={MODEL_CLIENT_LIMITS.textChars} placeholder="Ask about points A and B or describe your intended channel…"></textarea>
-    <div class="composer-footer"><span>Draft &amp; history stay in memory only</span><button class="send" type="submit" data-testid="send-local-draft" disabled={!canSend}>Send <span aria-hidden="true">↑</span></button></div>
+    <div class="composer-footer"><button class="send" type="submit" data-testid="send-local-draft" disabled={!canSend}>Send <span aria-hidden="true">↑</span></button></div>
   </form>
   <div class="progress" role="status" data-testid="local-draft-status" data-state={view.phase}>
     {#if view.phase !== 'idle' || view.code === 'history-limit-new-chat-required'}<p>{view.code}</p>{/if}
@@ -93,6 +94,7 @@
   p { font-size: 11px; color: #9badc3; overflow-wrap: anywhere; }
   .bound-scene { font-size: 11px; color: #9badc3; }
   pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; font-size: 10px; }
+  .history-notice { border-left: 2px solid #d4b474; padding: 8px 10px; color: #ddc998; background: #28271f; }
   .history { max-height: 520px; overflow: auto; margin: 18px 0; }
   article { padding: 12px; border: 1px solid #33485e; border-radius: 8px; margin: 10px 0; }
   article.assistant { background: #142331; } article strong { font-size: 11px; color: #c6e4dc; }
@@ -103,7 +105,7 @@
   .message-failure .recovery { color: #fff0db; }
   .message-failure .incomplete { color: #d6bd99; font-size: 10px; }
   .tool-context { font-size: 10px; color: #95b6bc; }
-  .composer-footer { margin-top: 10px; } .composer-footer > span { color: #7f93ad; font-size: 10px; }
+  .composer-footer { margin-top: 10px; }
   .send { background: #99e4d4; color: #102b2e; border-color: #99e4d4; font-weight: 600; } .send span { margin-left: 8px; }
   .progress p { color: #dcc38a; } .boundary { font-size: 10px; color: #8197b1; }
 </style>

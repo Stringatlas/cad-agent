@@ -164,7 +164,8 @@ test('added content is discarded even without a done event: only the full termin
     { name: 'same id at different indices', stream: done() + done(reasoning, 1) + complete([reasoning, reasoning]) },
     { name: 'added/done id conflict', stream: added() + done({ ...reasoning, id: 'rs_other' }) + complete([reasoning]) },
     { name: 'added/done type conflict', stream: added() + done({ ...message(), id: reasoning.id }) + complete([reasoning]) },
-    { name: 'done index absent from terminal', stream: done() + complete([]) },
+    { name: 'done index gap with empty terminal', stream: done(reasoning, 1) + complete([]) },
+    { name: 'unfinished added with empty terminal', stream: done() + added(message(), 1) + complete([]) },
     { name: 'added index absent from terminal', stream: added() + complete([]) },
     { name: 'terminal missing identity', stream: done() + complete([{ type: 'reasoning', summary: [] }]) },
     { name: 'terminal wrong identity', stream: done() + complete([{ ...reasoning, id: 'rs_other' }]) },
@@ -391,7 +392,7 @@ for (const mode of ['api-key', 'chatgpt'] as const) test(`${mode}: fixed parser 
     ['item-duplicate', () => sse(item(reasoning) + item(reasoning))],
     ['terminal-shape', () => sse(event({ type: 'response.completed', response: { status: secret } }))],
     ['terminal-json', () => sse(complete(Array(1025).fill(null))), 'copy-error'],
-    ['terminal-index', () => sse(item(reasoning) + complete([]))],
+    ['terminal-index', () => sse(item(reasoning, 1) + complete([]))],
     ['terminal-missing-id', () => sse(item(reasoning) + complete([{ type: 'reasoning', encrypted_content: secret }]))],
     ['snapshot-conflict', () => sse(item({ ...reasoning, [secret]: secret }) + complete([{ ...reasoning, [secret]: 'different' }]))],
     ['visible-output', () => sse(event({ type: 'response.output_text.delta', delta: secret }) + complete([message('different')]))],
@@ -421,7 +422,7 @@ for (const mode of ['api-key', 'chatgpt'] as const) test(`${mode}: non-SSE heade
   const secret = 'PRIVATE-provider-body-header-token';
   const cases: [string | undefined, string][] = [
     ['application/json', 'json'], [`Application/JSON; private=${secret}`, 'json'],
-    ['text/html; charset=utf-8', 'html'], ['text/plain', 'text'], [undefined, 'missing'], ['', 'missing'],
+    ['text/html; charset=utf-8', 'html'], ['text/plain', 'text'],
     [`application/${secret}`, 'other'], ['application/problem+json', 'other'],
     ['application/json-seq', 'other'], ['text/event-stream-malformed', 'other'], ['text/event-stream , application/json', 'other'],
   ];
@@ -453,6 +454,91 @@ test('unexpected-format diagnostic sink failure preserves specific code and does
   t.mock.method(console, 'warn', () => { throw new Error('private log failure'); });
   const f = fixture(); await f.model.models(signal()); f.queue.push(Response.json({ private: 'not exposed' }));
   await assert.rejects(turn(f), code('provider-format-json')); assert.equal(f.requests.length, 2); f.model.close();
+});
+
+for (const mode of ['api-key', 'chatgpt'] as const) test(`${mode}: missing or empty MIME still requires valid SSE completion and EOF`, async () => {
+  for (const header of [undefined, '', '   ']) {
+    const f = fixture(mode); await f.model.models(signal());
+    const response = sse(event({ type: 'response.output_text.delta', delta: 'Hello' }) + complete());
+    if (header === undefined) response.headers.delete('content-type'); else response.headers.set('content-type', header);
+    f.queue.push(response);
+    const events = await turn(f);
+    assert.deepEqual(events.map(e => e.kind), ['start', 'delta', 'done']);
+    const conversationId = (events.at(-1) as Extract<ModelChatEvent, { kind: 'done' }>).conversationId;
+    f.queue.push(sse(complete())); await turn(f, f.call({ conversationId, text: 'Continue' }));
+    assert.deepEqual((f.requests[2].body!.input as unknown[])[2], message());
+    assert.equal(f.requests.length, 3); f.model.close();
+  }
+});
+
+for (const mode of ['api-key', 'chatgpt'] as const) test(`${mode}: missing MIME never accepts JSON, appearance alone, bad identity or failed streams`, async t => {
+  t.mock.method(console, 'warn', () => {});
+  const bad = [
+    JSON.stringify({ output: [message()], status: 'completed' }), '<html>not SSE</html>',
+    'data: not-json\n\n', event({ type: 'response.created' }),
+    complete().trimEnd(), complete() + event({ type: 'response.created' }),
+    event({ type: 'response.failed', response: { error: { code: 'private' } } }),
+    event({ type: 'response.incomplete', response: {} }),
+    event({ type: 'response.output_item.done', output_index: 0, item: message() }) + complete([{ ...message(), id: 'conflict' }]),
+    event({ type: 'response.output_text.delta', delta: 'Not terminal text' }) + complete(),
+    'x'.repeat(L.frameBytes + 1),
+  ];
+  for (const text of bad) {
+    const f = fixture(mode); await f.model.models(signal()); f.queue.push(sse(complete()));
+    const initial = await turn(f), conversationId = (initial.at(-1) as Extract<ModelChatEvent, { kind: 'done' }>).conversationId;
+    const response = sse(text, 16384); response.headers.delete('content-type'); f.queue.push(response);
+    const events: ModelChatEvent[] = [];
+    await assert.rejects(f.model.turn(f.call({ conversationId, text: 'Failed turn must not be retained' }), bound, async e => { events.push(e); }, signal()));
+    assert.equal(events.some(e => e.kind === 'done' || e.kind === 'tool'), false);
+    assert.equal(f.requests.length, 3);
+    f.queue.push(sse(complete())); await turn(f, f.call({ conversationId, text: 'Explicit retry' }));
+    assert.equal(JSON.stringify(f.requests[3].body!.input).includes('Failed turn must not be retained'), false);
+    f.model.close();
+  }
+  const f = fixture(mode); await f.model.models(signal());
+  f.queue.push(new Response(new Uint8Array([255]))); await assert.rejects(turn(f));
+  assert.equal(f.requests.length, 2); f.model.close();
+});
+
+for (const mode of ['api-key', 'chatgpt'] as const) test(`${mode}: empty terminal array retains only finalized contiguous items and opaque history`, async () => {
+  const f = fixture(mode); await f.model.models(signal());
+  const reasoning = { type: 'reasoning', id: 'rs_empty', encrypted_content: 'opaque-private-reasoning', summary: [] };
+  const final = { ...message('No.'), content: [{ type: 'refusal', refusal: 'No.' }] };
+  const output = [reasoning, final];
+  const body = sse(event({ type: 'response.refusal.delta', delta: 'No.' }) + output.map((item, output_index) =>
+    event({ type: 'response.output_item.added', output_index, item: { type: item.type, id: item.id } }) +
+    event({ type: 'response.output_item.done', output_index, item })).join('') + complete([]), 3);
+  body.headers.delete('content-type'); f.queue.push(body);
+  const events = await turn(f); assert.deepEqual(events.map(e => e.kind), ['start', 'delta', 'done']);
+  const conversationId = (events.at(-1) as Extract<ModelChatEvent, { kind: 'done' }>).conversationId;
+  f.queue.push(sse(complete())); await turn(f, f.call({ conversationId }));
+  assert.deepEqual((f.requests[2].body!.input as unknown[]).slice(2, 4), output); f.model.close();
+});
+
+test('empty terminal tool snapshots wait for EOF before dispatch and retain complete call metadata', async () => {
+  const f = fixture('chatgpt'); await f.model.models(signal()); let upstream!: ReadableStreamDefaultController<Uint8Array>;
+  const tool = { type: 'function_call', id: 'fc_empty', call_id: 'call_empty', namespace: 'scene', name: 'inspect_scene', arguments: '{}', status: 'completed' };
+  f.queue.push(new Response(new ReadableStream({ start(c) { upstream = c; c.enqueue(new TextEncoder().encode(
+    event({ type: 'response.output_item.done', output_index: 0, item: tool }) + complete([]))); } })), sse(complete()));
+  const events: ModelChatEvent[] = [];
+  const pending = f.model.turn(f.call(), bound, async e => { events.push(e); }, signal());
+  await tick(); assert.equal(f.requests.length, 2); assert.equal(events.some(e => e.kind === 'tool' || e.kind === 'done'), false);
+  upstream.close(); await pending;
+  assert.deepEqual(events.map(e => e.kind), ['start', 'tool', 'delta', 'done']);
+  assert.deepEqual((f.requests[2].body!.input as unknown[])[2], tool); f.model.close();
+});
+
+test('missing MIME completion without EOF remains pending until cancellation and never commits', async () => {
+  const f = fixture(); await f.model.models(signal()); let cancelled = false;
+  f.queue.push(new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(complete())); }, cancel() { cancelled = true; } })));
+  const controller = new AbortController(), events: ModelChatEvent[] = [];
+  const pending = f.model.turn(f.call(), bound, async e => { events.push(e); }, controller.signal);
+  const rejected = assert.rejects(pending); await tick();
+  assert.equal(events.some(e => e.kind === 'done'), false);
+  controller.abort(); await rejected; assert.equal(cancelled, true);
+  assert.equal(f.requests.length, 2);
+  f.queue.push(sse(complete())); await turn(f);
+  assert.equal((f.requests[2].body!.input as unknown[]).length, 2); f.model.close();
 });
 
 test('documented event stream media type with parameters and case variation still completes', async () => {

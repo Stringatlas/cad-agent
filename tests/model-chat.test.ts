@@ -36,7 +36,7 @@ async function fixture(t: { after(fn: () => unknown): void }, transport?: typeof
 }
 async function events(response: Response): Promise<ModelChatEvent[]> { assert.equal(response.status, 200); assert.match(response.headers.get('content-type') ?? '', /application\/x-ndjson/u); return (await response.text()).trim().split('\n').map(line => canonicalModelChatEvent(JSON.parse(line))); }
 
-test('HTTP route propagates closed format errors through canonical frames without provider details or retry', async t => {
+test('HTTP route propagates wrong-format and missing-MIME invalid-stream errors without provider details or retry', async t => {
   const warnings = t.mock.method(console, 'warn', () => {});
   const secret = 'PRIVATE-format-header-body'; let calls = 0, format = 'json';
   const types: Record<string, string | undefined> = { json: 'application/json', html: 'text/html', text: 'text/plain', missing: undefined, other: `application/${secret}` };
@@ -48,11 +48,31 @@ test('HTTP route propagates closed format errors through canonical frames withou
   for (format of Object.keys(types)) {
     const result = await events(await f.post(call(f.catalog.generation)));
     assert.deepEqual(result.map(e => e.kind), ['start', 'error']);
-    assert.deepEqual(result.at(-1), { kind: 'error', requestId: 'request-one', code: `provider-format-${format}` });
+    assert.deepEqual(result.at(-1), { kind: 'error', requestId: 'request-one', code: format === 'missing' ? 'interrupted-stream' : `provider-format-${format}` });
     assert.equal(JSON.stringify(result).includes(secret), false);
   }
   assert.equal(calls, 5); assert.equal(warnings.mock.calls.length, 5);
   assert.equal(JSON.stringify(warnings.mock.calls).includes(secret), false);
+});
+
+test('HTTP route completes missing-MIME finalized items with empty terminal output and replays them', async t => {
+  const item = { type: 'message', id: 'msg_http', role: 'assistant', status: 'completed', phase: 'final_answer', content: [{ type: 'output_text', text: 'OK' }] };
+  const requests: Record<string, unknown>[] = [];
+  const f = await fixture(t, async (url, init) => {
+    if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'model-one' }] });
+    requests.push(JSON.parse(String(init?.body)));
+    const stream = [{ type: 'response.output_item.done', output_index: 0, item },
+      { type: 'response.completed', response: { status: 'completed', output: [] } }].map(e => `data: ${JSON.stringify(e)}\n\n`).join('');
+    return new Response(encoder.encode(stream));
+  });
+  const first = await events(await f.post(call(f.catalog.generation)));
+  assert.deepEqual(first.map(e => e.kind), ['start', 'delta', 'done']);
+  assert.deepEqual(first[1], { kind: 'delta', requestId: 'request-one', text: 'OK' });
+  const done = first.at(-1); assert.ok(done?.kind === 'done');
+  assert.equal(requests.length, 1);
+  const second = await events(await f.post({ ...call(f.catalog.generation), conversationId: done.conversationId }));
+  assert.equal(second.at(-1)?.kind, 'done'); assert.equal(requests.length, 2);
+  assert.deepEqual((requests[1].input as unknown[])[2], item);
 });
 
 test('canonical contract rejects extra fields/client history, frame mixing, duplicate names, wrong units and bounds', () => {

@@ -12,6 +12,8 @@ export type AccountView = Readonly<{
 }>;
 
 export const PROVIDER_AUTH_URL = 'http://127.0.0.1:3001/auth';
+/** Official SIWC UI/UX guidelines: ChatGPT usage settings (not API billing). */
+export const PROVIDER_USAGE_URL = 'https://chatgpt.com/settings/usage';
 export function canonicalWorkspace(origin: string): boolean {
   try {
     const url = new URL(origin);
@@ -37,12 +39,22 @@ export function validateProviderStatus(value: unknown): ProviderStatus {
   return Object.freeze({ mode: mode as ProviderMode, authenticated, ready, planUsageEnabled });
 }
 
+/** Labels describe the sanitized local connection, never account identity or inference success. */
+export function accountHeader(view: AccountView): string {
+  if (view.phase === 'loading') return 'Checking connection…';
+  if (view.phase === 'logging-out') return 'Disconnecting…';
+  if (view.phase === 'unavailable' || !view.status) return 'Connection unavailable';
+  if (view.status.mode === 'disabled') return 'Not connected';
+  if (view.status.mode === 'api-key') return view.status.ready ? 'API key configured' : 'API key not configured';
+  return view.status.authenticated ? 'ChatGPT connected' : 'ChatGPT disconnected';
+}
+
 export function accountDescription(status: ProviderStatus): string {
   if (status.mode === 'disabled') return 'Provider authentication is disabled.';
   if (status.mode === 'api-key') return status.ready ? 'API key configured on the server. Not validated with OpenAI.' : 'API key is not configured or was cleared from server runtime.';
   if (!status.authenticated) return 'ChatGPT · signed out.';
   if (!status.planUsageEnabled) return 'ChatGPT identity signed in; ChatGPT plan usage permission was not granted.';
-  return status.ready ? 'ChatGPT credentials ready.' : 'ChatGPT signed in, but credentials are not ready. Reauthorize in the backend utility.';
+  return status.ready ? 'ChatGPT connected. ChatGPT plan usage is enabled for eligible requests.' : 'ChatGPT signed in and plan usage permission granted, but credentials are not ready. Reauthorize in the backend utility.';
 }
 
 /** All requests are same-origin, redirect-denied and bounded, including body reads. */

@@ -33,12 +33,12 @@ function fixture(turn?: (r: ModelTurnRequest, init: RequestInit) => Response | P
 }
 async function ready(f: ReturnType<typeof fixture>) { await f.client.refreshModels(); f.client.selectModel('fixture-model'); }
 
-test('model catalog and inference require distinct explicit user actions; no automatic model selection or inference', async () => {
+test('catalog discovery selects the first model but inference still requires an explicit send', async () => {
   const f = fixture(); assert.equal(f.calls.length, 0); assert.equal(await f.client.send('hello'), false);
   await f.client.refreshModels(); assert.deepEqual(f.calls.map(c => c.path), ['/chat/models']);
-  assert.equal(f.client.view.model, ''); assert.equal(await f.client.send('hello'), false);
-  f.client.selectModel('unconfigured-model'); assert.equal(f.client.view.model, '');
-  f.client.selectModel('fixture-model'); assert.equal(f.calls.length, 1); assert.equal(await f.client.send('hello'), true);
+  assert.equal(f.client.view.model, 'fixture-model'); assert.equal(f.client.view.messages.length, 0);
+  f.client.selectModel('unconfigured-model'); assert.equal(f.client.view.model, 'fixture-model');
+  assert.equal(f.calls.length, 1); assert.equal(await f.client.send('hello'), true);
   assert.equal(f.client.view.phase, 'completed'); f.client.dispose();
 });
 
@@ -172,8 +172,14 @@ test('scene/model/account/new-chat/dispose changes cancel and suppress late in-f
     if (change === 'new') f.client.newChat();
     if (change === 'dispose') f.client.dispose();
     await pending; await delay(); assert.equal(c.cancelled, true); assert.ok(!f.views.slice(before).some(v => v.phase === 'completed'));
-    if (change !== 'dispose') assert.equal(f.client.view.messages.length, 0);
-    if (change === 'account') { assert.equal(f.client.view.catalog, undefined); assert.equal(f.client.view.model, ''); }
+    if (change === 'new') { assert.equal(f.client.view.messages.length, 0); assert.equal(f.client.view.historyNotice, undefined); }
+    if (change === 'scene' || change === 'model' || change === 'account') {
+      assert.equal(f.client.view.messages.length, 2); assert.equal(f.client.view.messages[1]!.text, events(r)[1]!.text);
+      assert.equal(f.client.view.messages[1]!.state, 'incomplete'); assert.equal(f.client.view.messages[1]!.failureCode, 'cancelled-new-conversation-required');
+      assert.match(f.client.view.historyNotice!, /reference only, not sent to the model/);
+      assert.equal(f.client.view.phase, 'idle');
+    }
+    if (change === 'account') { assert.equal(f.client.view.catalog, undefined); assert.equal(f.client.view.model, ''); assert.equal(await f.client.send('blocked'), false); }
     f.client.dispose();
   });
 });
@@ -183,13 +189,35 @@ test('a late turn response from fetch ignoring abort cannot revive cancelled his
   const f = fixture(() => new Promise<Response>(r => resolve = r)); await ready(f);
   const pending = f.client.send('hello'); await delay(); f.client.accountChanged(); await pending;
   const c = controlled(); resolve(c.response); await delay();
-  assert.equal(c.cancelled, true); assert.equal(f.client.view.messages.length, 0); assert.equal(f.client.view.phase, 'idle'); f.client.dispose();
+  assert.equal(c.cancelled, true); assert.equal(f.client.view.messages.length, 2); assert.equal(f.client.view.messages[1]!.state, 'incomplete');
+  assert.equal(f.client.view.messages[1]!.text, ''); assert.match(f.client.view.historyNotice!, /Account connection changed/);
+  assert.equal(f.client.view.phase, 'idle'); f.client.dispose();
 });
 
-test('same scene is stable, while scene and model changes drop conversation handle and prior history', async () => {
-  const f = fixture(); await ready(f); await f.client.send('first'); f.client.bind(JSON.parse(JSON.stringify(scene))); assert.equal(f.client.view.messages.length, 2);
-  f.client.bind({ ...scene, mode: 'pole' }); assert.equal(f.client.view.messages.length, 0); await f.client.send('new-scene'); assert.equal(JSON.parse(f.calls.at(-1)!.init.body as string).conversationId, null);
-  f.client.selectModel('other-model'); assert.equal(f.client.view.messages.length, 0); await f.client.send('new-model'); assert.equal(JSON.parse(f.calls.at(-1)!.init.body as string).conversationId, null); f.client.dispose();
+test('same scene/model are stable; changed scene/model/account retain display history but drop the server handle; New chat clears', async () => {
+  const f = fixture();
+  try {
+    await ready(f); await f.client.send('first'); const initial = f.client.view;
+    f.client.bind(JSON.parse(JSON.stringify(scene))); f.client.selectModel('fixture-model'); assert.equal(f.client.view, initial);
+    await f.client.send('same-context'); assert.equal(JSON.parse(f.calls.at(-1)!.init.body as string).conversationId, 'conversation-fixture');
+    for (const change of ['scene', 'model', 'account'] as const) {
+      const messages = f.client.view.messages;
+      if (change === 'scene') f.client.bind({ ...scene, mode: 'pole' });
+      if (change === 'model') f.client.selectModel('other-model');
+      if (change === 'account') { f.client.accountChanged(); await f.client.refreshModels(); }
+      assert.deepEqual(f.client.view.messages, messages); assert.ok(f.client.view.messages.every(m => m.state === 'complete'));
+      assert.match(f.client.view.historyNotice!, /reference only, not sent to the model/);
+      await f.client.send(`new-${change}`); const posted = JSON.parse(f.calls.at(-1)!.init.body as string);
+      assert.equal(posted.conversationId, null); assert.equal(posted.text, `new-${change}`); assert.equal(posted.messages, undefined);
+      await f.client.send(`continue-${change}`);
+      assert.equal(JSON.parse(f.calls.at(-1)!.init.body as string).conversationId, 'conversation-fixture');
+      assert.match(f.client.view.historyNotice!, /Messages from the previous context/);
+      assert.match(f.client.view.historyNotice!, /New messages use the current scene, model and account/);
+      assert.ok(!f.client.view.historyNotice!.includes('on your next Send'));
+    }
+    f.client.newChat(); assert.deepEqual(f.client.view.messages, []); assert.equal(f.client.view.historyNotice, undefined);
+    await f.client.send('new-chat'); assert.equal(JSON.parse(f.calls.at(-1)!.init.body as string).conversationId, null);
+  } finally { f.client.dispose(); }
 });
 
 test('one active request only and history cap requires explicit New chat', async () => {
@@ -198,6 +226,129 @@ test('one active request only and history cap requires explicit New chat', async
   const count = f.calls.length; assert.equal(await f.client.send('over limit'), false); assert.equal(f.calls.length, count); assert.equal(f.client.view.code, 'history-limit-new-chat-required');
   f.client.newChat(); assert.equal(await f.client.send('new'), true); f.client.dispose();
   const c = controlled(), g = fixture(() => c.response); await ready(g); const pending = g.client.send('first'); await delay(); assert.equal(await g.client.send('second'), false); assert.equal(g.calls.length, 2); g.client.cancel(); await pending; g.client.dispose();
+});
+
+function revalidationFixture() {
+  let discover: () => Response | Promise<Response> = () => json(catalog);
+  let turn: (r: ModelTurnRequest) => Response | Promise<Response> = r => stream(ndjson(events(r)));
+  const turns: ModelTurnRequest[] = [], catalogSignals: AbortSignal[] = [];
+  const client = new ModelChatController(() => {}, async (path, init) => {
+    if (path === '/chat/models') { catalogSignals.push(init!.signal as AbortSignal); return discover(); }
+    assert.equal(path, '/chat/turn'); const request = JSON.parse(init!.body as string) as ModelTurnRequest;
+    turns.push(request); return turn(request);
+  }, 1000, 1000);
+  client.bind(scene);
+  return { client, turns, catalogSignals,
+    catalog(value: ModelCatalog) { discover = () => json(value); },
+    deferCatalog() { let resolve!: (response: Response) => void; const response = new Promise<Response>(r => resolve = r); discover = () => response; return resolve; },
+    failCatalog() { discover = () => { throw new Error('PRIVATE PROVIDER ERROR'); }; },
+    streamTurn(value: ReturnType<typeof controlled>) { turn = () => value.response; },
+    completeTurns() { turn = r => stream(ndjson(events(r))); } };
+}
+
+test('unchanged focus catalog refresh preserves selected model, display history and the continuation handle', async () => {
+  const f = revalidationFixture();
+  try {
+    await f.client.refreshModels(); f.client.selectModel('other-model'); await f.client.send('first');
+    const before = f.client.view;
+    const resolve = f.deferCatalog(), pending = f.client.refreshModels();
+    assert.equal(f.client.view.catalogPhase, 'loading'); assert.equal(await f.client.send('blocked during discovery'), false);
+    assert.deepEqual(f.client.view.messages, before.messages); assert.equal(f.client.view.model, 'other-model');
+    // Discovery order/labels may change without invalidating an available user choice.
+    resolve(json({ ...catalog, models: [...catalog.models].reverse().map(m => ({ ...m, label: `${m.label} updated` })) })); await pending;
+    assert.equal(f.client.view.catalogPhase, 'ready'); assert.equal(f.client.view.model, 'other-model');
+    assert.equal(f.client.view.messages, before.messages); assert.equal(f.client.view.phase, 'completed');
+    assert.equal(f.client.view.historyNotice, undefined); assert.equal(f.turns.length, 1);
+    await f.client.send('explicit continuation'); assert.equal(f.turns[1]!.conversationId, 'conversation-fixture'); assert.equal(f.turns[1]!.model, 'other-model');
+  } finally { f.client.dispose(); }
+});
+
+test('unchanged focus revalidation during streaming does not abort, relabel or lose streamed output', async () => {
+  const f = revalidationFixture(), c = controlled();
+  try {
+    await f.client.refreshModels(); f.streamTurn(c); const turn = f.client.send('first'); await delay();
+    const r = f.turns[0]!; c.push(ndjson(events(r).slice(0, 2))); await delay(); const messages = f.client.view.messages;
+    const resolve = f.deferCatalog(), refresh = f.client.refreshModels();
+    assert.equal(f.client.view.phase, 'streaming'); assert.equal(await f.client.send('blocked'), false);
+    resolve(json(catalog)); await refresh;
+    assert.equal(c.cancelled, false); assert.equal(f.client.view.messages, messages); assert.equal(f.client.view.phase, 'streaming');
+    assert.equal(f.client.view.historyNotice, undefined); assert.equal(f.turns.length, 1);
+    c.push(ndjson([events(r)[2]])); c.close(); await turn;
+    assert.equal(f.client.view.phase, 'completed'); assert.equal(f.client.view.messages[1]!.state, 'complete');
+    assert.equal(f.client.view.messages[1]!.text, events(r)[1]!.text);
+    f.completeTurns(); await f.client.send('continue'); assert.equal(f.turns[1]!.conversationId, 'conversation-fixture');
+  } finally { f.client.dispose(); }
+});
+
+test('generation/mode changes and removed models cancel stale streams, retain incomplete display history and reset the handle', async t => {
+  for (const change of ['generation', 'mode', 'removed', 'unready', 'empty'] as const) await t.test(change, async () => {
+    const f = revalidationFixture(), c = controlled();
+    try {
+      await f.client.refreshModels(); f.client.selectModel('other-model'); await f.client.send('completed');
+      f.streamTurn(c); const pending = f.client.send('streaming'); await delay(); const r = f.turns[1]!;
+      c.push(ndjson(events(r).slice(0, 2))); await delay();
+      const next: ModelCatalog = change === 'generation' ? { ...catalog, generation: 'account-generation-two' } :
+        change === 'mode' ? { ...catalog, mode: 'api-key' } :
+        change === 'removed' ? { ...catalog, models: [catalog.models[0]!] } :
+        change === 'unready' ? { ...catalog, ready: false, code: 'reauthorize', models: [] } : { ...catalog, models: [] };
+      f.catalog(next); await f.client.refreshModels(); await pending;
+      assert.equal(c.cancelled, true); assert.equal(f.client.view.phase, 'idle'); assert.equal(f.turns.length, 2);
+      assert.equal(f.client.view.messages.length, 4); assert.equal(f.client.view.messages[1]!.state, 'complete');
+      assert.equal(f.client.view.messages[3]!.state, 'incomplete'); assert.equal(f.client.view.messages[3]!.text, events(r)[1]!.text);
+      assert.match(f.client.view.historyNotice!, /reference only, not sent to the model/);
+      assert.equal(f.client.view.model, change === 'removed' ? 'fixture-model' : change === 'empty' || change === 'unready' ? '' : 'other-model');
+      if (change === 'empty' || change === 'unready') {
+        assert.equal(await f.client.send('blocked'), false); f.catalog(catalog); await f.client.refreshModels();
+      }
+      f.completeTurns(); await f.client.send('new context');
+      assert.equal(f.turns[2]!.conversationId, null); assert.equal(f.turns[2]!.generation, f.client.view.catalog!.generation);
+      assert.equal(f.turns[2]!.model, f.client.view.model); assert.equal(f.client.view.messages.length, 6);
+    } finally { f.client.dispose(); }
+  });
+});
+
+test('catalog errors fail closed even with a previously ready catalog, retain history and require explicit recovery', async () => {
+  const f = revalidationFixture();
+  try {
+    await f.client.refreshModels(); await f.client.send('first'); const history = f.client.view.messages;
+    f.failCatalog(); await f.client.refreshModels();
+    assert.equal(f.client.view.catalogPhase, 'error'); assert.equal(await f.client.send('blocked'), false);
+    assert.deepEqual(f.client.view.messages, history); assert.match(f.client.view.historyNotice!, /readiness could not be verified/);
+    assert.ok(!JSON.stringify(f.client.view).includes('PRIVATE')); assert.equal(f.turns.length, 1);
+    f.catalog(catalog); await f.client.refreshModels(); assert.equal(f.turns.length, 1);
+    await f.client.send('explicit recovery'); assert.equal(f.turns[1]!.conversationId, null);
+  } finally { f.client.dispose(); }
+});
+
+test('superseded catalogs ignoring abort cannot overwrite newer selection/history or cancel a live stream', async t => {
+  for (const late of ['ready', 'invalid'] as const) await t.test(late, async () => {
+    const f = revalidationFixture(), c = controlled();
+    try {
+      await f.client.refreshModels(); f.client.selectModel('other-model'); await f.client.send('first');
+      f.streamTurn(c); const turn = f.client.send('second'); await delay();
+      const resolve = f.deferCatalog(), obsolete = f.client.refreshModels();
+      f.catalog(catalog); await f.client.refreshModels(); await obsolete;
+      assert.equal(f.catalogSignals.at(-2)!.aborted, true); const current = f.client.view;
+      resolve(late === 'ready' ? json({ ...catalog, generation: 'obsolete-generation', models: [catalog.models[0]!] }) : json({ secret: 'PRIVATE' }));
+      await delay(); assert.equal(f.client.view, current); assert.equal(c.cancelled, false);
+      c.push(ndjson(events(f.turns[1]!))); c.close(); await turn;
+      assert.equal(f.client.view.phase, 'completed'); assert.equal(f.client.view.model, 'other-model');
+      f.completeTurns(); await f.client.send('continue'); assert.equal(f.turns[2]!.conversationId, 'conversation-fixture');
+    } finally { f.client.dispose(); }
+  });
+});
+
+test('account notification invalidates a pending catalog immediately and ignores its late result', async () => {
+  const f = revalidationFixture();
+  try {
+    await f.client.refreshModels(); await f.client.send('first'); const history = f.client.view.messages;
+    const resolve = f.deferCatalog(), pending = f.client.refreshModels(); f.client.accountChanged(); await pending;
+    assert.equal(f.catalogSignals.at(-1)!.aborted, true); assert.equal(f.client.view.catalogPhase, 'idle');
+    assert.equal(f.client.view.catalog, undefined); assert.equal(f.client.view.model, ''); assert.equal(await f.client.send('blocked'), false);
+    f.catalog({ ...catalog, generation: 'new-account-generation' }); await f.client.refreshModels(); const current = f.client.view;
+    resolve(json(catalog)); await delay(); assert.equal(f.client.view, current); assert.deepEqual(f.client.view.messages, history);
+    await f.client.send('new account'); assert.equal(f.turns[1]!.conversationId, null); assert.equal(f.turns[1]!.generation, 'new-account-generation');
+  } finally { f.client.dispose(); }
 });
 
 const formatCodes = ['provider-format-json', 'provider-format-html', 'provider-format-text', 'provider-format-missing', 'provider-format-other'] as const;

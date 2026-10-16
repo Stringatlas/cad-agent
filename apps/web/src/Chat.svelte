@@ -32,7 +32,7 @@
     <span class="intro-icon" aria-hidden="true">◇</span>
     <h3>Start with a point of view.</h3>
     <p>Pin points in the scene, then describe what you want to build or inspect.</p>
-    <p class="honesty">Refresh models and choose one to chat using explicit scene references. The model can inspect bound context, but cannot build channels or change geometry.</p>
+    <p class="honesty">Models load automatically; choose a different model anytime before sending with explicit scene references. The model can inspect bound context, but cannot build channels or change geometry.</p>
   </div>
   <section class="attachments" data-testid="draft-attachments" aria-label="Toronto3D draft attachments">
     <div class="section-heading"><strong>Scene references</strong><span>{activePoints.length}/2 attached</span></div>
