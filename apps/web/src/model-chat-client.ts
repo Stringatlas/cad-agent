@@ -1,0 +1,273 @@
+import { MODEL_CHAT_LIMITS, canonicalModelScene, canonicalModelTurnRequest, canonicalModelCatalog, canonicalModelChatEvent,
+  canonicalSceneContextRequest, canonicalProtocolJson, freezeProtocolValue, protocolKeys, protocolRecord, protocolToken,
+  type ModelCatalog, type ModelScene, type ModelTurnRequest, type ModelChatEvent, type ProjectSnapshot } from '@spatial/contracts';
+import type { TorontoDraftPoint } from './draft-context';
+import type { ProjectView } from './project-client';
+
+export const MODEL_CLIENT_LIMITS = Object.freeze({ catalogBytes: 1024 * 1024, streamBytes: MODEL_CHAT_LIMITS.providerBytes,
+  frameBytes: MODEL_CHAT_LIMITS.frameBytes, outputChars: MODEL_CHAT_LIMITS.outputChars, textChars: MODEL_CHAT_LIMITS.textChars, requestBytes: MODEL_CHAT_LIMITS.requestBytes,
+  deadlineMs: MODEL_CHAT_LIMITS.deadlineMs, catalogDeadlineMs: 15000, maxModels: MODEL_CHAT_LIMITS.models,
+  maxTurns: MODEL_CHAT_LIMITS.turns, maxTools: MODEL_CHAT_LIMITS.toolCalls, historyBytes: MODEL_CHAT_LIMITS.historyBytes });
+const encoder = new TextEncoder();
+const token = (value: unknown) => { protocolToken(value); return value; };
+const safeCode = (value: unknown): string => {
+  if (typeof value !== 'string' || !/^[a-z][a-z0-9-]{0,79}$/.test(value)) throw new Error('Invalid error code');
+  return value;
+};
+function modelId(value: unknown): string {
+  if (typeof value !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,255}$/.test(value)) throw new Error('Invalid model');
+  return value;
+}
+/** Only references from the visible scene enter a turn; hidden-mode retained pins never leak. */
+export function modelScene(mode: string, snapshot: ProjectSnapshot | undefined,
+  view: Pick<ProjectView, 'selectedId' | 'points' | 'needsRefresh'>, points: readonly TorontoDraftPoint[]): ModelScene {
+  if (mode !== 'demo' && mode !== 'toronto' && mode !== 'pole') throw new Error('Unknown scene');
+  const project = snapshot && !view.needsRefresh ? canonicalSceneContextRequest({ sessionId: snapshot.sessionId,
+    projectRevision: snapshot.project.revision, frameId: snapshot.frameId, units: snapshot.project.coordinates.units,
+    entityIds: mode === 'demo' && view.selectedId ? [view.selectedId] : [], points: mode === 'demo' ? view.points : [] }) : null;
+  return freezeProtocolValue(canonicalModelScene({ mode, project, toronto: mode === 'toronto' ? points : [] }));
+}
+export function validateModelCatalog(value: unknown): ModelCatalog {
+  const r = protocolRecord(canonicalModelCatalog(value)); protocolKeys(r, ['mode', 'ready', 'code', 'generation', 'models']);
+  if (!['disabled', 'api-key', 'chatgpt'].includes(String(r.mode)) || typeof r.ready !== 'boolean' ||
+    !Array.isArray(r.models) || r.models.length > MODEL_CLIENT_LIMITS.maxModels) throw new Error('Invalid catalog');
+  token(r.generation); safeCode(r.code);
+  const models = r.models.map(value => {
+    const m = protocolRecord(value); protocolKeys(m, ['id', 'label']); modelId(m.id);
+    if (typeof m.label !== 'string' || !m.label.length || m.label.length > 256 || /[\u0000-\u001f\u007f]/.test(m.label)) throw new Error('Invalid model label');
+    return { id: m.id as string, label: m.label };
+  });
+  if (new Set(models.map(m => m.id)).size !== models.length || (!r.ready && models.length) || (r.mode === 'disabled' && r.ready)) throw new Error('Invalid catalog readiness');
+  return freezeProtocolValue({ ...r, models }) as unknown as ModelCatalog;
+}
+/** Exact downstream envelope validation; tool data is bounded inert JSON, never markup or executable calls. */
+export function validateModelEvent(value: unknown, request: ModelTurnRequest): ModelChatEvent {
+  const r = protocolRecord(canonicalModelChatEvent(value));
+  const keys: Record<string, string[]> = { start: ['conversationId', 'model'], delta: ['text'], tool: ['name', 'context'], done: ['conversationId'], error: ['code'] };
+  if (typeof r.kind !== 'string' || !Object.hasOwn(keys, r.kind)) throw new Error('Unknown event');
+  protocolKeys(r, ['kind', 'requestId', ...keys[r.kind]!]);
+  if (r.requestId !== request.requestId) throw new Error('Wrong request identity');
+  if (r.kind === 'start' || r.kind === 'done') token(r.conversationId);
+  if (r.kind === 'start' && (r.model !== request.model || (request.conversationId !== null && r.conversationId !== request.conversationId))) throw new Error('Wrong conversation/model');
+  if (r.kind === 'delta' && (typeof r.text !== 'string' || !r.text.length || r.text.length > MODEL_CLIENT_LIMITS.outputChars)) throw new Error('Invalid text delta');
+  if (r.kind === 'tool') {
+    if (r.name !== 'inspect_scene') throw new Error('Unsupported tool');
+    canonicalProtocolJson(r.context, { maxDepth: 12, maxNodes: 4096, maxArrayLength: 256, maxStringLength: 12000 });
+  }
+  if (r.kind === 'error') safeCode(r.code);
+  return freezeProtocolValue(r) as unknown as ModelChatEvent;
+}
+function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(new Error('Cancelled'));
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) abort();
+    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+  });
+}
+async function readBody(response: Response, signal: AbortSignal, max: number, chunk: (bytes: Uint8Array) => void): Promise<void> {
+  if (!response.body) throw new Error('Missing body');
+  const reader = response.body.getReader(); let total = 0;
+  const cancel = () => { void reader.cancel().catch(() => {}); };
+  signal.addEventListener('abort', cancel, { once: true });
+  try {
+    while (true) {
+      signal.throwIfAborted(); const { done, value } = await abortable(reader.read(), signal);
+      signal.throwIfAborted(); if (done) return;
+      total += value.byteLength; if (total > max) throw new Error('Response budget'); chunk(value);
+    }
+  } finally {
+    signal.removeEventListener('abort', cancel); cancel();
+    // A hostile injected transport can leave read/cancel pending. Do not await it or block cancellation.
+    try { reader.releaseLock(); } catch { /* read still pending; stale gates own publication */ }
+  }
+}
+async function fetchResponse(fetcher: typeof fetch, path: string, init: RequestInit, signal: AbortSignal): Promise<Response> {
+  const pending = fetcher(path, { ...init, signal, credentials: 'same-origin', cache: 'no-store', redirect: 'error' });
+  void pending.then(response => { if (signal.aborted) void response.body?.cancel().catch(() => {}); }, () => {});
+  const response = await abortable(pending, signal); signal.throwIfAborted();
+  if (!response.ok) { void response.body?.cancel().catch(() => {}); throw new Error('Server unavailable'); }
+  return response;
+}
+export async function fetchModelCatalog(signal: AbortSignal, fetcher: typeof fetch = (input, init) => globalThis.fetch(input, init)): Promise<ModelCatalog> {
+  const response = await fetchResponse(fetcher, '/chat/models', { method: 'GET' }, signal);
+  const decoder = new TextDecoder('utf-8', { fatal: true }); let text = '';
+  await readBody(response, signal, MODEL_CLIENT_LIMITS.catalogBytes, bytes => { text += decoder.decode(bytes, { stream: true }); });
+  text += decoder.decode();
+  return validateModelCatalog(JSON.parse(text));
+}
+export async function streamModelTurn(request: ModelTurnRequest, signal: AbortSignal, publish: (event: ModelChatEvent) => void,
+  fetcher: typeof fetch = (input, init) => globalThis.fetch(input, init)): Promise<string> {
+  request = canonicalModelTurnRequest(request);
+  token(request.requestId); token(request.generation); modelId(request.model);
+  if (request.conversationId !== null) token(request.conversationId);
+  if (!request.text.trim() || request.text.length > MODEL_CLIENT_LIMITS.textChars) throw new Error('Text budget');
+  const body = JSON.stringify(request); if (encoder.encode(body).length > MODEL_CLIENT_LIMITS.requestBytes) throw new Error('Request budget');
+  const response = await fetchResponse(fetcher, '/chat/turn', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body }, signal);
+  if (response.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() !== 'application/x-ndjson') { void response.body?.cancel().catch(() => {}); throw new Error('Invalid stream content type'); }
+  const decoder = new TextDecoder('utf-8', { fatal: true }); let buffer = '', frameBytes = 0, output = 0, tools = 0;
+  let started: string | undefined; let terminal: ModelChatEvent | undefined;
+  const accept = (line: string) => {
+    if (!line || terminal) throw new Error('Invalid stream framing');
+    const event = validateModelEvent(JSON.parse(line), request);
+    if (event.kind === 'start') { if (started) throw new Error('Duplicate start'); started = event.conversationId; }
+    else if (event.kind !== 'error' && !started) throw new Error('Missing start');
+    if (event.kind === 'done' && event.conversationId !== started) throw new Error('Wrong terminal identity');
+    if (event.kind === 'delta') { output += event.text.length; if (output > MODEL_CLIENT_LIMITS.outputChars) throw new Error('Output budget'); }
+    if (event.kind === 'tool' && ++tools > MODEL_CLIENT_LIMITS.maxTools) throw new Error('Tool budget');
+    if (event.kind === 'done' || event.kind === 'error') terminal = event;
+    else publish(event);
+  };
+  await readBody(response, signal, MODEL_CLIENT_LIMITS.streamBytes, bytes => {
+    // Bound a frame before decoding/allocating it, including adversarial no-newline streams.
+    for (const byte of bytes) { if (byte === 10) frameBytes = 0; else if (++frameBytes > MODEL_CLIENT_LIMITS.frameBytes) throw new Error('Frame budget'); }
+    buffer += decoder.decode(bytes, { stream: true }); let newline: number;
+    while ((newline = buffer.indexOf('\n')) !== -1) { const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1); accept(line); }
+  });
+  buffer += decoder.decode(); signal.throwIfAborted();
+  if (buffer || !terminal) throw new Error('Missing terminal/EOF');
+  // Completion is intentionally withheld until EOF and all trailing bytes are checked.
+  const final = terminal as ModelChatEvent;
+  if (final.kind !== 'done') throw new ModelTurnFailure(final.kind === 'error' ? final.code : 'invalid-stream');
+  publish(final); return final.conversationId;
+}
+export class ModelTurnFailure extends Error { constructor(readonly code: string) { super('Model turn unavailable'); } }
+export interface ModelFailureDescription { readonly title: string; readonly detail: string; readonly recovery: string; }
+/** Closed UI copy only: header classifications never claim that a provider body or inference was verified. */
+export function modelFailureDescription(code: string | undefined): ModelFailureDescription {
+  const formats: Readonly<Record<string, string>> = {
+    'provider-format-json': 'HTTP 200 headers declared JSON, not the required event stream.',
+    'provider-format-html': 'HTTP 200 headers declared HTML, not the required event stream.',
+    'provider-format-text': 'HTTP 200 headers declared text, not the required event stream.',
+    'provider-format-missing': 'HTTP 200 headers did not declare a response format for the required event stream.',
+    'provider-format-other': 'HTTP 200 headers declared an unsupported response format, not the required event stream.',
+  };
+  if (code && Object.hasOwn(formats, code)) return {
+    title: 'Provider response format rejected',
+    detail: `${formats[code]} No completed answer was accepted; HTTP 200 does not prove inference succeeded.`,
+    recovery: 'Check the configured provider mode and server protocol diagnostics. Resolve the format mismatch before an explicit new send; no automatic retry or fallback was used.',
+  };
+  switch (code) {
+    case 'provider-protocol': return { title: 'Provider stream failed protocol validation',
+      detail: 'The response did not satisfy the required stream protocol. No completed answer was accepted.',
+      recovery: 'Check server protocol diagnostics and provider compatibility before explicitly sending again. No automatic retry or fallback was used.' };
+    case 'usage-limit': case 'plan-usage-unavailable': return { title: 'Provider usage unavailable',
+      detail: 'The provider reported a usage limit or unavailable plan usage.',
+      recovery: 'Check usage and plan availability in Account. Wait for availability; do not repeatedly retry. No paid-provider fallback was used.' };
+    case 'reauthorize': case 'credential-unavailable': case 'stale-account': return { title: 'Provider authorization unavailable',
+      detail: 'The configured account authorization is unavailable or no longer current.',
+      recovery: 'Check Account and sign in again if required, then explicitly refresh models and select a model before sending.' };
+    case 'permission-denied': case 'plan-permission-required': case 'plan-user-not-eligible': return { title: 'Provider access not authorized',
+      detail: 'The configured account does not currently have the required permission or plan eligibility.',
+      recovery: 'Check Account permissions and eligibility before refreshing models. Repeated sends will not resolve an access restriction.' };
+    case 'provider-incomplete': return { title: 'Provider reported an incomplete response',
+      detail: 'The provider did not finish this answer. Any partial text is not a completed result.',
+      recovery: 'Check provider availability and request limits before explicitly sending a new request.' };
+    case 'interrupted-stream': case 'invalid-or-unavailable-stream': return { title: 'Model response interrupted or unavailable',
+      detail: 'A valid response ending and clean EOF were not received. No completed answer was accepted.',
+      recovery: 'Check server connectivity and protocol diagnostics before explicitly sending a new request. No automatic retry was made.' };
+    case 'deadline-incomplete': return { title: 'Model response deadline exceeded',
+      detail: 'The request timed out before a valid stream ending and EOF could be accepted.',
+      recovery: 'Check provider availability and server diagnostics before an explicit new send. No automatic retry was made.' };
+    case 'cancelled-new-conversation-required': case 'cancelled': return { title: 'Model request cancelled',
+      detail: 'The request was stopped. Any partial text is incomplete.',
+      recovery: 'Send again only when ready; the next send starts a new server conversation.' };
+    case 'history-limit-new-chat-required': case 'history-limit': return { title: 'Conversation history limit reached',
+      detail: 'This request could not finish within the conversation history budget.',
+      recovery: 'Choose New chat before sending again. If server history capacity is full, wait for its idle expiry.' };
+    case 'provider-unavailable': return { title: 'Configured provider unavailable',
+      detail: 'The configured provider could not complete this request.',
+      recovery: 'Check provider availability and server connectivity before an explicit new send. No automatic retry or fallback was used.' };
+    default: return { title: 'Model request failed',
+      detail: 'No completed answer was accepted. Further failure details are unavailable.',
+      recovery: 'Check Account, server connectivity and safe server diagnostics before explicitly sending again. No automatic retry or fallback was used.' };
+  }
+}
+export interface ModelMessage {
+  readonly role: 'user' | 'assistant'; readonly text: string; readonly state: 'complete' | 'streaming' | 'incomplete';
+  readonly tools: readonly unknown[]; readonly failureCode?: string;
+}
+export interface ModelChatView {
+  readonly catalogPhase: 'idle' | 'loading' | 'ready' | 'error'; readonly catalog?: ModelCatalog; readonly model: string;
+  readonly phase: 'idle' | 'streaming' | 'completed' | 'error' | 'cancelled'; readonly code: string; readonly messages: readonly ModelMessage[];
+}
+/** Volatile conversation handles only. No assistant history, credentials, or tools are sent by this client. */
+export class ModelChatController {
+  view: ModelChatView = { catalogPhase: 'idle', model: '', phase: 'idle', code: 'refresh-models', messages: [] };
+  private scene?: ModelScene; private sceneKey = ''; private conversationId: string | null = null;
+  private sequence = 0; private generation = 0; private active?: AbortController; private disposed = false;
+  constructor(private publish: (view: ModelChatView) => void,
+    private fetcher: typeof fetch = (input, init) => globalThis.fetch(input, init),
+    private deadlineMs: number = MODEL_CLIENT_LIMITS.deadlineMs, private catalogDeadlineMs: number = MODEL_CLIENT_LIMITS.catalogDeadlineMs) {}
+  private set(patch: Partial<ModelChatView>) { this.view = freezeProtocolValue({ ...this.view, ...patch }); if (!this.disposed) this.publish(this.view); }
+  private invalidate() { ++this.generation; this.active?.abort(); this.active = undefined; }
+  bind(scene: ModelScene) {
+    const key = canonicalProtocolJson(canonicalModelScene(scene));
+    if (this.sceneKey === key) return;
+    this.invalidate(); this.scene = freezeProtocolValue(JSON.parse(key) as ModelScene); this.sceneKey = key; this.conversationId = null;
+    this.set({ phase: 'idle', messages: [], code: 'scene-context-reset', ...(this.view.catalogPhase === 'loading' ? { catalogPhase: 'idle' as const } : {}) });
+  }
+  /** Called on account lifecycle notification or return from another tab; never fetches automatically. */
+  accountChanged() { this.invalidate(); this.conversationId = null; this.set({ catalogPhase: 'idle', catalog: undefined, model: '', messages: [], phase: 'idle', code: 'refresh-models' }); }
+  newChat() { this.invalidate(); this.conversationId = null; this.set({ messages: [], phase: 'idle', code: 'new-chat', ...(this.view.catalogPhase === 'loading' ? { catalogPhase: 'idle' as const } : {}) }); }
+  selectModel(model: string) {
+    if (!this.view.catalog?.ready || (model !== '' && !this.view.catalog.models.some(m => m.id === model))) return;
+    if (model === this.view.model) return;
+    this.invalidate(); this.conversationId = null; this.set({ model, messages: [], phase: 'idle', code: 'model-changed' });
+  }
+  cancel() {
+    if (!this.active) return; this.invalidate(); this.conversationId = null;
+    this.set({ phase: 'cancelled', code: 'cancelled-new-conversation-required',
+      catalogPhase: this.view.catalogPhase === 'loading' ? 'idle' : this.view.catalogPhase,
+      messages: this.view.messages.map(m => m.state === 'streaming' ? { ...m, state: 'incomplete', failureCode: 'cancelled-new-conversation-required' } : m) });
+  }
+  dispose() { this.disposed = true; this.invalidate(); }
+  async refreshModels() {
+    if (this.disposed) return; this.invalidate(); this.conversationId = null;
+    const currentGeneration = this.generation, controller = this.active = new AbortController();
+    this.set({ catalogPhase: 'loading', catalog: undefined, model: '', phase: 'idle', messages: [], code: 'loading-models' });
+    const timer = setTimeout(() => controller.abort(), this.catalogDeadlineMs);
+    try {
+      const catalog = await fetchModelCatalog(controller.signal, this.fetcher);
+      if (this.disposed || currentGeneration !== this.generation) return;
+      this.set({ catalogPhase: 'ready', catalog, code: catalog.code });
+    } catch { if (!this.disposed && currentGeneration === this.generation) this.set({ catalogPhase: 'error', code: 'catalog-unavailable' }); }
+    finally { clearTimeout(timer); if (currentGeneration === this.generation) this.active = undefined; }
+  }
+  async send(text: string): Promise<boolean> {
+    const { catalog, model, messages } = this.view;
+    if (this.disposed || this.active || !this.scene || !catalog?.ready || !model || !text.trim() || text.length > MODEL_CLIENT_LIMITS.textChars) return false;
+    if (messages.filter(m => m.role === 'user').length >= MODEL_CLIENT_LIMITS.maxTurns ||
+      encoder.encode(JSON.stringify(messages)).length + encoder.encode(text).length > MODEL_CLIENT_LIMITS.historyBytes - 65536) {
+      this.set({ code: 'history-limit-new-chat-required' }); return false;
+    }
+    this.invalidate(); const currentGeneration = this.generation, controller = this.active = new AbortController();
+    const request: ModelTurnRequest = { requestId: `model-${crypto.randomUUID()}-${++this.sequence}`, conversationId: this.conversationId,
+      generation: catalog.generation, model, text, scene: this.scene };
+    const next: ModelMessage[] = [...messages, { role: 'user', text, state: 'complete', tools: [] }, { role: 'assistant', text: '', state: 'streaming', tools: [] }];
+    this.set({ messages: [...next], phase: 'streaming', code: 'waiting-for-model' });
+    const current = () => !this.disposed && currentGeneration === this.generation;
+    const timer = setTimeout(() => controller.abort(), this.deadlineMs);
+    try {
+      const id = await streamModelTurn(request, controller.signal, event => {
+        if (!current() || controller.signal.aborted) return;
+        const last = next[next.length - 1]!;
+        const updated = event.kind === 'delta' ? { ...last, text: last.text + event.text } :
+          event.kind === 'tool' ? { ...last, tools: [...last.tools, event.context] } : last;
+        if (encoder.encode(JSON.stringify([...next.slice(0, -1), updated])).length > MODEL_CLIENT_LIMITS.historyBytes) throw new ModelTurnFailure('history-limit-new-chat-required');
+        next[next.length - 1] = updated;
+        this.set({ messages: [...next], code: event.kind === 'tool' ? 'inspecting-bound-scene' : 'receiving-model-response' });
+      }, this.fetcher);
+      if (!current() || controller.signal.aborted) return true;
+      this.conversationId = id; next[next.length - 1] = { ...next[next.length - 1]!, state: 'complete' };
+      this.set({ messages: [...next], phase: 'completed', code: 'completed' });
+    } catch (error) {
+      if (current()) {
+        const code = controller.signal.aborted ? 'deadline-incomplete' : error instanceof ModelTurnFailure ? error.code : 'invalid-or-unavailable-stream';
+        this.conversationId = null; next[next.length - 1] = { ...next[next.length - 1]!, state: 'incomplete', failureCode: code };
+        this.set({ messages: [...next], phase: 'error', code });
+      }
+    } finally { clearTimeout(timer); if (current()) this.active = undefined; }
+    return true;
+  }
+}

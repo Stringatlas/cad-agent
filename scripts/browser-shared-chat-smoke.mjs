@@ -3,15 +3,16 @@
 // Owns only process groups on :3013/:4176 and one new tab; does not touch the user's :3001 server.
 import { chromium } from 'playwright-core';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createHash } from 'node:crypto';
 
 const directory = process.argv[3] ? resolve(process.argv[3]) : await mkdtemp(join(tmpdir(), 'spatial-task012-browser-'));
 await mkdir(directory, { recursive: true });
+const projectPath = join(await mkdtemp(join(tmpdir(), 'spatial-chat-smoke-project-')), 'project.json');
 const report = { status: 'failed', task: '012', directory, checks: [], messages: [], screenshots: [], responses: [],
   ownership: 'Only new tab and owned 3013/4176 process groups; no browser launch, dataset mutation or server3001 changes.',
   faultScope: 'Cancellation/reload deliberately gate a real completed HTTP response using a fetch wrapper that ignores abort. Server failure stops the owned backend; dataset failure restarts it with a nonexistent fixed operator root.' };
@@ -29,7 +30,7 @@ async function start(name, args, ready) {
 }
 async function startBackend(unavailable = false) {
   return start(unavailable ? 'missing-dataset-backend' : 'backend', ['exec', 'tsx', '-e',
-    `import { createDemoServer } from "./apps/server/src/index.ts"; const server=createDemoServer(${unavailable ? JSON.stringify({ datasetRoot: join(directory, 'nonexistent-dataset') }) : ''}); server.listen(3013,"127.0.0.1",()=>console.log("Owned chat backend ready"));`], 'Owned chat backend ready');
+    `import { createDemoServer } from "./apps/server/src/index.ts"; const server=createDemoServer(${JSON.stringify({ projectPath, ...(unavailable ? { datasetRoot: join(directory, 'nonexistent-dataset') } : {}) })}); server.listen(3013,"127.0.0.1",()=>console.log("Owned chat backend ready"));`], 'Owned chat backend ready');
 }
 async function state(expected) {
   await page.waitForFunction(expected => document.querySelector('[data-testid="chat-result"]')?.getAttribute('data-state') === expected, expected, { timeout: 30_000 });
@@ -38,7 +39,7 @@ async function send(command, expected = 'completed') {
   await page.getByTestId('chat-command').fill(command);
   await page.getByRole('button', { name: 'Send inspection', exact: true }).click(); await state(expected);
 }
-async function screenshot(name) { await page.screenshot({ path: join(directory, name), fullPage: true }); report.screenshots.push(name); }
+async function screenshot(name) { await writeFile(join(directory, name + '.ax.txt'), await page.locator('body').ariaSnapshot()); await page.screenshot({ path: join(directory, name), fullPage: true }); report.screenshots.push(name); }
 async function gate() {
   await page.evaluate(() => {
     const original = window.fetch;
@@ -65,7 +66,7 @@ try {
   const context = browser.contexts()[0]; assert.ok(context, 'Existing Chrome context required');
   backend = await startBackend();
   await start('preview', ['--dir', 'apps/web', 'exec', 'node', '--input-type=module', '-e',
-    'import { preview } from "vite"; const server=await preview({preview:{host:"127.0.0.1",port:4176,strictPort:true,proxy:Object.fromEntries(["/datasets/","/project","/chat/"].map(path=>[path,{target:"http://127.0.0.1:3013"}]))}}); server.printUrls();'], 'http://127.0.0.1:4176');
+    'import { preview } from "vite"; const server=await preview({preview:{host:"127.0.0.1",port:4176,strictPort:true,proxy:Object.fromEntries(["/datasets/","/project","/chat/","^/auth/status$","^/auth/logout$"].map(path=>[path,{target:"http://127.0.0.1:3013",changeOrigin:path.startsWith("^/auth/")}]))}}); server.printUrls();'], 'http://127.0.0.1:4176');
   page = await context.newPage(); await page.setViewportSize({ width: 1440, height: 1000 });
   page.on('console', m => report.messages.push({ phase, type: m.type(), text: m.text() }));
   page.on('pageerror', e => report.messages.push({ phase, type: 'pageerror', text: String(e) }));
@@ -74,8 +75,14 @@ try {
     try { report.responses.push({ status: response.status(), request: response.request().postDataJSON(), response: await response.json() }); } catch {}
   });
   await page.goto('http://127.0.0.1:4176/?smoke=1');
+  await page.getByRole('button', { name: 'Synthetic demo', exact: true }).click();
   const viewer = page.getByTestId('viewer'), chat = page.getByTestId('chat');
   await page.waitForSelector('[data-testid="viewer"][data-ready="true"]');
+  await page.getByTestId('synthetic-scene-tools').locator(':scope > summary').click();
+  await page.getByTestId('inspection-tools').locator(':scope > summary').click();
+  await page.getByTestId('project-controls').locator(':scope > summary').click();
+  await page.getByTestId('local-draft').fill('Local draft survives unavailable synthetic authority.');
+  await viewer.scrollIntoViewIfNeeded();
   const projectResponse = await page.request.get('http://127.0.0.1:4176/project');
   assert.ok(projectResponse.ok()); const project = await projectResponse.json();
   const sessionId = projectResponse.headers()['x-spatial-session'], frame = projectResponse.headers()['x-spatial-frame'];
@@ -93,6 +100,7 @@ try {
     assert.equal(await page.getByRole('button', { name: new RegExp(id) }).getAttribute('aria-pressed'), 'true');
   }
   await page.getByRole('button', { name: 'Clear selection', exact: true }).click();
+  await viewer.scrollIntoViewIfNeeded();
   const targets = await viewer.getAttribute('data-targets'), box = await viewer.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down();
   await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2 + 25, { steps: 8 }); await page.mouse.up();
@@ -129,7 +137,9 @@ try {
   await gate(); await page.getByRole('button', { name: 'Cancel inspection', exact: true }).click(); await state('cancelled'); await release(); await state('cancelled');
   assert.equal(await page.getByTestId('chat-evidence').count(), 0); report.checks.push('Pending → cancelled; late actual reply cannot publish, even when loader ignores abort');
   await gate(); await page.getByRole('button', { name: 'Reload shared project', exact: true }).click();
-  await page.waitForSelector('[data-testid="viewer"][data-ready="true"]'); await release();
+  await page.waitForSelector('[data-testid="viewer"][data-ready="true"]');
+  await page.getByTestId('synthetic-scene-tools').locator(':scope > summary').click();
+  await release();
   assert.equal(await page.getByTestId('chat-result').count(), 0); await send('metadata');
   report.checks.push('Project reload disposes chat/controller/viewer; late reply suppressed; fresh generation works');
   assert.deepEqual(await (await page.request.get('http://127.0.0.1:4176/project')).json(), project, 'Inspection/picking/camera never mutate authoritative geometry');
@@ -143,8 +153,17 @@ try {
   for (let i = 0; i < 50; i++) { try { await fetch('http://127.0.0.1:3013/health'); await delay(100); } catch { break; } }
   await send('metadata', 'error'); assert.match(await page.getByTestId('chat-result').innerText(), /server-unavailable-or-invalid-response/);
   await page.getByRole('button', { name: 'Reload shared project', exact: true }).click(); await page.getByTestId('project-error').waitFor();
-  assert.equal(await page.getByTestId('viewer').count(), 0); assert.equal(await page.getByTestId('chat').count(), 0);
-  await screenshot('server-unavailable.png'); report.checks.push('Actual owned-server shutdown gives chat error and project unavailable; no independent seed/fallback');
+  // Task017 intentionally retains LOCAL drafting without synthetic authority. Prove
+  // absence of fallback geometry/binding/tools, not absence of the draft container.
+  assert.equal(await page.getByTestId('viewer').count(), 0);
+  assert.equal(await page.getByTestId('chat').count(), 1);
+  assert.equal(await page.getByTestId('local-draft').inputValue(), 'Local draft survives unavailable synthetic authority.');
+  for (const id of ['chat-project-binding', 'chat-command', 'chat-context', 'approved-box-tools', 'chat-evidence']) assert.equal(await page.getByTestId(id).count(), 0, `No synthetic authority/tool fallback: ${id}`);
+  assert.equal(await page.getByTestId('project-save').isDisabled(), true);
+  assert.equal(await page.getByTestId('project-load').isDisabled(), true);
+  assert.match(await page.locator('.scene-source').innerText(), /Synthetic project unavailable.*no local fallback/i);
+  assert.match(await chat.innerText(), /Authoritative project unavailable/);
+  await screenshot('server-unavailable.png'); report.checks.push('Actual owned-server shutdown gives chat error and project unavailable; no independent seed/binding/technical-tool fallback; separate local draft retained with writes disabled');
   phase = 'intentional-dataset-failure'; backend = await startBackend(true);
   await page.getByRole('button', { name: 'Reload shared project', exact: true }).click(); await page.waitForSelector('[data-testid="viewer"][data-ready="true"]');
   await send('metadata', 'error'); assert.match(await page.getByTestId('chat-result').innerText(), /dataset-unavailable/);
@@ -155,5 +174,6 @@ try {
 finally {
   if (page) await page.close().catch(() => {}); if (browser) await browser.close().catch(() => {});
   for (const { child, name } of children) { if (child.pid) { try { process.kill(-child.pid, 'SIGTERM'); } catch {} } await writeFile(join(directory, name + '.log'), child.output?.() ?? ''); }
+  await rm(dirname(projectPath), { recursive: true, force: true });
   await save('report.json', report);
 }

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { once } from 'node:events';
 import { get } from 'node:http';
 import { PotreeDataset, parseMetadata, parseHierarchy, decodePoint, READ_LIMITS } from '../apps/server/src/potree';
-import { createDemoServer } from '../apps/server/src/index';
+import { createIsolatedDemoServer as createDemoServer } from '../scripts/isolated-demo-server';
 import { assertPointLod, sampleIndices } from '../packages/agent-harness/src/observation';
 import { createObservationChannel, fetchObservation, type ObservationLoader } from '../apps/web/src/observation-client';
 import type { PointObservation } from '@spatial/contracts';

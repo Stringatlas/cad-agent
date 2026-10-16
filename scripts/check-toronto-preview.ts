@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { PotreeDataset, READ_LIMITS } from '../apps/server/src/potree';
 import { DEFAULT_DATASET_ROOT } from '../apps/server/src/dataset-routes';
-import { createDemoServer } from '../apps/server/src/index';
+import { createIsolatedDemoServer as createDemoServer } from './isolated-demo-server';
 import { once } from 'node:events';
 
 const adapter = new PotreeDataset(DEFAULT_DATASET_ROOT);

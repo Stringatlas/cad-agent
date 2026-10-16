@@ -12,7 +12,7 @@ import { CROP_BATCH_POINTS, TORONTO_SEMANTIC_LABELS, type TorontoSemanticLabel, 
 import { PotreeDataset } from '../apps/server/src/potree';
 import { queryClosestPole } from '../apps/server/src/semantic-query';
 import { queryIndexedClosestPole } from '../apps/server/src/pole-index';
-import { createDemoServer } from '../apps/server/src/index';
+import { createIsolatedDemoServer as createDemoServer } from '../scripts/isolated-demo-server';
 import { createDetailPickCache, createPolePickCache, poleGestureKind, isPoleClick, type PoleSelection } from '../apps/web/src/pole-picking';
 import { createPoleChannel, fetchClosestPole, validatePoleResult, type PoleState, type PoleLoader } from '../apps/web/src/pole-client';
 

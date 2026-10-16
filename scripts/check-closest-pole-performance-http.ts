@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { canonicalPoleRequest, type NearestPoleToolOutcome } from '@spatial/contracts';
 import { DEFAULT_DATASET_ROOT } from '../apps/server/src/dataset-routes';
-import { createDemoServer } from '../apps/server/src/index';
+import { createIsolatedDemoServer as createDemoServer } from './isolated-demo-server';
 import { PotreeDataset } from '../apps/server/src/potree';
 import { SemanticArtifact } from '../apps/server/src/semantic-artifact';
 import { recordBytes, pagePoints } from '../apps/server/src/semantic-disk-index';

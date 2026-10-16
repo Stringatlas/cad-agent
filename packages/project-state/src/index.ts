@@ -1,3 +1,5 @@
+export { boxEditCandidate, undoBoxCandidate } from './box-edit';
+
 import {
   assertCoordinateMetadata,
   assertProjectState,

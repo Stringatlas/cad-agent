@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import * as THREE from 'three';
 import { PotreeDataset, decodePoint, parseMetadata } from '../apps/server/src/potree';
 import { childBox, CROP_LIMITS, readFullResolutionCrop } from '../apps/server/src/crop';
-import { createDemoServer } from '../apps/server/src/index';
+import { createIsolatedDemoServer as createDemoServer } from '../scripts/isolated-demo-server';
 import { createCropChannel, fetchCrop, type CropLoader } from '../apps/web/src/crop-client';
 import { createCropLayer } from '../apps/web/src/crop-render';
 import { projectCropRectangle } from '../apps/web/src/crop-projection';

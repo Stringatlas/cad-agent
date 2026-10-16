@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { PotreeDataset } from '../apps/server/src/potree';
 import { CROP_LIMITS } from '../apps/server/src/crop';
 import { DEFAULT_DATASET_ROOT } from '../apps/server/src/dataset-routes';
-import { createDemoServer } from '../apps/server/src/index';
+import { createIsolatedDemoServer as createDemoServer } from './isolated-demo-server';
 import { projectCropRectangle } from '../apps/web/src/crop-projection';
 import { containsCropPoint, type CropBox, type CropSelection, type CropEvent, type CropStats, type Vec3 } from '@spatial/contracts';
 

@@ -5,7 +5,19 @@
   import { cropFeedback, describeCropSelection, nextCropPhase, type CropPhase } from './crop-feedback';
   import { createTorontoViewer } from './toronto-viewer';
   import { createObservationChannel } from './observation-client';
+  import { createDraftPointGate, replaceDraftPoint, type TorontoDraftPoint, type PointName } from './draft-context';
+  import type { PoleSelection } from './pole-picking';
 
+  let { points = [], pinName = 'A', onpinname = () => {}, onpoints = () => {} }: {
+    points?: readonly TorontoDraftPoint[]; pinName?: PointName; onpinname?: (name: PointName) => void; onpoints?: (points: readonly TorontoDraftPoint[]) => void;
+  } = $props();
+  const draftGate = createDraftPointGate();
+  let mounted = $state(false);
+  $effect(() => { if (mounted) viewer?.setDraftMarkers(points); });
+  function pinPoint(selection: PoleSelection) {
+    const point = draftGate.accept(selection, pinName);
+    if (point && alive && !viewerError) onpoints(replaceDraftPoint(points, point));
+  }
   let host: HTMLDivElement;
   let viewer: ReturnType<typeof createTorontoViewer> | undefined;
   let displayBudget = $state(50_000), displayDepth = $state(3);
@@ -24,14 +36,20 @@
     catch { return describeCropSelection(); }
   });
   let cropRequest = 0, boxInitialized = false;
+  let cropRevision: string | undefined;
   const cropChannel = createCropChannel(async event => {
-    if (event.type === 'batch') {
-      viewer?.appendCrop(event.positions, event.colors); crop = event.stats;
+    if (event.type === 'start') {
+      if (!display || event.dataset.revision !== display.dataset.revision) throw new Error('Artifact changed; reload display before selecting detail');
+      cropRevision = event.dataset.revision;
+    } else if (event.type === 'batch') {
+      viewer?.appendCrop(event.positions, event.colors, event.sourceIds, cropRevision); crop = event.stats;
       await new Promise<void>(resolve => setTimeout(resolve, 0));
     } else if (event.type === 'end') { crop = event.stats; }
   });
   const displayChannel = createObservationChannel('display', sample => {
+    if (draftGate.bind(sample.dataset.revision)) { onpoints([]); clearCrop(); }
     viewer?.update(sample); display = sample;
+    viewer?.setDraftMarkers(points);
     if (!boxInitialized && sample.count) { boxInitialized = true; placeBox(sample.positions.slice(0, 3) as unknown as Vec3); }
   });
   const harnessChannel = createObservationChannel('harness', sample => { observation = sample; });
@@ -99,31 +117,34 @@
     setTimeout(() => URL.revokeObjectURL(url), 0);
   }
   onMount(() => {
-    try { viewer = createTorontoViewer(host, placeBox, selectWindow, viewerFailure); void loadDisplay(); void loadHarness(); }
+    try { viewer = createTorontoViewer(host, placeBox, selectWindow, viewerFailure, pinPoint); mounted = true; void loadDisplay(); void loadHarness(); }
     catch (error) { viewerError = String(error); }
-    return () => { alive = false; displayChannel.dispose(); harnessChannel.dispose(); cropChannel.dispose(); viewer?.dispose(); };
+    return () => { alive = false; mounted = false; draftGate.dispose(); onpoints([]); displayChannel.dispose(); harnessChannel.dispose(); cropChannel.dispose(); viewer?.dispose(); };
   });
 </script>
 
-<svelte:head><title>Toronto3D · independent display and harness LOD</title></svelte:head>
 <main>
-  <h1>Toronto3D bounded preview</h1>
-  <p>Read-only prepared cloud · 78.3M source points · no model loop or CAD edits</p>
+  <header class="scene-heading"><div><p class="eyebrow">LIVE SCENE / READ-ONLY DATASET</p><h1>Toronto3D <span>Point cloud</span></h1></div><span class="scene-badge">{display?.count.toLocaleString() ?? '…'} overview points</span></header>
   <div class="workspace">
-    <section>
-      <div class="toolbar">Orbit: drag · Zoom: scroll · Full resolution: Shift-drag window <button onclick={() => viewer?.frameDataset()}>Frame dataset</button></div>
+    <section class="scene-panel">
+      <div class="toolbar"><span>Drag to orbit <span class="divider">·</span> Scroll to zoom</span><button onclick={() => viewer?.frameDataset()}>Frame dataset</button></div>
       <div class="viewport" data-testid="toronto-viewer" bind:this={host}></div>
       {#if viewerError}<p role="alert">Viewer unavailable: {viewerError}</p>{/if}
-      <p>Local meters · right-handed Z-up · world = local + [627285, 4841948, 0]</p>
-      <p class="note">CC BY-NC 4.0 · <a href="https://github.com/WeikaiTan/Toronto-3D">Toronto-3D</a>. Source UTM; no reprojection or independent CRS certification.</p>
+      <div class="selection-bar"><label>Pin target <select aria-label="Toronto point pin name" data-testid="toronto-pin-name" value={pinName} onchange={event => onpinname(event.currentTarget.value as PointName)}><option>A</option><option>B</option></select></label><span>Cmd/Ctrl-click to attach or replace {pinName}</span><button data-testid="clear-toronto-pins" disabled={!points.length} onclick={() => onpoints([])}>Clear A/B</button></div>
+      <div class="scene-footer"><span>Shift-drag a window for full-resolution detail</span><span>Toronto local frame · meters · Z-up</span></div>
+      <p class="crop-summary" data-testid="crop-summary" aria-live="polite">{cropStatus}</p>
+      {#if cropPhase === 'loading'}<div class="inline-crop-actions"><button data-testid="quick-cancel-crop" onclick={cancelCrop}>Cancel detail loading</button><span>{feedback.count}</span></div>{/if}
     </section>
     <aside>
+      <details class="technical" data-testid="toronto-technical"><summary>Scene tools &amp; data <span>Display quality, full-resolution crop, observation export</span></summary>
+      <details class="tool-section" open><summary>Display quality</summary>
       <h2>User display LOD</h2>
       <label>Display point budget <select data-testid="display-budget" bind:value={displayBudget} onchange={event => { displayBudget = Number(event.currentTarget.value); void loadDisplay(); }}><option value={10_000}>10,000</option><option value={50_000}>50,000</option><option value={100_000}>100,000</option></select></label>
       <label>Display maximum depth <select data-testid="display-depth" bind:value={displayDepth} onchange={event => { displayDepth = Number(event.currentTarget.value); void loadDisplay(); }}>{#each [0, 1, 2, 3] as depth}<option value={depth}>{depth}</option>{/each}</select></label>
       <p data-testid="display-status" aria-live="polite">{displayStatus}</p>
       <p data-testid="display-count">Rendered sample: {display?.count ?? 0} points (depth {display?.lod.depth ?? '—'})</p>
       <button onclick={loadDisplay}>Reload display</button>
+      </details><details class="tool-section" open><summary>Full-resolution selection &amp; crop</summary>
       <h2>Full-resolution display selection</h2>
       <p class="note">Shift-click-drag a screen window to load every point through its camera volume automatically. Depth: camera near/far clipped to dataset extent, not just visible surfaces. Plain drag still orbits. Tiny Shift-click places the yellow axis-aligned box instead. Harness input is unchanged.</p>
       <p data-testid="selection-info" class="note">{selectionInfo}</p>
@@ -145,6 +166,7 @@
       {#if feedback.progress}<p data-testid="crop-progress" class="note">{feedback.progress}</p>
       {:else if crop}<p class="note">Source bytes: {crop.bytesRead.toLocaleString()}; scanned points: {crop.scannedPoints.toLocaleString()}; hierarchy chunks: {crop.hierarchyChunks.toLocaleString()}. {cropPhase === 'complete' && crop.count === 0 ? 'No points in this volume. Select a different region.' : ''}</p>{/if}
       <p class="note">No total point/source-work cap and no downsampling. Bounded stream/GPU chunks load progressively; large selections can exhaust browser/GPU memory or take a long time. Cancel stops future work (not instantaneous OS/GPU work); Clear releases detail. Editing the box cancels and clears old detail.</p>
+      </details><details class="tool-section"><summary>Harness observation &amp; export</summary>
       <h2>Harness input LOD (independent)</h2>
       <label>Harness point budget <select data-testid="harness-budget" bind:value={harnessBudget} onchange={event => { harnessBudget = Number(event.currentTarget.value); void loadHarness(); }}><option value={256}>256</option><option value={1024}>1,024</option><option value={4096}>4,096</option></select></label>
       <label>Harness maximum depth <select data-testid="harness-depth" bind:value={harnessDepth} onchange={event => { harnessDepth = Number(event.currentTarget.value); void loadHarness(); }}>{#each [0, 1, 2, 3] as depth}<option value={depth}>{depth}</option>{/each}</select></label>
@@ -156,31 +178,46 @@
         <dl><dt>Dataset / artifact revision</dt><dd>{observation.dataset.id} / {observation.dataset.revision}</dd><dt>Algorithm / candidates / source bytes read</dt><dd>{observation.algorithm} / {observation.candidatePoints} / {observation.bytesRead}</dd><dt>Sample SHA256</dt><dd data-testid="harness-hash">{observation.sampleHash}</dd><dt>Actual observation settings</dt><dd>{observation.lod.budget} points maximum; levels 0–{observation.lod.depth}</dd></dl>
       {/if}
       <p class="note">Deterministic evenly spaced points across breadth-first levels 0–depth. Camera-independent, not screen-space LOD or an unbiased whole-cloud sample. Display first shows level 0. JSON contains local XYZ, RGB, semantic labels and stable source IDs; no model consumes it yet.</p>
+      </details>
+      <p class="note">Read-only prepared cloud · 78.3M source points. Local meters · right-handed Z-up · world = local + [627285, 4841948, 0]. No Toronto-to-project mapping or CAD edits.</p>
+      <p class="note">CC BY-NC 4.0 · <a href="https://github.com/WeikaiTan/Toronto-3D">Toronto-3D</a>. Source UTM; no reprojection or independent CRS certification.</p>
+      </details>
     </aside>
   </div>
 </main>
 
 <style>
-  main { max-width: 1600px; margin: auto; padding: 28px; }
-  h1 { font-size: 28px; margin-bottom: 8px; }
-  .workspace { display: grid; grid-template-columns: minmax(0, 1fr) 330px; border: 1px solid #344660; border-radius: 12px; overflow: hidden; }
+  main { min-width: 0; padding: 22px; }
+  .scene-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 18px; }
+  .eyebrow { color: #829bb4; font-size: 9px; letter-spacing: 1.7px; margin: 0 0 5px; }
+  h1 { font-size: 22px; font-weight: 550; margin: 0; } h1 span { font-size: 12px; font-weight: 400; color: #7890ac; margin-left: 10px; }
+  .scene-badge { color: #94aec6; border: 1px solid #2d4055; border-radius: 20px; padding: 4px 9px; font-size: 10px; white-space: nowrap; }
+  .workspace { min-width: 0; } .scene-panel { border: 1px solid #2a3c50; border-radius: 10px; background: #101927; overflow: hidden; }
   section { min-width: 0; }
-  section p { padding: 0 16px; }
-  .toolbar { padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; }
-  .viewport { position: relative; width: 100%; height: 68vh; min-height: 340px; }
+  .toolbar { padding: 8px 14px; display: flex; gap: 8px; align-items: center; justify-content: space-between; font-size: 11px; color: #96abc2; border-bottom: 1px solid #243449; }
+  .divider { color: #4a627e; padding: 0 8px; }
+  .viewport { position: relative; width: 100%; height: clamp(380px, calc(100vh - 330px), 900px); min-height: 340px; }
   :global(canvas) { display: block; touch-action: none; }
-  aside { padding: 20px; background: #151f30; }
-  h2 { font-size: 16px; margin-top: 20px; }
-  label { display: block; margin: 10px 0; }
-  select { display: block; width: 100%; margin-top: 4px; }
-  .box-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; }
+  .selection-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; border-top: 1px solid #2a3c50; padding: 8px 14px; font-size: 11px; color: #aac0d7; }
+  .selection-bar label { display: flex; gap: 8px; align-items: center; margin: 0; } .selection-bar select { display: inline; width: auto; margin: 0; padding: 3px 8px; }
+  .selection-bar button { margin-left: auto; padding: 4px 8px; }
+  .scene-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 5px; padding: 0 14px 10px; font-size: 10px; color: #7f97b2; }
+  .crop-summary { font-size: 10px; color: #a4bad0; border-top: 1px solid #223246; padding: 8px 14px; margin: 0; overflow-wrap: anywhere; }
+  .inline-crop-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 0 14px 8px; font-size: 10px; color: #d9bd83; }
+  aside { margin-top: 16px; } .technical { border: 1px solid #293b50; border-radius: 8px; padding: 12px 14px; background: #101a28; }
+  summary { color: #bdcfe0; font-size: 12px; } .technical > summary > span { margin-left: 12px; color: #718aa5; font-size: 10px; }
+  .tool-section { border-top: 1px solid #2b3e54; margin-top: 14px; padding-top: 12px; }
+  .tool-section[open] { padding-bottom: 10px; } .tool-section summary { color: #9bc8c5; }
+  h2 { font-size: 12px; color: #a1b3ca; margin-top: 16px; font-weight: 500; }
+  label { display: block; margin: 10px 0; font-size: 12px; color: #9db2ca; }
+  select { display: block; width: 100%; max-width: 360px; margin-top: 4px; }
+  .box-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; max-width: 600px; }
   input { width: 100%; box-sizing: border-box; }
-  button, select, input { color: #e4ecf7; background: #1c2a40; border: 1px solid #52627a; border-radius: 6px; padding: 8px; cursor: pointer; }
-  button { margin: 4px 0; }
-  button:disabled { opacity: 0.5; }
-  dt, .note { font-size: 12px; color: #a1b3ca; }
-  dd { margin: 0 0 8px; font-size: 12px; overflow-wrap: anywhere; }
-  a { color: #72d9cd; }
-  [role="alert"] { color: #ff8888; }
-  @media (max-width: 850px) { main { padding: 12px; } .workspace { grid-template-columns: 1fr; } .viewport { height: 55vh; } }
+  button, select, input { color: #d4e3f3; background: #1a2a3e; border: 1px solid #3a526b; border-radius: 6px; padding: 7px 10px; font-size: 12px; }
+  button, select { cursor: pointer; } button { margin: 4px 0; } button:disabled { opacity: .4; }
+  dt, .note { font-size: 11px; color: #869eb8; } dd { margin: 0 0 8px; font-size: 11px; overflow-wrap: anywhere; } p { font-size: 12px; }
+  a { color: #8bdccc; } [role="alert"] { color: #ffb2aa; padding: 10px 14px; overflow-wrap: anywhere; }
+  @media (max-width: 1000px) { main { padding: 16px; } .scene-badge { display: none; } h1 span { margin-left: 5px; } .technical > summary > span { display: block; margin: 4px 0 0 16px; } }
+  @media (max-width: 760px) { main { padding: 16px 12px; } .viewport { height: 52vh; min-height: 320px; } .scene-heading { margin-bottom: 12px; } .selection-bar { gap: 8px; font-size: 10px; } .scene-footer { font-size: 9px; } }
+
 </style>

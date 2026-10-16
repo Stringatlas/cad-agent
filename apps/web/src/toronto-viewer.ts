@@ -53,6 +53,20 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
   const distanceLine = new THREE.Line(lineGeometry, lineMaterial); distanceLine.renderOrder = 3; queryMarkers.add(distanceLine);
   queryMarkers.visible = false;
   let queryPositions: { selected: Vec3; nearest?: Vec3 } | undefined;
+  // Draft labels are disposable display markers, independent of semantic-query results.
+  let draftMarkerSignature = '';
+  const draftMarkers = (['A', 'B'] as const).map((name, index) => {
+    const canvas = document.createElement('canvas'); canvas.width = canvas.height = 64;
+    const context = canvas.getContext('2d')!;
+    context.beginPath(); context.arc(32, 32, 27, 0, Math.PI * 2);
+    context.fillStyle = index === 0 ? '#8be6d4' : '#efb5db'; context.fill();
+    context.strokeStyle = '#ffffff'; context.lineWidth = 3; context.stroke();
+    context.fillStyle = '#102b2e'; context.font = 'bold 34px system-ui'; context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillText(name, 32, 33);
+    const texture = new THREE.CanvasTexture(canvas);
+    const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, depthWrite: false, sizeAttenuation: false });
+    const sprite = new THREE.Sprite(material); sprite.scale.set(.035, .035, 1); sprite.renderOrder = 6; sprite.visible = false; scene.add(sprite);
+    return { name, sprite, texture, material };
+  });
   let pointerStart: { x: number; y: number; id: number; kind: 'shift' | 'query'; travel: number; cache: typeof pickCache; version: number } | undefined;
   const pointerDown = (event: PointerEvent) => {
     const kind = poleGestureKind(event, !!onQuery);
@@ -152,6 +166,8 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
     host.dataset.cropPoints = String(cropLayer.count);
     host.dataset.cropChunks = String(cropLayer.group.children.length);
     host.dataset.boxVisible = String(selection.visible);
+    host.dataset.draftMarkerA = String(draftMarkers[0].sprite.visible);
+    host.dataset.draftMarkerB = String(draftMarkers[1].sprite.visible);
     if (smoke) {
       const detail = detailCaches.keys().next().value as THREE.Points | undefined;
       const detailPositions = detail?.geometry.getAttribute('position');
@@ -194,6 +210,17 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       pickCache?.dispose(); pickCache = nextCache;
       bounds = sample.dataset.bounds;
       if (!initialized) { initialized = true; frameDataset(); }
+    },
+    setDraftMarkers(references: readonly { name: 'A' | 'B'; position: Vec3; artifactRevision: string }[]) {
+      if (disposed) return;
+      const signature = JSON.stringify(references);
+      // Explicit clear/replacement also invalidates an in-flight pin gesture.
+      if (signature !== draftMarkerSignature) { draftMarkerSignature = signature; pickVersion++; }
+      for (const marker of draftMarkers) {
+        const reference = references.find(value => value.name === marker.name && value.artifactRevision === dataset?.revision);
+        marker.sprite.visible = !!reference;
+        if (reference) marker.sprite.position.set(...reference.position);
+      }
     },
     setQueryMarkers(selected?: Vec3, nearest?: Vec3) {
       if (JSON.stringify(queryPositions) === JSON.stringify(selected ? { selected, nearest } : undefined)) return;
@@ -242,6 +269,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
     dispose() {
       disposed = true; clearDetail(); pickCache?.dispose(); pickCache = undefined; finishGesture();
       markerGeometry.dispose(); markerMaterial.dispose(); winnerGeometry.dispose(); winnerMaterial.dispose(); lineGeometry.dispose(); lineMaterial.dispose();
+      for (const marker of draftMarkers) { marker.material.dispose(); marker.texture.dispose(); scene.remove(marker.sprite); }
       renderer.domElement.removeEventListener('contextmenu', contextMenu, true);
       cancelAnimationFrame(frame);
       resize.disconnect();

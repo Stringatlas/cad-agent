@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { once } from 'node:events';
 import { PotreeDataset } from '../apps/server/src/potree';
-import { createDemoServer } from '../apps/server/src/index';
+import { createIsolatedDemoServer as createDemoServer } from '../scripts/isolated-demo-server';
 import { CROP_BATCH_POINTS, type CropEvent } from '@spatial/contracts';
 
 test('crop and harness share two-operation cap with no unbounded request queue', async () => {

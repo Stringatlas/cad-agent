@@ -1,6 +1,6 @@
 # Read-only shared-project inspection chat
 
-Task012 integrates a left scene/right chat workspace with a **deterministic caller**, not a model. There are no provider/auth calls, CAD operations, mutations, approval, undo, save/load or persistence. The rendered box remains a mesh proposal, not an OpenCascade body. See [task012](tasks/012-shared-project-chat.md) and [task011 protocol](tool-protocol.md).
+Task012 originally integrated a left scene/right chat workspace with a **deterministic read-only caller**, not a model. That slice introduced no mutations or persistence. **Current runtime:** tasks014/015 add local sessions, explicit Save/Load, synthetic scene `context` and human-approved box parameter edits; see [project editing](project-editing.md). Metadata/observe remain read-only. The separate [task019 model chat](model-chat.md) now adds provider-backed read-only natural-language responses. The deterministic commands documented here remain unchanged; no project CAD solids exist, and the rendered box is still not an OpenCascade body. See [task012](tasks/012-shared-project-chat.md) and [task011 protocol](tool-protocol.md).
 
 ## Run
 
@@ -12,7 +12,7 @@ pnpm dev
 # Open http://127.0.0.1:5173 (server :3001)
 ```
 
-The browser **must** fetch `/project`; it has no independently seeded demo fallback. `Reload shared project` disposes the old viewer/chat, cancels requests and fetches a fresh server snapshot. An unavailable server is an explicit error. The server owns one read-only in-memory snapshot and session per instance; restarting resets the session. Selection, orbit, LOD and crops remain disposable browser view state, never geometry edits.
+The browser now fetches `/project/session` (task012 originally used raw `/project`); it has no independently seeded demo fallback. `Reload shared project` disposes the old viewer/chat, cancels requests and reads current server authority; it does not Load saved geometry. An unavailable server is an explicit error. Server startup restores validated saved geometry when available, with a fresh session; corrupt persistence fails explicitly. Selection, orbit, LOD and crops remain disposable browser view state, never geometry edits. Persistence/binding limits are documented in the project-editing guide.
 
 Toronto inspection requires the fixed prepared dataset described in [preview setup](web-preview-lod.md). First use hashes the prepared manifest, metadata, hierarchy and payload for task011 artifact evidence; this can be slow and cancellable. A missing dataset does not prevent rendering the demo, but inspection reports `dataset-unavailable`. HTTP cannot supply a dataset path, tool name, adapter or configuration. A trusted operator/test may pass `createDemoServer({ datasetRoot })`; normal startup uses `DEFAULT_DATASET_ROOT`.
 
@@ -20,6 +20,7 @@ Toronto inspection requires the fixed prepared dataset described in [preview set
 
 | Input | Dispatcher call | Meaning |
 | --- | --- | --- |
+| `context` | Separate `/project/context`, not the dataset dispatcher | Exact original synthetic selections bound to live project authority; see [context API](project-editing.md#http-contract). |
 | `metadata` | `dataset.metadata`, `{}` | Toronto dataset information; **metadata-only**, not a point inspection. |
 | `observe B D` | `dataset.observe`, `{ lod: { budget: B, depth: D } }` | Bounded first-chunk BFS/even sample; `B=1..4096`, `D=0..3`. |
 
@@ -29,7 +30,7 @@ Observation coverage is **bounded-first-chunk-sample**, not exhaustive, nearest-
 
 ## Explicit independent frames
 
-- Shared demo: `demo-local-v1`, geometry revision from `/project`, meters, right-handed Z-up, world origin `[1000, 2000, 10]`; authoritative IDs `synthetic-cloud`, `proposal-box`. Viewer and chat receive the same fetched snapshot.
+- Shared demo: `demo-local-v1`, geometry revision from `/project`, meters, right-handed Z-up, world origin `[1000, 2000, 10]`; initial demo IDs `synthetic-cloud`, `proposal-box` (saved/edited projects may differ). Viewer and chat receive the same fetched snapshot.
 - Inspection artifact: dataset `toronto3d`, `toronto3d-local-v1`, meters, right-handed Z-up, world origin `[627285, 4841948, 0]`. The canonical tool request carries the artifact revision **and content digest**. Neither is the demo geometry revision.
 
 There is **no mapping** of Toronto observations into demo geometry. Chat displays both bindings explicitly; no inspection response changes scene entities or geometry revision.
@@ -48,7 +49,7 @@ X-Spatial-Frame: demo-local-v1
 Cache-Control: no-store
 ```
 
-The client validates the project plus session/frame headers before mounting the workspace. Project units, local origin, IDs and revision are shown in both scene and chat.
+Raw `/project` remains a locally guarded compatibility API. The current workspace validates the snapshot in `/project/session` instead; raw clients validate project plus session/frame headers. Project units, local origin, IDs and revision are shown in both scene and chat.
 
 ### `POST /chat/inspect`
 
@@ -56,7 +57,7 @@ Only `Content-Type: application/json`, no query parameters or content encoding. 
 
 ```json
 {
-  "sessionId": "<X-Spatial-Session from GET /project>",
+  "sessionId": "<current /project/session snapshot.sessionId>",
   "projectRevision": 0,
   "generation": 1,
   "requestId": "request-1",
@@ -88,7 +89,7 @@ Malformed requests return HTTP400, forbidden origin/host403, oversized declared 
 
 Transport limits: **1024-byte request**, **1MiB response**, **2 active requests**, **20s end-to-end deadline**. Only one preparation runs at once; a concurrent call during first-use preparation gets `incomplete/preparing-busy`. The fixed runtime configuration uses **1000 calls per cached server run**, **2 concurrent adapter calls**, **15s per dispatcher call** and **256KiB evidence-export budget**. The evidence-export budget is not an extra HTTP reply limit. After1000 admitted calls the runtime returns an explicit budget error; restart the local server to create a new run/session. No unbounded chat transcript is retained in the UI; the latest entry is displayed.
 
-Cancellation aborts client fetch and propagates disconnect into server preparation/execution. Generation changes, binding changes, reload and disposal invalidate publication even when a loader ignores abort. A stale/malformed reply can produce a client error but cannot publish its result/evidence. Geometry remains unchanged.
+Cancellation aborts client fetch and propagates disconnect into server preparation/execution. Generation changes, binding changes, reload and disposal invalidate publication even when a loader ignores abort. A stale/malformed reply can produce a client error but cannot publish its result/evidence. Inspection itself never changes geometry; the server rechecks live session/revision after async preparation/execution and suppresses results if an independent edit or Load changed authority.
 
 ## Repeatable acceptance
 

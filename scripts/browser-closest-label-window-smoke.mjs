@@ -2,15 +2,16 @@
 // Usage: node scripts/browser-closest-label-window-smoke.mjs [CDP] [OS-temp evidence directory]
 import { chromium } from 'playwright-core';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createHash } from 'node:crypto';
 
 const directory = process.argv[3] ? resolve(process.argv[3]) : await mkdtemp(join(tmpdir(), 'spatial-task009-browser-'));
 await mkdir(directory, { recursive: true });
+const projectPath = join(await mkdtemp(join(tmpdir(), 'spatial-label-smoke-project-')), 'project.json');
 const report = { status: 'failed', task: '009', directory, checks: [], messages: [], network: [], queries: [], screenshots: [], ownership: 'Only script-created tab and process groups on 3002/4175; no Chrome launch or server3001 changes.' };
 let browser, page, gate;
 const children = [], captures = [], requests = [], observations = [], crops = [];
@@ -128,8 +129,8 @@ async function screenshot(name) { await page.screenshot({ path: join(directory, 
 
 try {
   browser = await chromium.connectOverCDP(process.argv[2] ?? 'http://127.0.0.1:9222', { timeout: 5000 });
-  await start('backend', ['exec', 'tsx', '-e', 'import { createDemoServer } from "./apps/server/src/index.ts"; createDemoServer().listen(3002,"127.0.0.1",()=>console.log("Owned backend ready"));'], 'Owned backend ready');
-  await start('preview', ['--dir', 'apps/web', 'exec', 'node', '--input-type=module', '-e', 'import { preview } from "vite"; const server=await preview({preview:{host:"127.0.0.1",port:4175,strictPort:true,proxy:Object.fromEntries(["/datasets/","/project","/chat/"].map(path=>[path,{target:"http://127.0.0.1:3002"}]))}}); server.printUrls();'], 'http://127.0.0.1:4175');
+  await start('backend', ['exec', 'tsx', '-e', `import { createDemoServer } from "./apps/server/src/index.ts"; createDemoServer(${JSON.stringify({ projectPath })}).listen(3002,"127.0.0.1",()=>console.log("Owned backend ready"));`], 'Owned backend ready');
+  await start('preview', ['--dir', 'apps/web', 'exec', 'node', '--input-type=module', '-e', 'import { preview } from "vite"; const server=await preview({preview:{host:"127.0.0.1",port:4175,strictPort:true,proxy:Object.fromEntries(["/datasets/","/project","/chat/","^/auth/status$","^/auth/logout$"].map(path=>[path,{target:"http://127.0.0.1:3002",changeOrigin:path.startsWith("^/auth/")}]))}}); server.printUrls();'], 'http://127.0.0.1:4175');
   const context = browser.contexts()[0]; assert.ok(context); page = await context.newPage(); page.setDefaultTimeout(TIMEOUT);
   // Preserve the original 1440px scene area plus the integrated 380px chat panel.
   // This keeps the provenance fixture/camera ray stable; the narrow-layout check remains below.
@@ -297,6 +298,7 @@ finally {
     if (child.pid) { try { process.kill(-child.pid, 'SIGTERM'); } catch {} }
     await writeFile(join(directory, `${name}.log`), child.output?.() ?? '');
   }
+  await rm(dirname(projectPath), { recursive: true, force: true });
   await save('console.json', report.messages); await save('network.json', report.network); await save('report.json', report);
   console.log(JSON.stringify({ status: report.status, directory, checks: report.checks.length, error: report.error }, null, 2));
 }

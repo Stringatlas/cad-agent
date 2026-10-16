@@ -1,3 +1,7 @@
+export { MODEL_CHAT_LIMITS, canonicalModelScene, canonicalModelTurnRequest, canonicalModelCatalog, canonicalModelChatEvent } from './model-chat';
+export type { ModelTorontoPoint, ModelScene, ModelCatalog, ModelTurnRequest, ModelChatEvent } from './model-chat';
+export { PROJECT_LIMITS, canonicalProjectBinding, canonicalBoxProposalRequest, canonicalBoxApprovalRequest, canonicalProjectUndoRequest, canonicalSceneContextRequest, canonicalPersistentProject } from './project-edit';
+export type { ProjectBinding, ScenePointReference, SceneContextRequest, SceneContext, BoxEdit, BoxProposalRequest, BoxProposal, BoxApprovalRequest, ProjectUndoRequest, ProjectCommitResult, ProjectSessionInfo, ProjectSaveResult, ProjectLoadResult, ProjectErrorCode, ProjectReply } from './project-edit';
 export { CAD_OPERATIONS, CAD_LIMITS, CadError, canonicalCadBodyRef, canonicalCadOperation, canonicalCadRequest } from './cad';
 export type { CadSource, CadBodyRef, CadOperation, CadRequest, CadValidation, CadBodyResult, CadResult, CadErrorCode, CadReply, CadCapabilities } from './cad';
 export { PROJECT_FRAME_ID, CHAT_BODY_BYTES, CHAT_REPLY_BYTES, inspectionCommand, canonicalChatRequest, chatOutcomeState } from './chat';

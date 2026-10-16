@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { canonicalPoleRequest, TORONTO_SEMANTIC_LABELS, type TorontoSemanticLabel, type NearestPoleRequest, type NearestPoleToolOutcome } from '@spatial/contracts';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
-import { createDemoServer } from '../apps/server/src/index';
+import { createIsolatedDemoServer as createDemoServer } from '../scripts/isolated-demo-server';
 import { SemanticArtifact, SEMANTIC_LIMITS } from '../apps/server/src/semantic-artifact';
 import { queryClosestPole } from '../apps/server/src/semantic-query';
 import { queryIndexedClosestPole, preparePoleIndex, dropPoleIndexMemoryCache } from '../apps/server/src/pole-index';

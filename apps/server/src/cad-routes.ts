@@ -30,7 +30,7 @@ const STATUSES: Record<CadErrorCode, number> = {
   'resource-limit': 422, busy: 409, timeout: 504, 'kernel-failure': 503, closed: 503,
   'method-not-allowed': 405, 'unsupported-media-type': 415, 'local-only': 403,
 };
-export function createCadRoutes(source: CadSource) {
+export function createCadRoutes(source: CadSource, currentSource: () => CadSource = () => source) {
   const binding = Object.freeze({ ...source });
   const client = new CadWorkerClient(binding);
   let active = false;
@@ -60,6 +60,8 @@ export function createCadRoutes(source: CadSource) {
         response.setHeader('Allow', expectedMethod); response.setHeader('Connection', 'close'); error('method-not-allowed', `Expected ${expectedMethod}`); return true;
       }
       if (url.search) { response.setHeader('Connection', 'close'); error('invalid-request', 'CAD endpoints do not accept query parameters'); return true; }
+      const current = () => { const live = currentSource(); return live.sessionId === binding.sessionId && live.projectRevision === binding.projectRevision && live.frameId === binding.frameId; };
+      if (!current()) { error('stale-source', 'Sandbox source is stale after project edit/load; restart server for a fresh sandbox'); return true; }
       if (expectedMethod === 'GET') {
         if (Number(request.headers['content-length'] ?? 0) !== 0 || request.headers['transfer-encoding']) { response.setHeader('Connection', 'close'); error('invalid-request', 'Capabilities does not accept a body'); }
         else send(200, { ok: true, result: capabilities });
@@ -78,8 +80,10 @@ export function createCadRoutes(source: CadSource) {
       response.once('close', abort); request.once('aborted', abort);
       try {
         const call = canonicalCadRequest(await body(request));
-        if (call.sessionId !== binding.sessionId || call.projectRevision !== binding.projectRevision || call.frameId !== binding.frameId) throw new CadError('stale-source', 'CAD source binding is stale or belongs to another session/frame');
-        send(200, { ok: true, result: await client.execute(call.operation, controller.signal) });
+        if (!current() || call.sessionId !== binding.sessionId || call.projectRevision !== binding.projectRevision || call.frameId !== binding.frameId) throw new CadError('stale-source', 'CAD source binding is stale or belongs to another session/frame');
+        const result = await client.execute(call.operation, controller.signal);
+        if (!current()) throw new CadError('stale-source', 'Project changed during CAD operation; sandbox output not published');
+        send(200, { ok: true, result });
       } catch (failure) {
         response.setHeader('Connection', 'close');
         if (failure instanceof CadError) error(failure.code, failure.message, failure instanceof BodyLimitError ? 413 : STATUSES[failure.code]);

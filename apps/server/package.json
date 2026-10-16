@@ -13,6 +13,7 @@
     "@spatial/project-state": "workspace:*",
     "@spatial/contracts": "workspace:*",
     "@spatial/geometry": "workspace:*",
-    "@spatial/agent-harness": "workspace:*"
+    "@spatial/agent-harness": "workspace:*",
+    "jose": "6.2.2"
   }
 }

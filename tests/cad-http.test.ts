@@ -3,7 +3,7 @@ import test from 'node:test';
 import { once } from 'node:events';
 import { request as httpRequest } from 'node:http';
 import { CAD_LIMITS, PROJECT_FRAME_ID, type CadBodyResult, type CadSource } from '@spatial/contracts';
-import { createDemoServer } from '../apps/server/src/index';
+import { createIsolatedDemoServer as createDemoServer } from '../scripts/isolated-demo-server';
 
 // Independent acceptance exercises the public transport; it never calls a kernel implementation.
 test('CAD HTTP sandbox workflow is kernel-backed and cannot mutate the shared project', async t => {

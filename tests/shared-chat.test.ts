@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { TORONTO_SEMANTIC_LABELS, PROJECT_FRAME_ID, canonicalChatRequest, inspectionCommand, type ChatRequest, type ChatResponse } from '@spatial/contracts';
 import { createDemoProject } from '@spatial/project-state';
 import { ReadonlyToolRuntime } from '../packages/agent-harness/src/index';
-import { createDemoServer } from '../apps/server/src/index';
+import { createIsolatedDemoServer as createDemoServer } from '../scripts/isolated-demo-server';
 import { createChatRoutes } from '../apps/server/src/chat-routes';
 import { prepareReadonlyTools } from '../apps/server/src/tool-adapter';
 import { PotreeDataset } from '../apps/server/src/potree';

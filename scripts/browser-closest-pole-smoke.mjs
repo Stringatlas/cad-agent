@@ -1,11 +1,14 @@
 // Built UI, actual prepared backend, existing CDP Chrome only. No launch/data generation.
 import { chromium } from 'playwright-core';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 const directory = new URL('../artifacts/closest-pole-ui/browser/', import.meta.url);
 await mkdir(directory, { recursive: true });
+const projectPath = join(await mkdtemp(join(tmpdir(), 'spatial-pole-smoke-project-')), 'project.json');
 const report = { status: 'failed', consoleCaptured: false, messages: [], checks: [], screenshots: [] };
 const processes = []; let browser, page;
 async function start(args, ready) {
@@ -19,8 +22,8 @@ try {
   browser = await chromium.connectOverCDP(process.argv[2] ?? 'http://127.0.0.1:9222', { timeout: 5000 });
   const context = browser.contexts()[0]; assert.ok(context);
   // Owned ports only; never change the user's server on :3001.
-  await start(['exec', 'tsx', '-e', 'import { createDemoServer } from "./apps/server/src/index.ts"; createDemoServer().listen(3002, "127.0.0.1", () => console.log("Owned backend ready"));'], 'Owned backend ready');
-  await start(['--dir', 'apps/web', 'exec', 'node', '--input-type=module', '-e', 'import { preview } from "vite"; const server = await preview({ preview: { host: "127.0.0.1", port: 4175, strictPort: true, proxy: Object.fromEntries(["/datasets/", "/project", "/chat/"].map(path => [path, { target: "http://127.0.0.1:3002" }])) } }); server.printUrls();'], 'http://127.0.0.1:4175');
+  await start(['exec', 'tsx', '-e', `import { createDemoServer } from "./apps/server/src/index.ts"; createDemoServer(${JSON.stringify({ projectPath })}).listen(3002, "127.0.0.1", () => console.log("Owned backend ready"));`], 'Owned backend ready');
+  await start(['--dir', 'apps/web', 'exec', 'node', '--input-type=module', '-e', 'import { preview } from "vite"; const server = await preview({ preview: { host: "127.0.0.1", port: 4175, strictPort: true, proxy: Object.fromEntries(["/datasets/", "/project", "/chat/", "^/auth/status$", "^/auth/logout$"].map(path => [path, { target: "http://127.0.0.1:3002", changeOrigin: path.startsWith("^/auth/") }])) } }); server.printUrls();'], 'http://127.0.0.1:4175');
   page = await context.newPage(); await page.setViewportSize({ width: 1440, height: 1100 });
   page.on('console', message => report.messages.push({ type: message.type(), text: message.text() })); page.on('pageerror', error => report.messages.push({ type: 'pageerror', text: String(error) })); report.consoleCaptured = true;
   const requests = [];
@@ -54,5 +57,6 @@ try {
 finally {
   if (page) await page.close().catch(() => {}); if (browser) await browser.close().catch(() => {});
   for (const child of processes) if (child.pid) { try { process.kill(-child.pid, 'SIGTERM'); } catch {} }
+  await rm(dirname(projectPath), { recursive: true, force: true });
   await writeFile(new URL('report.json', directory), JSON.stringify(report, null, 2) + '\n');
 }

@@ -19,8 +19,17 @@ Use [TEMPLATE.md](TEMPLATE.md) for bounded work with testable acceptance criteri
 | [011 — Versioned read-only tools and replayable evidence](011-tool-protocol-evidence.md) | Implemented; 115/115 baseline + 23/23 targeted pass. Independent corrective rereview has no remaining findings; conditionally ready. Final isolated runtime/dependency review passes; full graph completion unresolved; items2–7 queued. |
 | [012 — Shared-project read-only chat](012-shared-project-chat.md) | Implemented and independently reviewed;123/123 baseline, ten chat and ten all-label/window browser checks pass; demo regression passes. Full graph certification and parent cached-LSP discrepancy remain unresolved. |
 | [013 — Real CAD engine and basic sandbox tools](013-cad-engine.md) | Implemented and fresh-source reviewed;138/138 baseline and independent HTTP/kernel/failure probes pass. Ephemeral sandbox only, no project edits/UI integration; graph coverage and parent stale-LSP cache remain incomplete. |
+| [014 — Local project sessions and scene context](014-project-sessions.md) | Implemented;163/163 final baseline,15 interactive browser checks and preserved regressions pass. Fresh independent backend/UI corrective rereviews complete; graph/cached-LSP certification unresolved. |
+| [015 — Exact approved box parameters and undo](015-approved-box-edits.md) | Implemented and independently corrective-reviewed; exact approval/atomic edit/monotonic undo/render-loss browser evidence passes. Non-CAD, no model/channel; tooling limits remain. |
+| [016 — Local ChatGPT/API-key authentication](016-provider-auth.md) | Implemented and independently corrective-reviewed;225/225 baseline,62/62 auth tests and safely intercepted fake-provider browser checks pass. Live auth/inference and whole-checkout graph/fresh review remain pending. |
+| [017 — Demo-oriented scene/chat UI](017-demo-workspace-ui.md) | Implemented and independently source/corrective-reviewed;230/230 baseline,14 workspace/8 demo/10 chat/15 interactive browser groups pass. Legacy Toronto post-release exact-camera smoke still fails at binary64 normalization; graph/whole-checkout certification pending. Local draft only, no model. |
 
-Approved remaining product TODOs: [queue](../TODO.md), [full roadmap](../plans/2026-10-13-harness-must-haves.md). Items2–7's full integrations are not assigned for implementation; task013 independently implements the user-authorized bounded CAD sandbox foundation.
+| [018 — Workspace provider account control](018-workspace-provider-account.md) | Implemented and independently bounded-reviewed;253/253 baseline,23/23 focused,15 account browser and14 workspace regression groups pass. Live auth/inference, actual popup click and whole-checkout graph/fresh review remain unverified. |
+| [019 — Provider-backed scene chat](019-model-chat-loop.md) | Implemented;391/391 baseline,161 focused tests and16 guarded fake-provider browser checks pass. Independent corrective review has no remaining findings; live inference, complete graph certification and whole-checkout fresh review remain pending. Read-only scene tool only, no model CAD/mutations. |
+
+| [020 — Redacted provider protocol diagnostics](020-model-protocol-diagnostics.md) | Implemented;397/397 baseline and83 focused fake-provider tests pass, independent bounded review READY. Fixed backend tags and refusal-delta fix; live root cause/compatibility, complete graph and whole-checkout fresh-session review remain pending. |
+
+Approved remaining product TODOs: [queue](../TODO.md), [full roadmap](../plans/2026-10-13-harness-must-haves.md). Item2 visual inputs, item3 evaluation, broader item4 verified-tool orchestration and project-integrated item7 remain unassigned. Tasks014/015 implement the authorized bounded items5–6; task013 independently implements the CAD sandbox foundation.
 
 ## Workflow
 
@@ -31,4 +40,4 @@ Approved remaining product TODOs: [queue](../TODO.md), [full roadmap](../plans/2
 5. Inspect the actual diff, then review in a fresh session against the task. Do not equate implementation with review.
 6. Record remaining failures and a single bounded next action before handoff.
 
-Foundation and preprocessing fresh reviews remain pending. At the user's request, task 003 proceeds independently with a web preview and separate display/harness LOD; it does not constitute approval of earlier tasks. Revision-checked box edits remain a later candidate outside this scope.
+Foundation and preprocessing fresh reviews remain pending. At the user's request, task 003 proceeds independently with a web preview and separate display/harness LOD; it does not constitute approval of earlier tasks. Revision-checked box edits are now separately implemented/reviewed in tasks014/015; they do not approve earlier tasks.

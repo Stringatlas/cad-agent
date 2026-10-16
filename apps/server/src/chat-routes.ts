@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { semanticToolOutcome } from '@spatial/agent-harness';
 import { randomUUID } from 'node:crypto';
 import { CHAT_BODY_BYTES, CHAT_REPLY_BYTES, TOOL_SCHEMA_VERSION, TOOL_VERSION, canonicalChatRequest, inspectionCommand,
-  chatOutcomeState, canonicalProtocolJson, type ProjectState, type ChatRequest, type ChatResponse } from '@spatial/contracts';
+  chatOutcomeState, canonicalProtocolJson, type ProjectState, type ProjectSnapshot, type ChatRequest, type ChatResponse } from '@spatial/contracts';
 import { prepareReadonlyTools } from './tool-adapter';
 
 const BUDGETS = { maxCalls: 1000, maxConcurrency: 2, deadlineMs: 15000, maxEvidenceBytes: 256 * 1024 };
@@ -20,7 +20,9 @@ function readBody(request: IncomingMessage, signal: AbortSignal): Promise<unknow
   });
 }
 /** Fixed trusted operator composition. No root, tool name, config or adapter comes from HTTP. */
-export function createChatRoutes(project: ProjectState, sessionId: string, directory: string, prepare: Prepare = prepareReadonlyTools) {
+export function createChatRoutes(project: ProjectState | (() => ProjectSnapshot), sessionId: string, directory: string, prepare: Prepare = prepareReadonlyTools) {
+  const current = () => typeof project === 'function' ? project() : { project, sessionId };
+  const matches = (call: ChatRequest) => { const snapshot = current(); return call.sessionId === snapshot.sessionId && call.projectRevision === snapshot.project.revision; };
   let active = 0, preparing = false;
   let prepared: Awaited<ReturnType<Prepare>> | undefined;
   let runtime: ReturnType<Awaited<ReturnType<Prepare>>['createRuntime']> | undefined;
@@ -54,8 +56,8 @@ export function createChatRoutes(project: ProjectState, sessionId: string, direc
       try { call = canonicalChatRequest(await readBody(request, controller.signal)); }
       catch { response.setHeader('Connection', 'close'); send(400, { error: 'Invalid bounded inspection request' }); return true; }
       const { command: _command, ...binding } = call;
-      const result = (state: ChatResponse['state'], code: string, extra: Partial<ChatResponse> = {}) => send(200, { ...binding, state, code, ...extra });
-      if (call.sessionId !== sessionId || call.projectRevision !== project.revision) { result('rejected', 'stale-project'); return true; }
+      const result = (state: ChatResponse['state'], code: string, extra: Partial<ChatResponse> = {}) => send(200, matches(call!) ? { ...binding, state, code, ...extra } : { ...binding, state: 'rejected', code: 'stale-project' });
+      if (!matches(call)) { result('rejected', 'stale-project'); return true; }
       const command = inspectionCommand(call.command);
       if (!command) { result('rejected', 'unsupported-command'); return true; }
       if (!prepared) {
@@ -68,6 +70,7 @@ export function createChatRoutes(project: ProjectState, sessionId: string, direc
         finally { preparing = false; }
       }
       controller.signal.throwIfAborted();
+      if (!matches(call)) { result('rejected', 'stale-project'); return true; }
       if (!runtime) throw new Error('Runtime unavailable');
       const requestId = `call-${randomUUID()}`;
       const reply = await runtime.execute({ schemaVersion: TOOL_SCHEMA_VERSION, toolVersion: TOOL_VERSION, runId: runtime.runId,
@@ -79,7 +82,7 @@ export function createChatRoutes(project: ProjectState, sessionId: string, direc
     } catch {
       if (call) {
         const { command: _command, ...binding } = call;
-        send(200, { ...binding, state: deadline ? 'incomplete' : controller.signal.aborted ? 'cancelled' : 'error', code: deadline ? 'deadline' : controller.signal.aborted ? 'cancelled' : 'dataset-unavailable' });
+        send(200, matches(call) ? { ...binding, state: deadline ? 'incomplete' : controller.signal.aborted ? 'cancelled' : 'error', code: deadline ? 'deadline' : controller.signal.aborted ? 'cancelled' : 'dataset-unavailable' } : { ...binding, state: 'rejected', code: 'stale-project' });
       } else send(400, { error: 'Invalid inspection request' });
     } finally { clearTimeout(timer); response.off('close', abort); request.off('aborted', abort); active--; }
     return true;

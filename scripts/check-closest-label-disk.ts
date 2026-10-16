@@ -10,7 +10,7 @@ import { TORONTO_SEMANTIC_LABELS, type TorontoSemanticLabel, type NearestPoleReq
 import { SemanticArtifact } from '../apps/server/src/semantic-artifact';
 import { getSemanticDiskIndex, cacheRoot } from '../apps/server/src/semantic-disk-index';
 import { preparePoleIndex } from '../apps/server/src/pole-index';
-import { createDemoServer } from '../apps/server/src/index';
+import { createIsolatedDemoServer as createDemoServer } from './isolated-demo-server';
 import { DEFAULT_DATASET_ROOT } from '../apps/server/src/dataset-routes';
 import { fetchClosestPole } from '../apps/web/src/pole-client';
 
