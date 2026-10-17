@@ -4,6 +4,8 @@ import { PotreeDataset } from './potree';
 import { once } from 'node:events';
 import { assertCropSelection, canonicalPoleRequest, type NearestPoleRequest, type CropSelection } from '@spatial/contracts';
 import { streamClosestPole } from './pole-transport';
+import { preprocessingSummary } from './preprocessing-summary';
+import { parseSourcePointRequest, readSourcePoint, type SourcePointRequest } from './source-point';
 
 export const DEFAULT_DATASET_ROOT = fileURLToPath(new URL('../../../data/processed/toronto3d/prepared/', import.meta.url));
 
@@ -26,13 +28,28 @@ export function createDatasetRoutes(directory = DEFAULT_DATASET_ROOT) {
       send(403, { error: 'Local access only' }); return true;
     }
     // No CORS, file paths, write operations, or raw assets. Ranges are deliberately unsupported.
-    if (request.method !== 'GET' || !['/datasets/toronto3d', '/datasets/toronto3d/observation', '/datasets/toronto3d/crop', '/datasets/toronto3d/closest-pole', '/datasets/toronto3d/closest-label'].includes(url.pathname)) {
+    if (request.method !== 'GET' || !['/datasets/toronto3d', '/datasets/toronto3d/observation', '/datasets/toronto3d/crop', '/datasets/toronto3d/closest-pole', '/datasets/toronto3d/closest-label', '/datasets/toronto3d/preprocessing', '/datasets/toronto3d/point'].includes(url.pathname)) {
       send(404, { error: 'Not found' }); return true;
     }
     if (request.headers.range) { send(416, { error: 'Raw byte ranges are not exposed' }); return true; }
     if ((request.url?.length ?? 0) > 4096) { send(400, { error: 'Query too long' }); return true; }
     const metadata = url.pathname === '/datasets/toronto3d';
     const crop = url.pathname === '/datasets/toronto3d/crop';
+    const preprocessing = url.pathname === '/datasets/toronto3d/preprocessing';
+    const sourcePoint = url.pathname === '/datasets/toronto3d/point';
+    let pointRequest: SourcePointRequest | undefined;
+    if (sourcePoint) {
+      try { pointRequest = parseSourcePointRequest(url.searchParams); }
+      catch { send(400, { error: 'Expected revision and exact sourceFileId/sourceRow' }); return true; }
+    }
+    let summaryBounds: CropSelection | undefined;
+    if (preprocessing) {
+      try {
+        const keys = [...url.searchParams.keys()];
+        if (keys.length && (keys.length !== 1 || keys[0] !== 'bounds')) throw new TypeError();
+        if (keys.length) { const value: CropSelection = JSON.parse(url.searchParams.get('bounds')!); assertCropSelection(value); if (value.planes) throw new TypeError(); summaryBounds = value; }
+      } catch { send(400, { error: 'Expected optional bounds JSON with finite local-meter min/max' }); return true; }
+    }
     const legacyPole = url.pathname === '/datasets/toronto3d/closest-pole';
     const pole = legacyPole || url.pathname === '/datasets/toronto3d/closest-label';
     let poleRequest: NearestPoleRequest | undefined;
@@ -61,7 +78,7 @@ export function createDatasetRoutes(directory = DEFAULT_DATASET_ROOT) {
     const keys = [...url.searchParams.keys()];
     const purpose = url.searchParams.get('purpose');
     const budget = url.searchParams.get('budget') ?? '', depth = url.searchParams.get('depth') ?? '';
-    if ((metadata && keys.length) || (!metadata && !crop && !pole && (keys.length !== 3 || new Set(keys).size !== 3 || keys.some(key => !['purpose', 'budget', 'depth'].includes(key)) ||
+    if ((metadata && keys.length) || (!metadata && !crop && !pole && !preprocessing && !sourcePoint && (keys.length !== 3 || new Set(keys).size !== 3 || keys.some(key => !['purpose', 'budget', 'depth'].includes(key)) ||
       (purpose !== 'display' && purpose !== 'harness') || !/^[1-9]\d{0,5}$/.test(budget) || !/^[0-3]$/.test(depth)))) {
       send(400, { error: 'Expected purpose=display|harness, budget=positive integer, depth=0..3' }); return true;
     }
@@ -70,8 +87,19 @@ export function createDatasetRoutes(directory = DEFAULT_DATASET_ROOT) {
     const controller = new AbortController();
     const abort = () => controller.abort();
     response.once('close', abort);
+    // Optional metadata never occupies admission indefinitely or prepares the cloud.
+    const deadline = sourcePoint ? setTimeout(abort, 3000) : undefined;
+    deadline?.unref();
     try {
-      if (poleRequest) {
+      if (pointRequest) {
+        response.setHeader('Content-Type', 'application/json; charset=utf-8');
+        response.setHeader('Cache-Control', 'no-store');
+        send(200, await readSourcePoint(directory, pointRequest, controller.signal));
+      } else if (preprocessing) {
+        response.setHeader('Content-Type', 'application/json; charset=utf-8');
+        response.setHeader('Cache-Control', 'no-store');
+        send(200, await preprocessingSummary(await dataset.info(), summaryBounds, undefined, controller.signal));
+      } else if (poleRequest) {
         await streamClosestPole(directory, poleRequest, response, controller);
       } else if (box) {
         // Pull one bounded event at a time. Slow readers backpressure dataset reads.
@@ -87,12 +115,15 @@ export function createDatasetRoutes(directory = DEFAULT_DATASET_ROOT) {
       }
     } catch (error) {
       // Do not reveal filesystem names or malformed prepared-file contents to the client.
-      if (!controller.signal.aborted) {
+      if (sourcePoint) {
+        if (!response.destroyed) send(503, { error: 'Original point type unavailable; retry later' });
+      } else if (!controller.signal.aborted) {
         const message = error instanceof RangeError ? 'LOD or selection exceeds input limits (sample display 100000, harness 4096, depth 3)' : 'Prepared Toronto3D unavailable or unsupported; full resolution incomplete (no downsampling)';
         if (response.headersSent) response.end(JSON.stringify({ type: 'error', error: message }) + '\n');
         else send(error instanceof RangeError ? 400 : 503, { error: message });
       }
     } finally {
+      clearTimeout(deadline);
       active--;
       response.off('close', abort);
     }

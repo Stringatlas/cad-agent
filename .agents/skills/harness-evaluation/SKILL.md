@@ -5,9 +5,9 @@ description: Design product-agent tools, inspection interfaces and reproducible 
 
 # Harness evaluation
 
-## Current facts
+## Durable boundaries
 
-`packages/agent-harness/src/index.ts` defines `AgentContext`, `InspectionResult` and `InspectionAgent` only. Geometry access is an adapter interface. No product model loop, tool execution, benchmark runner or verified CAD edit exists. Pi is development tooling outside the product. The browser and read-only HTTP server independently seed demo state; neither is a synchronization service.
+Read `docs/architecture.md` and the assigned task for current capabilities and authority ownership; do not infer implementation status from this skill. The product is a CAD-first live scene/chat workspace, not a headless harness. Product-agent geometry access stays behind adapter interfaces; Pi is development tooling, not product runtime. Viewer caches and model output are not authoritative geometry. Keep synthetic parameter edits, Toronto source-record overrides, native CAD candidates and their verification claims distinct.
 
 ## Procedure
 
@@ -18,9 +18,9 @@ description: Design product-agent tools, inspection interfaces and reproducible 
 5. For future benchmarks, define deterministic fixtures, success/failure criteria, geometry postconditions, revision handling and artifact retention before running models. Record model/tool configuration, exact commands, logs and failure categories; distinguish infrastructure failures from product failures.
 6. Add tests at the contract/adapter boundary and run `pnpm verify`. Use Node tests for deterministic checks; inspect/use `pi-browser-harness` for visual interactions. Record blocked/unrun checks honestly, inspect the diff and require fresh-session review.
 
-## Next steps, not implemented
+## Scope and review
 
-First review the foundation against its task evidence in a fresh session. A later revision-checked box parameter update without CAD can exercise state transitions before adding a model or kernel. Persistent state, tool execution and benchmarks need separate designs/tasks.
+Choose the next bounded task from current repository plans and user authorization, not historical baseline assumptions. A model/tool integration does not authorize approval bypass or unrelated geometry features. Implementation checks and fixture inference are not fresh-session review or live-provider certification; keep those claims separate.
 
 ## Authoritative references
 

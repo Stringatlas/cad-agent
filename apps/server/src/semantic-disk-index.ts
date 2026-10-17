@@ -305,6 +305,16 @@ async function build(directory: string, identity: string, snapshot: SemanticArti
 let cached: SemanticDiskIndex | undefined;
 let gate: Promise<void> = Promise.resolve();
 export function dropSemanticDiskIndexMemoryCache() { cached = undefined; }
+/** Selection metadata must never start whole-cloud preparation on a click. */
+export async function loadPreparedSemanticDiskIndex(snapshot: SemanticArtifact, signal?: AbortSignal): Promise<SemanticDiskIndex | undefined> {
+  const manifest = JSON.parse(snapshot.manifestBytes.toString());
+  requireData(Object.entries(TORONTO_SEMANTIC_LABELS).every(([label, name]) => manifest.semantic_classes?.[label] === name), 'Unsupported semantic schema');
+  const identity = await binding(snapshot, signal);
+  const resident = cached;
+  const index = resident?.identity === identity ? resident : await SemanticDiskIndex.load(join(await cacheBase(), identity), identity, snapshot, signal);
+  if (index) { await index.check(signal); await snapshot.check(signal); }
+  return index;
+}
 /** Serialize preparation only. Waiting cancellation never poisons another build. */
 export async function getSemanticDiskIndex(snapshot: SemanticArtifact, signal?: AbortSignal, progress?: SemanticProgressHandler): Promise<{ index: SemanticDiskIndex; cache: 'memory' | 'loaded' | 'built' }> {
   signal?.throwIfAborted();

@@ -15,6 +15,8 @@ export function createPointSequence() {
 }
 export interface TorontoDraftPoint extends PoleSelection {
   readonly name: PointName;
+  /** UI-only original source label; never inferred from rendered colors or bounds. */
+  readonly semanticLabel?: import('@spatial/contracts').TorontoSemanticLabel;
   /** Full verified original-dataset query lineage; never an override-adjusted search. */
   readonly evidence?: import('./point-override-client').NearestSelectionEvidence;
   readonly frameId: 'toronto3d-local-v1';

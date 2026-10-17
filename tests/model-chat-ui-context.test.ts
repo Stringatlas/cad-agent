@@ -117,11 +117,11 @@ test('model UI renders safe content, keeps local draft IDs and exposes explicit 
   assert.match(integration, /<ModelChat\s+\{scene\}\s+\{visualSource\}\s+points=\{activePoints\}\s+\{onverifiedresult\}/);
   assert.ok(integration.includes('onproposal={(proposal, current) =>'));
   assert.ok(integration.includes("if (sceneMode === 'demo') void projectController.admitModelProposal"));
-  assert.ok(integration.includes('activePoints.map(({ evidence: _evidence, ...original }) => original)'));
+  assert.ok(integration.includes('activePoints.map(({ evidence: _evidence, semanticLabel: _label, ...original }) => original)'));
   const toronto = readFileSync(new URL('../apps/web/src/Toronto.svelte', import.meta.url), 'utf8');
   const app = readFileSync(new URL('../apps/web/src/App.svelte', import.meta.url), 'utf8');
   assert.ok(!integration.includes('<PointEdits'));
-  assert.ok(toronto.includes('<PointEdits {points} artifactRevision={display?.dataset.revision} refreshToken={pointRefresh}'));
+  assert.ok(toronto.includes('<PointEdits {points} toolsHost={pointToolsHost} artifactRevision={display?.dataset.revision} refreshToken={pointRefresh}'));
   assert.ok(toronto.includes('retainedProposals = proposals ?? []'));
   assert.ok(app.includes('onpointproposal={() => pointRefresh++}'));
   assert.ok(app.includes('pointBlocked = !!blocked'));

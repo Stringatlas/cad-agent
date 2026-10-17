@@ -6,6 +6,9 @@
   import type { TorontoDraftPoint, PointName } from './draft-context';
   import ModelChat from './ModelChat.svelte';
   import { effectivePosition } from './point-override-client';
+  import { pointSemanticName, semanticName } from './point-presentation';
+  import { onDestroy, untrack } from 'svelte';
+  import { createPointTypeChannel, pointTypeKey, type PointTypeState } from './point-type-client';
   import type { VisualModelSource } from './visual-model-source';
   import { modelScene } from './model-chat-client';
   let { snapshot, view, controller: projectController, sceneMode, points, pointStatus, onclearpoint, visualSource, pointOverrides, onverifiedresult, pointBlocked = true, onpointproposal = () => {}, oncadproposal = () => {}, ontorontostreaming = () => {}, torontoCadBlocked = true }: {
@@ -19,8 +22,17 @@
     points: readonly TorontoDraftPoint[]; pointStatus: string; onclearpoint: (name: PointName) => void;
   } = $props();
   const activePoints = $derived(sceneMode === 'toronto' ? points : []);
+  let pointTypes = $state<PointTypeState>(new Map());
+  const pointTypeChannel = createPointTypeChannel(value => pointTypes = value);
+  $effect(() => { const references = activePoints; untrack(() => pointTypeChannel.bind(references)); });
+  onDestroy(() => pointTypeChannel.dispose());
+  function selectedType(point: TorontoDraftPoint) {
+    const known = pointSemanticName(point); if (known !== 'Unknown') return known;
+    const label = pointTypes.get(pointTypeKey(point));
+    return label === 'loading' ? 'Loading type…' : semanticName(label);
+  }
   // Query lineage stays attached locally; the strict model-reference protocol carries only original source fields.
-  const scene = $derived(modelScene(sceneMode, snapshot, view, activePoints.map(({ evidence: _evidence, ...original }) => original)));
+  const scene = $derived(modelScene(sceneMode, snapshot, view, activePoints.map(({ evidence: _evidence, semanticLabel: _label, ...original }) => original)));
   const listedPoints = $derived(sceneMode === 'demo' ? view.points : activePoints);
   let command = $state('metadata');
   let entry = $state<ChatEntry>();
@@ -40,25 +52,23 @@
 <aside class="chat" aria-label="Scene chat" data-testid="chat">
   <header><h2>Chat</h2></header>
   {#if pointStatus}<p class="point-status" role="status" data-testid="point-status">{pointStatus}</p>{/if}
-  <details class="attachments" data-testid="draft-attachments" aria-label="Scene point references">
+  <details class="attachments" open={listedPoints.length > 0} data-testid="draft-attachments" aria-label="Scene point references">
     <summary>Scene references <span>{listedPoints.length}/{SCENE_POINT_LIMIT}</span></summary>
-    <p>Cmd/Ctrl-click adds a new numbered point. Removed numbers are never reused in this workspace; reload starts fresh.</p>
+
     {#if listedPoints.length}
       <div class="point-list" role="list" aria-label="Numbered scene points">
       {#each listedPoints as point (point.name)}
         <div class="attachment" role="listitem" data-testid={`draft-point-${point.name}`}>
-          <div class="attachment-heading"><strong>{point.name}</strong><span>{'datasetId' in point ? 'Toronto3D' : 'Synthetic'}</span><button type="button" aria-label={`Remove ${point.name}`} data-testid={`remove-draft-point-${point.name}`} disabled={sceneMode === 'demo' && !!view.pending && ['approve', 'undo', 'load'].includes(view.pending)} onclick={() => onclearpoint(point.name)}>×</button></div>
-          <p class="coordinates">Original [{point.position.join(', ')}] m</p>
-          {#if 'datasetId' in point && pointOverrides}<p class="coordinates">Effective [{effectiveCoordinates(point)}] m · override revision {pointOverrides.revision}</p>{/if}
+          <div class="attachment-heading"><strong>{point.name}</strong><span data-testid={`point-type-${point.name}`}>{'datasetId' in point ? selectedType(point) : 'Synthetic'}</span><button type="button" aria-label={`Remove ${point.name}`} data-testid={`remove-draft-point-${point.name}`} disabled={sceneMode === 'demo' && !!view.pending && ['approve', 'undo', 'load'].includes(view.pending)} onclick={() => onclearpoint(point.name)}>×</button></div>
           {#if 'datasetId' in point}
-          <details><summary>Original source &amp; frame</summary><dl><dt>Prepared point key</dt><dd>File {point.key.sourceFileId} · row {point.key.sourceRow}</dd><dt>Artifact revision</dt><dd>{point.artifactRevision}</dd><dt>Frame / units</dt><dd>{point.frameId} · meters · right-handed Z-up</dd><dt>World origin (translation only)</dt><dd>[{point.localOrigin.join(', ')}]</dd></dl><pre data-testid={`draft-point-json-${point.name}`}>{JSON.stringify(point, null, 2)}</pre></details>
+          <details><summary>Details</summary><p class="coordinates">Original [{point.position.join(', ')}] m</p>{#if pointOverrides}<p class="coordinates">Effective [{effectiveCoordinates(point)}] m · override revision {pointOverrides.revision}</p>{/if}<dl><dt>Prepared point key</dt><dd>File {point.key.sourceFileId} · row {point.key.sourceRow}</dd><dt>Artifact revision</dt><dd>{point.artifactRevision}</dd><dt>Frame / units</dt><dd>{point.frameId} · meters · right-handed Z-up</dd><dt>World origin (translation only)</dt><dd>[{point.localOrigin.join(', ')}]</dd></dl><pre data-testid={`draft-point-json-${point.name}`}>{JSON.stringify(point, null, 2)}</pre></details>
           {:else}
-          <details><summary>Original source &amp; frame</summary><p>{point.entityId} · index {point.pointIndex}<br />{snapshot?.frameId} · revision {snapshot?.project.revision} · meters · right-handed Z-up<br />Origin [{snapshot?.project.coordinates.localOrigin.join(', ')}]</p></details>
+          <details><summary>Details</summary><p class="coordinates">[{point.position.join(', ')}] m</p><p>{point.entityId} · index {point.pointIndex}<br />{snapshot?.frameId} · revision {snapshot?.project.revision} · meters · right-handed Z-up<br />Origin [{snapshot?.project.coordinates.localOrigin.join(', ')}]</p></details>
           {/if}
         </div>
       {/each}
       </div>
-      <p class="hint">Original coordinates, not GPU values. Model context uses original source positions even after point edits; complete query evidence remains attached locally. Toronto points remain unmapped to the synthetic project and excluded from its editing tools.</p>
+
     {:else}
       <p class="empty">{sceneMode === 'pole' ? 'Switch to Toronto3D or Synthetic demo to attach numbered points.' : 'Cmd/Ctrl-click any rendered cloud point to attach Point 1, Point 2, and more.'}</p>
     {/if}
@@ -126,7 +136,7 @@
   .attachment { background: #151619; border: 1px solid #ffffff12; border-radius: 10px; margin: 8px 0; padding: 10px; }
   .attachment-heading { font-size: 11px; justify-content: start; } .attachment-heading > button { margin-left: auto; border: 0; padding: 0 5px; font-size: 18px; }
   .attachment-heading strong { overflow-wrap: anywhere; }
-  .coordinates { color: #cdccd3; font-family: ui-monospace, monospace; font-size: 10px; overflow-wrap: anywhere; } .attachment summary, .hint { font-size: 10px; color: #92929c; }
+  .coordinates { color: #cdccd3; font-family: ui-monospace, monospace; font-size: 10px; overflow-wrap: anywhere; } .attachment summary { font-size: 10px; color: #92929c; }
   label { display: block; font-size: 11px; margin: 10px 0 6px; color: #c9c9d0; }
   input { box-sizing: border-box; width: 100%; background: #151619; color: #f1f1f3; border: 1px solid #ffffff20; border-radius: 8px; padding: 9px; }
   button { background: #2c2d31; color: #ededf1; border: 1px solid #ffffff16; border-radius: 7px; padding: 7px 10px; cursor: pointer; font-size: 11px; }

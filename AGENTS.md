@@ -30,6 +30,17 @@ chat are first-class design channels; AI changes remain ghosts until individuall
   Their demo snapshots are independent; no synchronization exists yet.
 - The rendered box is a mesh proposal, not an OpenCascade body.
 
+## Product UI — standing requirements
+- Follow [UX principles](docs/ux-principles.md) for every UI change: clean YAGNI,
+  Apple-style restraint, clear hierarchy and progressive disclosure.
+- Scene, current selection/type and human approval are primary. Session IDs,
+  revisions, provenance narration and routine diagnostics belong in Details,
+  not persistent overlays. Keep actionable errors/recovery visible.
+- Selected points must expose their semantic type; derived layers/clusters need
+  a compact accessible key or contextual inspection, never unlabeled color alone.
+- Do not add permanent panels, badges or explanatory copy merely to prove internal
+  correctness. Inspect idle/selected/pending/error states on desktop and mobile.
+
 ## Working procedure
 - Read the assigned task and inspect relevant code before editing.
 - If no task exists, write a short task with acceptance criteria.

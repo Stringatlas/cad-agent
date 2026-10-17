@@ -45,8 +45,9 @@ try {
   const base='http://127.0.0.1:5173'; await page.goto(base+'/?smoke=1');
   await page.waitForSelector('[data-testid="toronto-viewer"][data-ready="true"]');
   // Open real disclosures, do not bypass controls.
-  for (const details of await page.locator('details').all()) { if(!await details.evaluate(n=>n.open)) await details.locator(':scope > summary').click(); }
-  await page.getByTestId('point-edits').waitFor();
+  await page.getByTestId('toronto-technical').locator(':scope > summary').click();
+  await page.getByTestId('toronto-technical').getByText('Manual point tools', { exact: true }).click();
+  await page.getByTestId('point-edits').waitFor({ state: 'hidden' });
   await page.waitForFunction(()=>document.querySelector('[data-testid="toronto-viewer"]')?.hasAttribute('data-pick-point'));
   const viewer=page.getByTestId('toronto-viewer'); await viewer.scrollIntoViewIfNeeded(); const rect=await viewer.boundingBox(), pick=JSON.parse(await viewer.getAttribute('data-pick-point'));
   await page.keyboard.down('Control'); await page.mouse.click(rect.x+pick[0],rect.y+pick[1]); await page.keyboard.up('Control');

@@ -5,6 +5,7 @@ import { createVisualCapture } from './visual-capture';
 import { updateStableOrbitControls } from './orbit-stability';
 import { createCropLayer } from './crop-render';
 import { createTorontoCadRender } from './toronto-cad-render';
+import { createPreprocessingLayer, type PreprocessingSummary } from './preprocessing-overlays';
 import { createPointOverrideRender } from './point-override-render';
 import { projectCropRectangle } from './crop-projection';
 import { createPolePickCache, createDetailPickCache, poleGestureKind, isPoleClick, type PoleSelection } from './pole-picking';
@@ -30,6 +31,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
   const cropLayer = createCropLayer(scene);
   const pointOverrides = createPointOverrideRender(scene);
   const cad = createTorontoCadRender(scene);
+  const preprocessing = createPreprocessingLayer(scene);
   const overlay = document.createElement('div'); overlay.className = 'selection-window';
   overlay.setAttribute('data-testid', 'selection-window'); overlay.hidden = true;
   Object.assign(overlay.style, { position: 'absolute', pointerEvents: 'none', border: '2px solid #ffd65a', background: '#ffd65a22', zIndex: '3', boxSizing: 'border-box' });
@@ -241,7 +243,12 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
   }
   animate();
   return {
+    setPreprocessing(summary?: PreprocessingSummary) {
+      if (disposed) return;
+      visual.invalidate(); preprocessing.set(summary);
+    },
     capture: () => {
+      if (preprocessing.count) throw new Error('Hide derived instance bounds before source-grounded screenshot capture; these overlays are not CAD solids.');
       if (cad.captureBlocked) throw new Error('Scene capture unavailable while Toronto CAD solids or ghosts are displayed: source-only image provenance cannot describe CAD imagery.');
       if (pointOverrides.captureBlocked) throw new Error('Scene screenshot capture is unavailable while point overrides or a move preview are active. Undo all point edits and clear the preview before capturing source-grounded imagery.');
       // Finish residual damping before freezing the view; it otherwise moves after the click.
@@ -365,7 +372,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       visual.dispose();
       controls.removeEventListener('change', controlsChanged);
       disposed = true; clearDetail(); pickCache?.dispose(); pickCache = undefined; finishGesture();
-      pointOverrides.dispose(); cad.dispose();
+      pointOverrides.dispose(); cad.dispose(); preprocessing.dispose();
       markerGeometry.dispose(); markerMaterial.dispose(); winnerGeometry.dispose(); winnerMaterial.dispose(); lineGeometry.dispose(); lineMaterial.dispose();
       for (const name of draftMarkers.keys()) removeDraftMarker(name);
       delete host.dataset.draftMarkers;
