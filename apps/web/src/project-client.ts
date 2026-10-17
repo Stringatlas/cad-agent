@@ -87,6 +87,7 @@ export interface ProjectView {
   readonly session?: ProjectSessionInfo; readonly snapshot?: ProjectSnapshot; readonly proposal?: BoxProposal; readonly context?: SceneContext;
   readonly selectedId: string | null; readonly points: readonly ScenePointReference[];
   readonly pending?: string; readonly needsRefresh: boolean; readonly status: string; readonly undoAvailable: boolean;
+  readonly modelProposals?: readonly BoxProposal[]; readonly modelStreaming?: boolean;
 }
 /** No automatic retries. An ambiguous mutation (including cancellation) blocks edits until explicit refresh. */
 export class ProjectController {
@@ -95,9 +96,58 @@ export class ProjectController {
   private undoReceipts = new Map<string, ProjectState>();
   // Receipt ownership outlives the transient displayed snapshot during Refresh/failure.
   private undoReceiptSessionId?: string;
+  private modelScope = false; private modelEpoch = 0;
   constructor(private readonly publish: (state: ProjectView) => void, private readonly transport: ProjectTransport = projectTransport) {}
   get view() { return this.state; }
-  private emit(patch: Partial<ProjectView>) { this.state = freezeProtocolValue({ ...this.state, ...patch }); if (!this.disposed) this.publish(this.state); }
+  private emit(patch: Partial<ProjectView>) {
+    // Existing invalidation paths also discard model ghosts; never rebase them.
+    if (('proposal' in patch && patch.proposal === undefined) || 'snapshot' in patch || patch.needsRefresh) {
+      ++this.modelEpoch; patch = { ...patch, modelProposals: [] };
+    }
+    this.state = freezeProtocolValue({ ...this.state, ...patch }); if (!this.disposed) this.publish(this.state);
+  }
+  setModelProposalScope(enabled: boolean) {
+    if (enabled === this.modelScope) return;
+    this.modelScope = enabled; this.clearModelProposals();
+  }
+  setModelStreaming(streaming: boolean) { if (streaming !== !!this.state.modelStreaming) this.emit({ modelStreaming: streaming }); }
+  clearModelProposals() { ++this.modelEpoch; this.emit({ modelProposals: [] }); }
+  expireModelProposals() {
+    const proposals = this.state.modelProposals ?? [], live = proposals.filter(p => p.expiresAt > Date.now());
+    if (live.length !== proposals.length) this.emit({ modelProposals: live, status: 'Expired model previews removed. Request fresh proposals; no geometry changed.' });
+  }
+  /** Tool events are untrusted candidates, not edits. Reconstruct only strict request fields. */
+  async admitModelProposal(value: unknown, isCurrent: () => boolean = () => true): Promise<boolean> {
+    const snapshot = this.state.snapshot, epoch = this.modelEpoch, generation = this.generation;
+    const current = () => !this.disposed && this.modelScope && !this.active && !this.mutation && !this.state.needsRefresh &&
+      this.state.snapshot === snapshot && epoch === this.modelEpoch && generation === this.generation && isCurrent();
+    if (!snapshot || !current()) return false;
+    try {
+      const r = protocolRecord(value);
+      const request = canonicalBoxProposalRequest(Object.fromEntries(['sessionId', 'projectRevision', 'frameId', 'units', 'edit'].map(k => [k, r[k]])));
+      if (!equal(projectBinding(snapshot), { sessionId: request.sessionId, projectRevision: request.projectRevision, frameId: request.frameId, units: request.units })) throw new Error('Stale model binding');
+      const proposal = await validateProposal(value, request, snapshot);
+      if (!current() || proposal.expiresAt <= Date.now()) return false;
+      const proposals = this.state.modelProposals ?? [], previous = proposals.find(p => p.proposalId === proposal.proposalId);
+      if (previous) return equal(previous, proposal);
+      if (proposals.length >= PROJECT_LIMITS.maxProposals) throw new Error('Proposal queue full');
+      this.emit({ modelProposals: [...proposals, proposal], status: 'Model ghost pending — no geometry changed. Review each exact change; not CAD.' });
+      return true;
+    } catch {
+      if (current()) this.emit({ status: 'Invalid, stale or unavailable model proposal rejected. No geometry changed.' });
+      return false;
+    }
+  }
+  async decline(proposalId: string) {
+    const snapshot = this.state.snapshot, proposal = this.state.modelProposals?.find(p => p.proposalId === proposalId);
+    if (!snapshot || !proposal || !this.modelScope || this.state.modelStreaming || this.state.needsRefresh) return;
+    await this.run('decline', false, async (signal, current) => {
+      const r = protocolRecord(await this.transport('/project/decline', { ...projectBinding(snapshot), proposalId, digest: proposal.digest }, signal));
+      protocolKeys(r, ['proposalId', 'declined']);
+      if (r.proposalId !== proposalId || r.declined !== true) throw new Error('Invalid decline receipt');
+      if (current()) this.emit({ modelProposals: this.state.modelProposals?.filter(p => p.proposalId !== proposalId), status: 'Exact proposal declined on server. Geometry revision unchanged.' });
+    });
+  }
   private invalidate() { this.generation++; this.active?.abort(); this.active = undefined; }
   cancel() {
     if (!this.active) { this.clearProposal(); return; }
@@ -191,9 +241,9 @@ export class ProjectController {
       if (current()) this.emit({ session });
     } catch { if (current()) this.emit({ needsRefresh: true, status: `Committed ${result.operation}, revision ${result.snapshot.project.revision}; persistence status unavailable. Explicit Refresh required.` }); }
   }
-  async approve() {
-    const snapshot = this.state.snapshot, proposal = this.state.proposal;
-    if (!snapshot || !proposal || this.state.needsRefresh) return;
+  async approve(proposalId?: string) {
+    const snapshot = this.state.snapshot, proposal = proposalId === undefined ? this.state.proposal : this.state.modelProposals?.find(p => p.proposalId === proposalId);
+    if (!snapshot || !proposal || this.state.needsRefresh || this.state.modelStreaming || (proposalId !== undefined && !this.modelScope)) return;
     if (proposal.expiresAt <= Date.now()) { this.clearProposal(); this.emit({ status: 'Proposal expired. Request a fresh exact preview; no commit.' }); return; }
     const request = canonicalBoxApprovalRequest({ ...projectBinding(snapshot), proposalId: proposal.proposalId, digest: proposal.digest, humanApproved: true });
     await this.run('approve', true, async (signal, current) => {

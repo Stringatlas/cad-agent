@@ -3,7 +3,7 @@ import { MODEL_CHAT_LIMITS as L, MODEL_VISUAL_LIMITS, canonicalModelTurnRequest,
 import { ProviderModel, ModelError, type ModelAuth, type ModelTransport, type BoundModelScene } from './provider-model';
 import { ModelVisualBroker } from './model-visual-broker';
 import { validateModelVisual } from './model-visual';
-import { bindModelScene } from './model-scene';
+import { bindModelScene, type ModelEditingAuthorities } from './model-scene';
 import { ProjectSession, ProjectError } from './project-session';
 
 function readBody(request: IncomingMessage, signal: AbortSignal, maxBytes: number = L.requestBytes): Promise<unknown> {
@@ -30,7 +30,7 @@ async function writeEvent(response: ServerResponse, event: ModelChatEvent, signa
   });
 }
 /** One admission includes catalog/credentials, body reading, scene checks and all tool rounds. */
-export function createModelChatRoutes(auth: ModelAuth, authority: ProjectSession, directory: string, transport?: ModelTransport) {
+export function createModelChatRoutes(auth: ModelAuth, authority: ProjectSession, directory: string, transport?: ModelTransport, editing?: ModelEditingAuthorities) {
   const model = new ProviderModel(auth, transport);
   let active: AbortController | undefined, closed = false, windowStart = Date.now(), calls = 0;
   let broker: ModelVisualBroker | undefined, boundActive: BoundModelScene | undefined, readingToolResult = false;
@@ -101,7 +101,7 @@ export function createModelChatRoutes(auth: ModelAuth, authority: ProjectSession
         const visual = await validateModelVisual(call, controller.signal);
         if (call.generation !== auth.credentialGeneration()) throw new ModelError('stale-account');
         // Binding uses only authoritative synthetic context or revision-checked unmapped dataset metadata.
-        bound = await bindModelScene(call.scene, authority, directory, controller.signal, visual);
+        bound = await bindModelScene(call.scene, authority, directory, controller.signal, visual, editing);
         boundActive = bound;
         if (visual) {
           broker = new ModelVisualBroker(call.requestId, controller.signal, emit);

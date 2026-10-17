@@ -73,6 +73,19 @@ export class ProjectSession {
     this.proposals.set(proposal.proposalId, proposal);
     return proposal;
   }
+  decline(input: unknown): { proposalId: string; declined: true } {
+    const r = protocolRecord(input);
+    protocolKeys(r, ['sessionId', 'projectRevision', 'frameId', 'units', 'proposalId', 'digest']);
+    const binding = canonicalProjectBinding(Object.fromEntries(['sessionId', 'projectRevision', 'frameId', 'units'].map(key => [key, r[key]])));
+    this.check(binding); protocolHash(r.digest);
+    if (typeof r.proposalId !== 'string') throw new ProjectError('invalid-request', 'Expected proposal ID');
+    const proposal = this.proposals.get(r.proposalId);
+    if (!proposal) throw new ProjectError('unknown-proposal', 'Proposal is unknown or invalidated');
+    this.check(proposal);
+    if (proposal.digest !== r.digest) throw new ProjectError('approval-mismatch', 'Decline does not match retained preview');
+    this.proposals.delete(proposal.proposalId);
+    return { proposalId: proposal.proposalId, declined: true };
+  }
   approve(input: unknown): ProjectCommitResult {
     const call = canonicalBoxApprovalRequest(input); this.check(call);
     const proposal = this.proposals.get(call.proposalId);

@@ -554,9 +554,7 @@ export class ProviderAuth {
       this.checkPath(this.path, true);
       const lockPath = `${this.path}.lock`;
       this.checkPath(lockPath, true);
-      // Fail closed on an existing lock, including crash-stale locks. Never steal a live session.
-      this.lockFd = openSync(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
-      writeFileSync(this.lockFd, `${process.pid}\n`);
+      this.acquireLock(lockPath);
       if (existsSync(this.path)) {
         // Nonblocking open lets fstat reject FIFOs instead of hanging startup before
         // we can establish that the credential input is a regular file.
@@ -625,11 +623,53 @@ export class ProviderAuth {
       try { unlinkSync(temporary); } catch { /* Already atomically renamed. */ }
     }
   }
-  private releaseLock(): void {
-    if (this.lockFd === undefined) return;
-    try { closeSync(this.lockFd); } finally {
-      this.lockFd = undefined;
-      try { unlinkSync(`${this.path}.lock`); } catch { /* No credential content in lock. */ }
+  private acquireLock(lockPath: string): void {
+    const create = () => {
+      this.lockFd = openSync(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+      writeFileSync(this.lockFd, `${process.pid}\n`);
+    };
+    try { create(); return; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+
+    // Serialize reapers: two starters must not both inspect a dead owner and then
+    // unlink each other's newly acquired lock. Ordinary acquisition remains O_EXCL.
+    // An interrupted recovery leaves this guard fail-closed, rather than guessing.
+    const guardPath = `${lockPath}.recover`;
+    const guard = openSync(guardPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+    try {
+      const fd = openSync(lockPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      try {
+        const stat = fstatSync(fd);
+        if (!stat.isFile() || stat.nlink !== 1 || stat.size > 32 ||
+          (stat.mode & 0o077) !== 0 || (process.getuid && stat.uid !== process.getuid())) fail('storage');
+        const raw = readFileSync(fd, 'utf8');
+        if (!/^[1-9][0-9]*\n$/u.test(raw)) fail('storage');
+        const pid = Number(raw.trim());
+        if (!Number.isSafeInteger(pid) || pid > 2_147_483_647) fail('storage');
+        try { process.kill(pid, 0); fail('storage'); }
+        catch (error) {
+          // EPERM and every other uncertain result mean the owner may still be live.
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+        }
+        this.unlinkLock(fd, lockPath);
+      } finally { closeSync(fd); }
+      create();
+    } finally {
+      try { this.unlinkLock(guard, guardPath); } finally { closeSync(guard); }
     }
+  }
+  private unlinkLock(fd: number, path: string): void {
+    const owned = fstatSync(fd);
+    const current = lstatSync(path);
+    if (!current.isFile() || current.dev !== owned.dev || current.ino !== owned.ino) fail('storage');
+    unlinkSync(path);
+  }
+  private releaseLock(): void {
+    const fd = this.lockFd;
+    if (fd === undefined) return;
+    this.lockFd = undefined;
+    try { this.unlinkLock(fd, `${this.path}.lock`); }
+    catch { /* Never remove a replacement lock or follow a symlink. */ }
+    finally { closeSync(fd); }
   }
 }

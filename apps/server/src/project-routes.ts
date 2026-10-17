@@ -14,7 +14,7 @@ function readBody(request: IncomingMessage): Promise<unknown> {
     request.on('data', data); request.once('end', end); request.once('error', fail); request.once('aborted', fail);
   });
 }
-const ROUTES = ['/project', '/project/session', '/project/context', '/project/save', '/project/load', '/project/proposals', '/project/approve', '/project/undo'];
+const ROUTES = ['/project', '/project/session', '/project/context', '/project/save', '/project/load', '/project/proposals', '/project/decline', '/project/approve', '/project/undo'];
 const STATUS: Record<ProjectErrorCode, number> = { 'invalid-request': 400, 'stale-project': 409, 'unknown-entity': 404, 'invalid-point': 422,
   'unknown-proposal': 404, 'approval-mismatch': 409, 'expired-proposal': 409, 'nothing-to-undo': 409, 'resource-limit': 413,
   busy: 429, 'local-only': 403, 'snapshot-missing': 404, 'snapshot-corrupt': 422, 'storage-unavailable': 503, 'postcondition-failed': 422 };
@@ -58,6 +58,7 @@ export function createProjectRoutes(authority: ProjectSession) {
         case '/project/save': result = authority.save(call); break;
         case '/project/load': result = authority.load(call); break;
         case '/project/proposals': result = authority.propose(call); break;
+        case '/project/decline': result = authority.decline(call); break;
         case '/project/approve': result = authority.approve(call); break;
         case '/project/undo': result = authority.undo(call); break;
         default: throw new ProjectError('invalid-request', 'Unknown project operation');

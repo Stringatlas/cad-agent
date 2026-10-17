@@ -4,8 +4,12 @@ Use [TEMPLATE.md](TEMPLATE.md) for bounded work with testable acceptance criteri
 
 ## Index
 
+Latest: [035 — Chat-first conversation and scene-native point review](035-chat-point-move-review.md) — implemented;695/695 tests and browser checks pass; fresh-session review pending.
+
 | Task | Status |
 | --- | --- |
+| [035 — Chat-first conversation and scene-native point review](035-chat-point-move-review.md) | Implemented;695/695 tests, typechecks/build, five two-point browser and six native-CAD regression groups pass. Safe Markdown, per-point verified destinations and individual scene Confirm/Reject. Fresh-session review pending. |
+| [034 — Toronto point edits and real CAD solids](034-toronto-cad-workspace.md) | Implemented;677/677 tests, typecheck/build and six actual-kernel fixture browser groups pass. Volatile Toronto solids/point proposals; live-provider/production-scale and fresh-session review pending. |
 | [001 — Project foundation](001-project-foundation.md) | Ready for fresh review; baseline and browser smoke passed. |
 | [002 — Toronto3D preprocessing](002-toronto3d-preprocessing.md) | Ready for fresh review; all 78,320,210 points validated, no runtime changes. |
 | [003 — Web preview with independent LOD](003-web-preview-lod.md) | Implemented; browser verification blocked; fresh review pending. |
@@ -29,6 +33,7 @@ Use [TEMPLATE.md](TEMPLATE.md) for bounded work with testable acceptance criteri
 
 | [020 — Redacted provider protocol diagnostics](020-model-protocol-diagnostics.md) | Implemented;397/397 baseline and83 focused fake-provider tests pass, independent bounded review READY. Fixed backend tags and refusal-delta fix; live root cause/compatibility, complete graph and whole-checkout fresh-session review remain pending. |
 
+| [032 — Scene-first workspace](032-scene-first-workspace.md) | Implemented;641/641 tests, typechecks/build, ten isolated browser groups and actual-data desktop/mobile visual checks pass. Full-height scene/sidebar, mobile chat drawer, closed tools; fresh-session review pending. |
 | [031 — Verified query selection and approved point moves](031-verified-point-overrides.md) | Implemented;641/641 tests, typechecks/build and isolated built-browser query/select/approve/Undo pass. Independent bounded review found no blockers; whole-checkout fresh review, production-scale/live-model checks and graph certification remain pending. |
 | [030 — Chat camera and compressed crop](030-chat-screenshot-crop.md) | Implemented;607/607 baseline and36 guarded browser checks pass. Independent corrective sign-off READY; whole-checkout review separate. |
 | [029 — Catalog-listed image inputs](029-catalog-model-image-input.md) | Implemented;596/596 baseline and72 guarded fixture browser checks pass; fresh independent review pending. Removes inferred model-name capability gate, preserves catalog admission and explicit provider errors. |

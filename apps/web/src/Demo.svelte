@@ -6,9 +6,9 @@
   import VisualObservationPanel from './VisualObservationPanel.svelte';
   import type { VisualModelSource } from './visual-model-source';
 
-  let { snapshot, selectedId, points, proposal, onselect, onpin, onremovepoint, onclearpoints, onvisualsource = () => {} }: {
+  let { snapshot, selectedId, points, proposal, modelProposals = [], onselect, onpin, onremovepoint, onclearpoints, onvisualsource = () => {} }: {
     onvisualsource?: (source: VisualModelSource | undefined) => void;
-    snapshot: ProjectSnapshot; selectedId: string | null; points: readonly ScenePointReference[]; proposal?: BoxProposal;
+    snapshot: ProjectSnapshot; selectedId: string | null; points: readonly ScenePointReference[]; proposal?: BoxProposal; modelProposals?: readonly BoxProposal[];
     onselect: (id: string | null) => void; onpin: (point: Omit<ScenePointReference, 'name'>) => void;
     onremovepoint: (name: ScenePointName) => void; onclearpoints: () => void;
   } = $props();
@@ -20,7 +20,7 @@
   const selected = $derived(project.selectedEntityId ? resolveEntity(project, project.selectedEntityId) : undefined);
   function select(id: string | null) { onselect(id); }
   let mounted = $state(false);
-  $effect(() => { if (mounted) { viewer?.updateSelection(project); viewer?.updateOverlays(points, proposal); } });
+  $effect(() => { if (mounted) { viewer?.updateSelection(project); viewer?.updateOverlays(points, proposal, modelProposals); } });
   onMount(() => {
     try {
       viewer = createViewer(host, project, select, point => onpin(point),
@@ -35,18 +35,18 @@
 </script>
 
 <main>
-  <header><div><p class="eyebrow">SEPARATE AUTHORITATIVE PROJECT</p><h1>Synthetic scene</h1></div><span class="badge">Revision {project.revision}</span></header>
   <section class="workspace">
     <div class="scene-panel">
-      <div class="toolbar"><strong>Local scene</strong><span>Orbit: drag · Zoom: scroll · Select: click · Pin: Cmd/Ctrl-click</span></div>
+      <div class="scene-label">Synthetic <span>Local · meters</span></div>
       <div class="viewport" bind:this={host} data-testid="viewer"></div>
       {#if error}<p class="error" role="alert">Render unavailable (authority/commit status is independent): {error}</p>{/if}
-      {#if mounted}<VisualObservationPanel label="Synthetic" capture={() => viewer!.capture()} isCurrent={id => viewer!.isCaptureCurrent(id)} resolvePixel={(id, x, y) => viewer!.resolvePixel(id, x, y)} />{/if}
-      <div class="legend">X <span class="red">red</span> / Y <span class="green">green</span> / Z <span class="blue">blue</span> · XY ground · meters</div>
+
     </div>
     <aside>
-      <details data-testid="synthetic-scene-tools"><summary>Entities, numbered points &amp; coordinates</summary>
-      <h2>Authoritative entities</h2>
+      <details data-testid="synthetic-scene-tools"><summary>Scene tools</summary>
+      <div class="tools-content">
+      <details class="help"><summary>Navigation help</summary><p>Drag to orbit · Scroll to zoom · Click to select · Cmd/Ctrl-click to pin.</p><p>X red · Y green · Z blue · XY ground · meters.</p></details>
+      <h2>Entities</h2>
       {#each project.entities as entity}
         <button class:active={project.selectedEntityId === entity.id} onclick={() => select(entity.id)} aria-pressed={project.selectedEntityId === entity.id}>
           <strong>{entity.id}</strong><span>{entity.kind === 'box' ? 'Proposed box · mesh placeholder' : `Synthetic cloud · ${entity.points.length} points`}</span>
@@ -71,38 +71,39 @@
       <p data-testid="viewer-project-binding">Session {snapshot.sessionId}<br />Frame {snapshot.frameId} · geometry revision {project.revision}</p>
       <h2>Coordinate metadata</h2>
       <dl><dt>Units / frame</dt><dd>Meters (m) · right-handed · Z-up</dd><dt>Local origin in world</dt><dd>{project.coordinates.localOrigin.join(', ')} m</dd><dt>World conversion</dt><dd>world = local + origin</dd></dl>
-      <p class="note">The box is a parameterized rendering placeholder, <strong>not an OpenCascade body</strong>. Approved parameter edits only; no CAD solids or model integration.</p>
+      <p class="note">The box is a parameterized rendering placeholder, <strong>not an OpenCascade body</strong>. Human-approved parameter edits only; model ghosts are not committed or CAD solids.</p>
+      {#if mounted}<VisualObservationPanel label="Synthetic" capture={() => viewer!.capture()} isCurrent={id => viewer!.isCaptureCurrent(id)} resolvePixel={(id, x, y) => viewer!.resolvePixel(id, x, y)} />{/if}
+      </div>
       </details>
     </aside>
   </section>
 </main>
 
 <style>
-  main { min-width: 0; padding: 22px; }
-  header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 18px; }
-  .eyebrow { color: #72d9cd; font-size: 11px; letter-spacing: 2px; margin: 0; }
-  h1 { font-size: 22px; margin: 5px 0 0; font-weight: 550; }
-  .badge { border: 1px solid #344660; border-radius: 20px; padding: 6px 14px; white-space: nowrap; }
-  .workspace { display: grid; grid-template-columns: minmax(0, 1fr); border: 1px solid #2b3b53; border-radius: 10px; overflow: hidden; }
-  .scene-panel { min-width: 0; background: #101927; }
-  .toolbar, .legend { padding: 12px 18px; display: flex; justify-content: space-between; gap: 12px; color: #a1b3ca; font-size: 12px; }
-  .viewport { width: 100%; height: clamp(380px, calc(100vh - 330px), 900px); min-height: 340px; }
+  main, .workspace, .scene-panel { position: relative; width: 100%; height: 100%; min-width: 0; min-height: 0; }
+  main { color: #f5f5f7; background: #151619; overflow: hidden; }
+  .viewport { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; }
   :global(canvas) { display: block; touch-action: none; }
-  aside { background: #111d2d; padding: 14px 18px; min-width: 0; }
-  summary { color: #a9c3d9; font-size: 12px; } p, dd { overflow-wrap: anywhere; }
-  h2 { font-size: 13px; color: #a1b3ca; margin: 20px 0 10px; }
-  h2:first-child { margin-top: 0; }
-  button { display: block; width: 100%; text-align: left; color: #e4ecf7; background: #1c2a40; border: 1px solid #344660; border-radius: 7px; padding: 12px; margin: 8px 0; cursor: pointer; }
-  button span { display: block; font-size: 11px; color: #a1b3ca; }
-  button.active { border-color: #ffc766; background: #3a3428; }
-  button.clear { background: transparent; padding: 7px 12px; }
-  button:hover { border-color: #a1b3ca; }
-  button:focus-visible { outline: 2px solid #ffc766; outline-offset: 2px; }
-  dt { color: #a1b3ca; font-size: 11px; margin-top: 10px; }
-  dd { margin: 0; font-size: 13px; }
-  .note { color: #a1b3ca; font-size: 12px; border-top: 1px solid #344660; padding-top: 16px; }
-  .legend { display: block; }
-  .red { color: #ff6666; } .green { color: #66dd88; } .blue { color: #7799ff; }
-  .error { color: #ff8888; padding: 12px; }
-  @media (max-width: 800px) { main { padding: 12px; } .workspace { grid-template-columns: 1fr; } .toolbar { flex-direction: column; } .viewport { height: 50vh; } }
+  .scene-label { position: absolute; z-index: 1; top: 16px; left: 16px; padding: 9px 12px; border: 1px solid #ffffff12; border-radius: 12px; background: #202124ed; font-size: 12px; font-weight: 550; pointer-events: none; }
+  .scene-label span { margin-left: 8px; font-size: 11px; color: #a8a9b0; font-weight: 400; }
+  aside { position: absolute; z-index: 2; top: 16px; right: 16px; max-width: calc(100% - 32px); }
+  aside > details { background: #202124f5; border: 1px solid #ffffff18; border-radius: 12px; box-shadow: 0 8px 32px #0003; }
+  aside > details > summary { padding: 10px 14px; }
+  aside > details[open] { width: 340px; max-width: 100%; }
+  .tools-content { box-sizing: border-box; padding: 0 14px 14px; max-height: calc(100dvh - 180px); max-height: min(65dvh, 620px); overflow-y: auto; overscroll-behavior: contain; }
+  summary { color: #e8e8ed; font-size: 12px; cursor: pointer; }
+  p, dd { overflow-wrap: anywhere; font-size: 12px; }
+  h2 { font-size: 12px; color: #a8a9b0; margin: 20px 0 10px; font-weight: 500; }
+  button { display: block; width: 100%; text-align: left; color: #f5f5f7; background: #2b2c30; border: 1px solid #ffffff1c; border-radius: 8px; padding: 10px; margin: 8px 0; cursor: pointer; }
+  button span { display: block; font-size: 11px; color: #a8a9b0; }
+  button.active { border-color: #5b9cff; background: #23344d; }
+  button.clear { background: transparent; }
+  button:hover { border-color: #72737b; }
+  button:focus-visible, summary:focus-visible { outline: 2px solid #5b9cff; outline-offset: 2px; }
+  dt { color: #a8a9b0; font-size: 11px; margin-top: 10px; }
+  dd { margin: 0; }
+  .note { color: #a8a9b0; font-size: 11px; border-top: 1px solid #ffffff18; padding-top: 14px; }
+  .help { margin-top: 8px; color: #a8a9b0; }
+  .error { position: absolute; z-index: 1; left: 16px; right: 16px; bottom: 16px; margin: 0; color: #ffb2aa; background: #202124f5; border: 1px solid #ffb2aa44; border-radius: 10px; padding: 12px; overflow-wrap: anywhere; max-height: 30%; overflow-y: auto; }
+  @media (max-width: 600px) { .scene-label { top: 12px; left: 12px; } .scene-label span { display: none; } aside { top: 12px; right: 12px; max-width: calc(100% - 24px); } }
 </style>

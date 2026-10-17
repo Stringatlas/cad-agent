@@ -7,7 +7,7 @@ export type EntityObject = THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMater
 // Render caches only: dimensions/positions/IDs originate in project state.
 export function createEntityObject(entity: Entity): EntityObject {
   const object: EntityObject = entity.kind === 'box'
-    ? new THREE.Mesh(new THREE.BoxGeometry(...entity.dimensions), new THREE.MeshStandardMaterial({ color: 0x5f8cff, roughness: 0.6 }))
+    ? new THREE.Mesh(new THREE.BoxGeometry(...entity.dimensions), new THREE.MeshStandardMaterial({ color: 0x5f8cff, roughness: 0.6, transparent: true, opacity: 0.62, depthWrite: false }))
     : new THREE.Points(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(entity.points.flat(), 3)), new THREE.PointsMaterial({ color: 0x66ddd2, size: 0.075 }));
   if (entity.kind === 'box') object.position.set(...entity.center);
   object.userData.entityId = entity.id;

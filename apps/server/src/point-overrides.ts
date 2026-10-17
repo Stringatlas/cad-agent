@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { POINT_OVERRIDE_LIMITS, canonicalPointMoveProposalRequest, canonicalPointMoveApprovalRequest, canonicalPointMoveUndoRequest,
-  type PointOverrideSnapshot, type PointMoveProposal, type PointOverrideEntry, type PointOverrideErrorCode, type PointKey, type Vec3 } from '@spatial/contracts';
+  assertVec3, type PointOverrideSnapshot, type PointMoveProposal, type PointOverrideEntry, type PointOverrideErrorCode, type PointKey, type Vec3 } from '@spatial/contracts';
 import { SemanticArtifact, SemanticFailure } from './semantic-artifact';
 import { getSemanticDiskIndex } from './semantic-disk-index';
 
@@ -50,7 +50,7 @@ export class PointOverrideSession {
     return position;
   }
   /** Admission protects all await-to-publication intervals, including direct callers. */
-  async execute(operation: 'snapshot' | 'propose' | 'approve' | 'undo', value?: unknown, signal?: AbortSignal): Promise<PointOverrideSnapshot | PointMoveProposal> {
+  async execute(operation: 'snapshot' | 'pending' | 'propose' | 'approve' | 'decline' | 'undo', value?: unknown, signal?: AbortSignal, verifiedDestination?: Vec3): Promise<PointOverrideSnapshot | PointMoveProposal | PointMoveProposal[]> {
     if (this.active) throw new PointOverrideError('busy');
     if (this.closed) throw new PointOverrideError('unavailable');
     this.active = true;
@@ -58,9 +58,18 @@ export class PointOverrideSession {
       this.artifact ??= await SemanticArtifact.open(this.directory, signal);
       const artifact = this.artifact; await artifact.check(signal);
       if (operation === 'snapshot') return this.snapshot(artifact);
+      if (operation === 'pending') return detached([...this.proposals.values()]);
+      if (operation === 'decline') {
+        const request = canonicalPointMoveApprovalRequest(value); this.binding(request);
+        if (!this.proposals.has(request.proposalId)) throw new PointOverrideError('unknown-proposal');
+        this.ready(signal); this.proposals.delete(request.proposalId); return this.snapshot(artifact);
+      }
       if (this.revision >= Number.MAX_SAFE_INTEGER) throw new PointOverrideError('resource-limit');
       if (operation === 'propose') {
         const request = canonicalPointMoveProposalRequest(value); this.binding(request);
+        // Trusted composition-only argument; HTTP/model arguments cannot set this.
+        // Avoid floating-point reconstruction of an independently verified destination.
+        if (verifiedDestination) { assertVec3(verifiedDestination); if (request.points.length !== 1) throw new PointOverrideError('invalid-request'); }
         if (request.artifactRevision !== artifact.dataset.revision) throw new PointOverrideError('stale-artifact');
         if (this.proposals.size >= POINT_OVERRIDE_LIMITS.proposals) throw new PointOverrideError('resource-limit');
         const moves: PointMoveProposal['moves'][number][] = [];
@@ -70,7 +79,7 @@ export class PointOverrideSession {
           if (existing && !same(existing.originalPosition, originalPosition)) throw new PointOverrideError('stale-artifact');
           const before = existing?.position ?? originalPosition;
           if (!same(point.position, before)) throw new PointOverrideError('position-mismatch');
-          const after = before.map((n, axis) => n + request.translation[axis]) as unknown as Vec3;
+          const after = verifiedDestination ? [...verifiedDestination] as unknown as Vec3 : before.map((n, axis) => n + request.translation[axis]) as unknown as Vec3;
           if (!after.every(Number.isFinite) || same(before, after)) throw new PointOverrideError('invalid-request');
           moves.push({ key: point.key, originalPosition, before, after });
         }
@@ -96,8 +105,23 @@ export class PointOverrideSession {
         else next.set(id(move.key), { key: move.key, originalPosition: original, position });
       }
       if (next.size > POINT_OVERRIDE_LIMITS.entries) throw new PointOverrideError('resource-limit');
+      // Approval may preserve unrelated pending edits, never rebase their geometry.
+      // Re-read originals and compare exact effective before positions before any write.
+      const remaining = new Map<string, PointMoveProposal>();
+      if (operation === 'approve') {
+        const changed = new Set(held.moves.map(move => id(move.key)));
+        for (const proposal of this.proposals.values()) {
+          if (proposal.proposalId === (request as ReturnType<typeof canonicalPointMoveApprovalRequest>).proposalId || proposal.moves.some(move => changed.has(id(move.key)))) continue;
+          let valid = true;
+          for (const move of proposal.moves) {
+            const original = await this.original(artifact, move.key, signal);
+            if (!same(original, move.originalPosition) || !same(next.get(id(move.key))?.position ?? original, move.before)) { valid = false; break; }
+          }
+          if (valid) remaining.set(proposal.proposalId, { ...proposal, revision: this.revision + 1 });
+        }
+      }
       await artifact.check(signal); this.ready(signal);
-      this.entries = next; this.revision++; this.proposals.clear();
+      this.entries = next; this.revision++; this.proposals = remaining;
       if (operation === 'approve') this.history.push({ transactionId: randomUUID(), moves: detached(held.moves) });
       else this.history.pop();
       return this.snapshot(artifact);

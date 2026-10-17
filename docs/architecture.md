@@ -1,5 +1,13 @@
 # Architecture
 
+## Product framing
+
+The shared [product vision](product-vision.md) is authoritative for product direction: a CAD-first interactive workspace with harness capabilities, not a headless harness with a UI layered on top. All agents may extend it while preserving explicit human approval and truthful geometry verification.
+
+[Task033](tasks/033-ai-ghost-proposals.md) connects synthetic-project model box create/update proposals to retained exact candidates, visible translucent ghosts and per-change Accept/Decline. Only human acceptance publishes a checked parameter edit; other old-revision candidates invalidate. These remain mesh/parameter operations, not project-integrated kernel solids, and never imply Toronto frame mapping. Screenshot grounding is blocked while ghosts are present.
+
+[Task034](tasks/034-toronto-cad-workspace.md) corrects the product destination: Toronto is the real editing workspace; synthetic is a fixture. Its bounded implementation adds a separate artifact-bound Toronto CAD authority using the existing kernel adapter/worker, direct Toronto local-meter box/cylinder candidates, disposable tessellation caches, and explicit human publication/decline/Undo. AI source-point proposals reuse the existing override authority. Consult the task for implementation/verification status; no demo-frame mapping or durable CAD document is implied.
+
 ## Implemented foundation
 
 The product goal is a VLM harness that inspects point-cloud scenes and makes verified CAD edits. The current implementation is a shared-project scene/chat workspace with deterministic read-only inspection, explicit local persistence and human-approved box parameter edits, bounded Toronto3D preview, a concrete point observation boundary and an ephemeral real-kernel CAD sandbox. It is not yet the model-driven, project-integrated CAD editing loop. Pi is external development tooling, not a product runtime dependency.

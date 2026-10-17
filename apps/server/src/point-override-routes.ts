@@ -19,8 +19,7 @@ function readBody(request: IncomingMessage, signal: AbortSignal): Promise<unknow
   });
 }
 /** Local single-user admission includes body reading, source checks and atomic publication. */
-export function createPointOverrideRoutes(directory: string) {
-  const authority = new PointOverrideSession(directory);
+export function createPointOverrideRoutes(directory: string, authority = new PointOverrideSession(directory)) {
   let active = false, closed = false, windowStart = Date.now(), calls = 0;
   const controllers = new Set<AbortController>();
   return {
@@ -31,9 +30,9 @@ export function createPointOverrideRoutes(directory: string) {
       const error = (code: PointOverrideErrorCode) => { response.setHeader('Connection', 'close'); send(STATUS[code], { ok: false, error: { code, message: code } }); };
       if (!/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(request.headers.host ?? '') ||
         (request.headers.origin !== undefined && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(request.headers.origin))) { error('local-only'); return true; }
-      const operation = url.pathname === ROOT ? 'snapshot' : url.pathname === ROOT + '/propose' ? 'propose' : url.pathname === ROOT + '/approve' ? 'approve' : url.pathname === ROOT + '/undo' ? 'undo' : undefined;
-      if (!operation || url.search || request.method !== (operation === 'snapshot' ? 'GET' : 'POST')) { error('invalid-request'); return true; }
-      if (operation === 'snapshot') {
+      const operation = url.pathname === ROOT ? 'snapshot' : url.pathname === ROOT + '/propose' ? 'propose' : url.pathname === ROOT + '/approve' ? 'approve' : url.pathname === ROOT + '/undo' ? 'undo' : url.pathname === ROOT + '/pending' ? 'pending' : url.pathname === ROOT + '/decline' ? 'decline' : undefined;
+      if (!operation || url.search || request.method !== (operation === 'snapshot' || operation === 'pending' ? 'GET' : 'POST')) { error('invalid-request'); return true; }
+      if (operation === 'snapshot' || operation === 'pending') {
         if (Number(request.headers['content-length'] ?? 0) !== 0 || request.headers['transfer-encoding']) { error('invalid-request'); return true; }
       } else {
         if (!/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(request.headers['content-type'] ?? '') || request.headers['content-encoding']) { error('invalid-request'); return true; }
@@ -46,7 +45,7 @@ export function createPointOverrideRoutes(directory: string) {
       const controller = new AbortController(); controllers.add(controller);
       const abort = () => controller.abort(); response.once('close', abort);
       try {
-        const body = operation === 'snapshot' ? undefined : await readBody(request, controller.signal);
+        const body = operation === 'snapshot' || operation === 'pending' ? undefined : await readBody(request, controller.signal);
         controller.signal.throwIfAborted();
         const result = await authority.execute(operation, body, controller.signal);
         send(200, { ok: true, result });

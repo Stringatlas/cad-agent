@@ -1,3 +1,5 @@
+export { TORONTO_CAD_LIMITS } from './toronto-cad';
+export type { TorontoCadPrimitive, TorontoCadMesh, TorontoCadBody, TorontoCadBinding, TorontoCadProposal, TorontoCadSnapshot, TorontoCadErrorCode } from './toronto-cad';
 export { POINT_OVERRIDE_LIMITS, canonicalPointMoveProposalRequest, canonicalPointMoveApprovalRequest, canonicalPointMoveUndoRequest } from './point-overrides';
 export type { PointOverrideBinding, PointOverrideEntry, PointOverrideSnapshot, PointMove, PointMoveProposal, PointMoveProposalRequest, PointMoveApprovalRequest, PointMoveUndoRequest, PointOverrideErrorCode, PointOverrideReply } from './point-overrides';
 export { MODEL_VISUAL_LIMITS, canonicalModelVisualObservation, canonicalModelVisualToolResult, modelVisualImageSize, modelVisualSourcePixel } from './model-visual';

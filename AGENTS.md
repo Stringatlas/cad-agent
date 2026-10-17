@@ -1,8 +1,10 @@
 # Project instructions
 
 ## Goal
-Build and evaluate a VLM harness for inspecting point-cloud
-scenes and making verified CAD edits.
+Build a CAD-first interactive workspace with AI harness capabilities for inspecting
+point-cloud scenes and making human-approved, verified edits.
+Read and extend the shared [product vision](docs/product-vision.md): the scene and
+chat are first-class design channels; AI changes remain ghosts until individually accepted.
 
 ## Architecture
 - Pi is development tooling, separate from the product agent.

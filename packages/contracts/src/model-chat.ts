@@ -37,7 +37,7 @@ export type ModelChatEvent =
   | { readonly kind: 'request-phase'; readonly requestId: string; readonly round: number; readonly phase: ModelRequestPhase }
   | { readonly kind: 'start'; readonly requestId: string; readonly conversationId: string; readonly model: string }
   | { readonly kind: 'delta'; readonly requestId: string; readonly text: string }
-  | { readonly kind: 'tool'; readonly requestId: string; readonly name: 'inspect_scene' | 'resolve_visual_pixel' | 'nearest_label'; readonly context: unknown }
+  | { readonly kind: 'tool'; readonly requestId: string; readonly name: 'inspect_scene' | 'resolve_visual_pixel' | 'nearest_label' | 'propose_box_create' | 'propose_box_update' | 'propose_point_move' | 'propose_point_move_to_nearest_label' | 'propose_cad_box' | 'propose_cad_cylinder'; readonly context: unknown }
   | { readonly kind: 'tool-request'; readonly requestId: string; readonly toolCallId: string; readonly nonce: string; readonly observationId: string; readonly x: number; readonly y: number }
   | { readonly kind: 'done'; readonly requestId: string; readonly conversationId: string }
   | { readonly kind: 'error'; readonly requestId: string; readonly code: string };
@@ -103,7 +103,7 @@ export function canonicalModelChatEvent(value: unknown): ModelChatEvent {
       if (r.round < 1 || typeof r.phase !== 'string' || !['dispatched', 'completed', 'failed', 'cancelled'].includes(r.phase)) throw new TypeError('Invalid inspection phase'); break;
     case 'start': protocolKeys(r, ['kind', 'requestId', 'conversationId', 'model']); protocolToken(r.conversationId); boundedText(r.model, 256); break;
     case 'delta': protocolKeys(r, ['kind', 'requestId', 'text']); boundedText(r.text, MODEL_CHAT_LIMITS.outputChars); break;
-    case 'tool': protocolKeys(r, ['kind', 'requestId', 'name', 'context']); if (!['inspect_scene', 'resolve_visual_pixel', 'nearest_label'].includes(String(r.name)) || canonicalProtocolJson(r.context).length > MODEL_CHAT_LIMITS.frameBytes / 2) throw new TypeError('Invalid tool context'); break;
+    case 'tool': protocolKeys(r, ['kind', 'requestId', 'name', 'context']); if (!['inspect_scene', 'resolve_visual_pixel', 'nearest_label', 'propose_box_create', 'propose_box_update', 'propose_point_move', 'propose_point_move_to_nearest_label', 'propose_cad_box', 'propose_cad_cylinder'].includes(String(r.name)) || canonicalProtocolJson(r.context).length > MODEL_CHAT_LIMITS.frameBytes / 2) throw new TypeError('Invalid tool context'); break;
     case 'tool-request': protocolKeys(r, ['kind', 'requestId', 'toolCallId', 'nonce', 'observationId', 'x', 'y']);
       if (typeof r.toolCallId !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/u.test(r.toolCallId)) throw new TypeError('Invalid tool call ID');
       protocolToken(r.nonce); protocolToken(r.observationId); protocolInteger(r.x, 4095); protocolInteger(r.y, 4095); break;

@@ -99,7 +99,7 @@ test('scene/selection/session/revision/provenance changes retain display history
   } finally { client.dispose(); }
 });
 
-test('model UI renders plain text, keeps local draft IDs and exposes explicit catalog/model/cancel/reset controls', () => {
+test('model UI renders safe content, keeps local draft IDs and exposes explicit catalog/model/cancel/reset controls', () => {
   const source = readFileSync(new URL('../apps/web/src/ModelChat.svelte', import.meta.url), 'utf8');
   for (const id of ['local-draft', 'send-local-draft', 'local-draft-form', 'local-draft-status', 'model-refresh', 'model-select', 'model-cancel', 'model-new-chat', 'model-history', 'model-scene-context']) assert.ok(source.includes(`data-testid="${id}"`));
   assert.ok(source.includes('{message.text ||')); assert.ok(!source.includes('{@html')); assert.ok(!/localStorage|sessionStorage|indexedDB/.test(source));
@@ -114,9 +114,18 @@ test('model UI renders plain text, keeps local draft IDs and exposes explicit ca
   assert.ok(source.includes('data-testid="model-history-notice"')); assert.ok(source.includes('{view.historyNotice}'));
   assert.ok(!/draft\s*=\s*''/.test(source.replace("let draft = $state('');", '')));
   const integration = readFileSync(new URL('../apps/web/src/Chat.svelte', import.meta.url), 'utf8');
-  assert.ok(integration.includes('<ModelChat {scene} {visualSource} points={activePoints} {onverifiedresult} />'));
+  assert.match(integration, /<ModelChat\s+\{scene\}\s+\{visualSource\}\s+points=\{activePoints\}\s+\{onverifiedresult\}/);
+  assert.ok(integration.includes('onproposal={(proposal, current) =>'));
+  assert.ok(integration.includes("if (sceneMode === 'demo') void projectController.admitModelProposal"));
   assert.ok(integration.includes('activePoints.map(({ evidence: _evidence, ...original }) => original)'));
-  assert.ok(integration.includes('<PointEdits {artifactRevision} points={activePoints}'));
+  const toronto = readFileSync(new URL('../apps/web/src/Toronto.svelte', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../apps/web/src/App.svelte', import.meta.url), 'utf8');
+  assert.ok(!integration.includes('<PointEdits'));
+  assert.ok(toronto.includes('<PointEdits {points} artifactRevision={display?.dataset.revision} refreshToken={pointRefresh}'));
+  assert.ok(toronto.includes('retainedProposals = proposals ?? []'));
+  assert.ok(app.includes('onpointproposal={() => pointRefresh++}'));
+  assert.ok(app.includes('pointBlocked = !!blocked'));
+  assert.ok(source.includes('<SafeMarkdown text={message.text ||'));
   assert.ok(source.includes('data-testid="model-select-nearest"'));
   const crop = readFileSync(new URL('../apps/web/src/ScreenshotCrop.svelte', import.meta.url), 'utf8');
   for (const id of ['model-attach-screenshot', 'model-remove-screenshot', 'model-image-preview', 'model-image-status']) assert.ok(source.includes(`data-testid="${id}"`));

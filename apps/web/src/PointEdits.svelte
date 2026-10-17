@@ -4,19 +4,22 @@
   import type { TorontoDraftPoint } from './draft-context';
   import { fetchClosestPole } from './pole-client';
   import { PointOverrideController, effectivePosition, verifiedNearestSelection, type PointEditView } from './point-override-client';
-  let { points, artifactRevision, onselect, onstate }: { points: readonly TorontoDraftPoint[]; artifactRevision?: string; onselect: (point: Omit<TorontoDraftPoint, 'name'>) => void; onstate: (snapshot?: PointOverrideSnapshot, proposal?: PointMoveProposal) => void } = $props();
+  let { points, artifactRevision, refreshToken = 0, streaming = false, onselect, onstate }: { refreshToken?: number; streaming?: boolean; points: readonly TorontoDraftPoint[]; artifactRevision?: string; onselect: (point: Omit<TorontoDraftPoint, 'name'>) => void; onstate: (snapshot?: PointOverrideSnapshot, proposal?: PointMoveProposal, blocked?: boolean, proposals?: readonly PointMoveProposal[]) => void } = $props();
   let view = $state<PointEditView>({ busy: false, needsRefresh: true, status: 'Loading volatile point authority…' });
-  const controller = new PointOverrideController(value => { view = value; onstate(value.snapshot, value.proposal); });
+  const controller = new PointOverrideController(value => { view = value; onstate(value.snapshot, value.proposal, value.busy || value.needsRefresh, value.needsRefresh ? [] : value.proposals); }, undefined, true);
+  $effect(() => { const token = refreshToken; untrack(() => { if (token && !view.needsRefresh) void controller.refresh(); }); });
   let selected = $state<string[]>([]), translation = $state<number[]>([0, 0, 1]);
   let activeName = $state(''), label = $state<TorontoSemanticLabel>(6), queryBusy = $state(false), queryStatus = $state('');
   let winner = $state<Omit<TorontoDraftPoint, 'name'>>();
   let queryGeneration = 0, queryAbort: AbortController | undefined, alive = true;
+  let boundArtifact: string | undefined;
   function clearQuery() { queryGeneration++; queryAbort?.abort(); queryAbort = undefined; queryBusy = false; winner = undefined; queryStatus = ''; }
   $effect(() => {
     const references = points, revision = artifactRevision;
     JSON.stringify(references);
     untrack(() => {
       const names: readonly string[] = references.map(p => p.name); controller.bind(references, revision); clearQuery();
+      if (revision && (boundArtifact !== revision || !view.needsRefresh)) { boundArtifact = revision; void controller.refresh(); }
       selected = selected.filter(name => names.includes(name));
       if (!names.includes(activeName)) activeName = names[0] ?? '';
     });
@@ -37,16 +40,28 @@
   }
   function choose(name: string, checked: boolean) { controller.cancel(); selected = checked ? [...selected, name] : selected.filter(n => n !== name); }
   function position(point: TorontoDraftPoint) { try { return effectivePosition(point, view.snapshot).join(', '); } catch { return 'Source mismatch — refresh and reselect'; } }
-  onMount(() => { controller.bind(points, artifactRevision); void controller.refresh(); return () => { alive = false; clearQuery(); controller.dispose(); onstate(undefined, undefined); }; });
+  onMount(() => { return () => { alive = false; clearQuery(); controller.dispose(); onstate(undefined, undefined); }; });
 </script>
 
 <section class="point-edits" data-testid="point-edits" aria-label="Toronto point edits">
-  <h3>Toronto point edits</h3>
-  <p>Session-scoped volatile overrides · meters · Toronto local Z-up. Server restart resets edits. Prepared files are never changed. No CAD or synthetic-project mapping.</p>
+  <h3>{view.proposals?.length ? 'Confirm point changes' : 'Point changes'}</h3>
+  {#each view.proposals ?? [] as proposal (proposal.proposalId)}
+    <section class="proposal-card" data-testid="point-edit-review" data-proposal-id={proposal.proposalId} aria-label="Exact point move review">
+      {#each proposal.moves as move}
+        {@const name = points.find(point => point.key.sourceFileId === move.key.sourceFileId && point.key.sourceRow === move.key.sourceRow)?.name ?? `File ${move.key.sourceFileId} row ${move.key.sourceRow}`}
+        <h4>{name} proposed</h4><p>Before [{move.before.join(', ')}] m<br />Proposed [{move.after.join(', ')}] m</p>
+      {/each}
+      <p>Unconfirmed · revision {proposal.revision} · original points stay mint; proposed copies are orange.</p>
+      <button class="confirm" data-testid="point-edit-approve" disabled={view.busy || view.needsRefresh || streaming} onclick={() => { controller.selectProposal(proposal.proposalId); void controller.approve(); }}>Confirm</button>
+      <button data-testid="point-edit-cancel" disabled={view.busy || view.needsRefresh || streaming} onclick={() => { controller.selectProposal(proposal.proposalId); void controller.decline(); }}>Reject</button>
+    </section>
+  {/each}
   <p data-testid="point-edit-status" role="status">{view.status}</p>
-  <button data-testid="point-edit-refresh" disabled={view.busy} onclick={() => { clearQuery(); void controller.refresh(); }}>Refresh point authority</button>
+  <button data-testid="point-edit-refresh" disabled={view.busy || streaming} onclick={() => { clearQuery(); void controller.refresh(); }}>Refresh point authority</button>
   {#if view.needsRefresh}<p role="alert">Editing blocked until explicit Refresh succeeds. No automatic retry.</p>{/if}
   {#if view.snapshot}<p>Session {view.snapshot.sessionId} · revision {view.snapshot.revision} · {view.snapshot.entries.length} overridden points</p>{/if}
+  <details class="manual"><summary>Manual point tools</summary>
+  <p>Session-only overrides · Toronto local meters / Z-up. Restart resets edits; prepared files never change. Ask chat to move each selected point to its closest pole, then confirm each change here.</p>
   <h4>1. Find nearest label (original dataset)</h4>
   <p>Whole-dataset indexed search uses original prepared coordinates, not approved edits. The result is only attached after you select it.</p>
   <label>Original query reference<select data-testid="point-query-reference" bind:value={activeName} onchange={() => { clearQuery(); controller.cancel(); }} disabled={queryBusy || view.busy}>{#each points as p (p.name)}<option value={p.name}>{p.name}</option>{/each}</select></label>
@@ -60,19 +75,14 @@
     <label class="reference"><input type="checkbox" data-testid={`point-edit-select-${point.name}`} checked={selected.includes(point.name)} disabled={view.busy} onchange={event => choose(point.name, event.currentTarget.checked)} /> {point.name} · effective [{position(point)}] m</label>
   {/each}
   <div class="axes">{#each ['X', 'Y', 'Z'] as axis, i}<label>Δ{axis} (m)<input type="number" step="0.1" data-testid={`point-edit-d${axis.toLowerCase()}`} bind:value={translation[i]} disabled={view.busy} oninput={() => controller.cancel()} /></label>{/each}</div>
-  <button data-testid="point-edit-preview" disabled={view.busy || view.needsRefresh || !selected.length || !translation.every(Number.isFinite) || translation.every(n => n === 0)} onclick={() => void controller.propose(selected, translation as unknown as Vec3)}>Preview exact translation</button>
-  {#if view.proposal}
-    <section data-testid="point-edit-review" aria-label="Exact point move review"><h4>3. Review retained server proposal</h4>
-      <p>Proposal {view.proposal.proposalId} · revision {view.proposal.revision}. Orange ghosts are uncommitted.</p>
-      {#each view.proposal.moves as move}<p>File {move.key.sourceFileId} · row {move.key.sourceRow}<br />Before [{move.before.join(', ')}] m<br />After [{move.after.join(', ')}] m</p>{/each}
-      <button data-testid="point-edit-approve" disabled={view.busy || view.needsRefresh} onclick={() => void controller.approve()}>Approve exact point move</button>
-      <button data-testid="point-edit-cancel" onclick={() => controller.cancel()}>Cancel preview</button>
-    </section>
-  {/if}
-  <button data-testid="point-edit-undo" disabled={view.busy || view.needsRefresh || !view.snapshot?.nextUndoTransactionId} onclick={() => void controller.undo()}>Undo last point edit</button>
+  <button data-testid="point-edit-preview" disabled={view.busy || view.needsRefresh || streaming || !selected.length || !translation.every(Number.isFinite) || translation.every(n => n === 0)} onclick={() => void controller.propose(selected, translation as unknown as Vec3)}>Preview exact translation</button>
+  </details>
+  <button data-testid="point-edit-undo" disabled={view.busy || view.needsRefresh || streaming || !view.snapshot?.nextUndoTransactionId} onclick={() => void controller.undo()}>Undo last point edit</button>
 </section>
 <style>
-  .point-edits { border-top: 1px solid #344b61; margin-top: 20px; padding-top: 12px; }
+  .point-edits { padding: 12px; border: 1px solid #ffffff20; border-radius: 14px; background: #202124f5; box-shadow: 0 8px 30px #0004; }
+  h3 { margin: 0 0 8px; } .manual { margin-top: 10px; } summary { color: #b9bac1; cursor: pointer; font-size: 11px; }
+  .confirm { background: #a75b12; border-color: #ffb84d; }
   h3 { font-size: 15px; } h4 { font-size: 12px; color: #bdddd7; }
   p, label { font-size: 11px; overflow-wrap: anywhere; color: #9badc3; }
   label { display: block; margin: 8px 0; } .reference { display: flex; gap: 6px; align-items: start; }

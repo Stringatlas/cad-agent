@@ -57,7 +57,9 @@ export function validateModelEvent(value: unknown, request: ModelTurnRequest): M
   if (r.kind === 'delta' && (typeof r.text !== 'string' || !r.text.length || r.text.length > MODEL_CLIENT_LIMITS.outputChars)) throw new Error('Invalid text delta');
   if (r.kind === 'tool') {
     if (r.name !== 'inspect_scene' && !(r.name === 'resolve_visual_pixel' && request.visualObservation) &&
-      !(r.name === 'nearest_label' && request.scene.mode === 'toronto' && request.scene.toronto.length > 0)) throw new Error('Unsupported tool');
+      !(r.name === 'nearest_label' && request.scene.mode === 'toronto' && request.scene.toronto.length > 0) &&
+      !(['propose_point_move', 'propose_point_move_to_nearest_label', 'propose_cad_box', 'propose_cad_cylinder'].includes(String(r.name)) && request.scene.mode === 'toronto' && (!String(r.name).startsWith('propose_point_move') || request.scene.toronto.length > 0)) &&
+      !((r.name === 'propose_box_create' || r.name === 'propose_box_update') && request.scene.mode === 'demo' && request.scene.project)) throw new Error('Unsupported tool');
     canonicalProtocolJson(r.context, { maxDepth: 12, maxNodes: 4096, maxArrayLength: 256, maxStringLength: 12000 });
   }
   if (r.kind === 'tool-request') {
@@ -289,7 +291,8 @@ export class ModelChatController {
   private catalogActive?: AbortController; private catalogSequence = 0;
   constructor(private publish: (view: ModelChatView) => void,
     private fetcher: typeof fetch = (input, init) => globalThis.fetch(input, init),
-    private deadlineMs: number = MODEL_CLIENT_LIMITS.deadlineMs, private catalogDeadlineMs: number = MODEL_CLIENT_LIMITS.catalogDeadlineMs) {}
+    private deadlineMs: number = MODEL_CLIENT_LIMITS.deadlineMs, private catalogDeadlineMs: number = MODEL_CLIENT_LIMITS.catalogDeadlineMs,
+    private proposalEvents: { onproposal?: (proposal: unknown, isCurrent: () => boolean) => void; oninvalidate?: () => void; onauthorityproposal?: (kind: 'points' | 'cad') => void } = {}) {}
   private set(patch: Partial<ModelChatView>) { this.view = freezeProtocolValue({ ...this.view, ...patch, continuationActive: this.conversationId !== null }); if (!this.disposed) this.publish(this.view); }
   private invalidate() { ++this.generation; this.active?.abort(); this.active = undefined; }
   bind(scene: ModelScene) {
@@ -300,6 +303,7 @@ export class ModelChatController {
   }
   /** Retained messages are display-only: only the volatile handle can continue server history. */
   private contextReset(reason: string) {
+    this.proposalEvents.oninvalidate?.();
     this.invalidate(); this.conversationId = null;
     this.set({ phase: 'idle', code: 'new-conversation-context',
       historyNotice: this.view.messages.length ? `${reason}. Messages from the previous context are kept for reference only, not sent to the model. New messages use the current scene, model and account.` : this.view.historyNotice,
@@ -311,7 +315,7 @@ export class ModelChatController {
     this.contextReset('Account connection changed');
     this.set({ catalogPhase: 'idle', catalog: undefined, model: '', code: 'refresh-models' });
   }
-  newChat() { this.invalidate(); this.conversationId = null; this.set({ messages: [], historyNotice: undefined, phase: 'idle', code: 'new-chat' }); }
+  newChat() { this.proposalEvents.oninvalidate?.(); this.invalidate(); this.conversationId = null; this.set({ messages: [], historyNotice: undefined, phase: 'idle', code: 'new-chat' }); }
   selectModel(model: string) {
     if (!this.view.catalog?.ready || (model !== '' && !this.view.catalog.models.some(m => m.id === model))) return;
     if (model === this.view.model) return;
@@ -319,13 +323,14 @@ export class ModelChatController {
   }
   cancel() {
     if (!this.active && !this.catalogActive) return;
+    this.proposalEvents.oninvalidate?.();
     ++this.catalogSequence; this.catalogActive?.abort(); this.catalogActive = undefined;
     this.invalidate(); this.conversationId = null;
     this.set({ phase: 'cancelled', code: 'cancelled-new-conversation-required',
       catalogPhase: this.view.catalogPhase === 'loading' ? 'idle' : this.view.catalogPhase,
       messages: this.view.messages.map(m => m.state === 'streaming' ? { ...settleInspections(m, 'cancelled'), state: 'incomplete', failureCode: 'cancelled-new-conversation-required' } : m) });
   }
-  dispose() { this.disposed = true; this.invalidate(); ++this.catalogSequence; this.catalogActive?.abort(); }
+  dispose() { this.proposalEvents.oninvalidate?.(); this.disposed = true; this.invalidate(); ++this.catalogSequence; this.catalogActive?.abort(); }
   async refreshModels() {
     if (this.disposed) return;
     this.catalogActive?.abort();
@@ -366,6 +371,8 @@ export class ModelChatController {
     this.set({ messages: [...next], phase: 'streaming', code: 'waiting-for-model' });
     const current = () => !this.disposed && currentGeneration === this.generation;
     const timer = setTimeout(() => controller.abort(), this.deadlineMs);
+    const proposalsAfterImage: unknown[] = [];
+    const torontoAuthorities = new Set<'points' | 'cad'>();
     try {
       const id = await streamModelTurn(request, controller.signal, event => {
         if (!current() || controller.signal.aborted) return;
@@ -377,15 +384,35 @@ export class ModelChatController {
         if (messageBytes([...next.slice(0, -1), updated]) > MODEL_CLIENT_LIMITS.historyBytes) throw new ModelTurnFailure('history-limit-new-chat-required');
         next[next.length - 1] = updated; next = boundInspections(next);
         this.set({ messages: [...next], code: event.kind === 'tool' ? 'inspecting-bound-scene' : 'receiving-model-response' });
+        if (event.kind === 'tool' && request.scene.mode === 'toronto') {
+          if (event.name === 'propose_point_move' || (event.name === 'propose_point_move_to_nearest_label' && protocolRecord(event.context).status === 'pending')) torontoAuthorities.add('points');
+          if (event.name === 'propose_cad_box' || event.name === 'propose_cad_cylinder') torontoAuthorities.add('cad');
+        }
+        if (event.kind === 'tool' && (event.name === 'propose_box_create' || event.name === 'propose_box_update') && request.scene.mode === 'demo') {
+          const context = protocolRecord(event.context);
+          protocolKeys(context, ['kind', 'proposal']);
+          if (context.kind !== 'project-box-proposal' || protocolRecord(protocolRecord(context.proposal).edit).kind !==
+            (event.name === 'propose_box_create' ? 'create-box' : 'update-box')) throw new ModelTurnFailure('invalid-or-unavailable-stream');
+          // Ghost overlays stale a captured view. For image turns admit only after clean EOF,
+          // not halfway through the pixel-grounding protocol that still needs that view.
+          if (attachment) proposalsAfterImage.push(context.proposal);
+          else this.proposalEvents.onproposal?.(context.proposal, () => current() && !controller.signal.aborted);
+        }
       }, this.fetcher, attachment);
       if (!current() || controller.signal.aborted) return true;
+      for (const proposal of proposalsAfterImage) this.proposalEvents.onproposal?.(proposal, () => current() && !controller.signal.aborted);
+      if (current() && !controller.signal.aborted) for (const authority of torontoAuthorities) this.proposalEvents.onauthorityproposal?.(authority);
       this.conversationId = attachment ? null : id; next[next.length - 1] = { ...next[next.length - 1]!, state: 'complete' };
       this.set({ messages: [...next], phase: 'completed', code: 'completed' });
     } catch (error) {
       if (current()) {
+        this.proposalEvents.oninvalidate?.();
         const code = controller.signal.aborted ? 'deadline-incomplete' : error instanceof ModelTurnFailure ? error.code : 'invalid-or-unavailable-stream';
         this.conversationId = null; next[next.length - 1] = { ...settleInspections(next[next.length - 1]!, controller.signal.aborted ? 'cancelled' : 'interrupted'), state: 'incomplete', failureCode: code };
         this.set({ messages: [...next], phase: 'error', code });
+        // A later model failure does not erase already-retained server proposals. Read authority,
+        // never admit event meshes or infer publication from an incomplete conversation.
+        if (!controller.signal.aborted) for (const authority of torontoAuthorities) this.proposalEvents.onauthorityproposal?.(authority);
       }
     } finally { clearTimeout(timer); if (current()) this.active = undefined; }
     return true;

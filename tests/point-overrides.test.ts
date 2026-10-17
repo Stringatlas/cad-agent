@@ -100,6 +100,26 @@ test('stale session/artifact/revision, unknown records, atomic failure and sessi
   } finally { await authority.close(); await other.close(); await f.clean(); }
 });
 
+test('approval preserves only disjoint exact pending moves, decline is individual, Undo clears pending', async () => {
+  const f = await fixture(), authority = new PointOverrideSession(f.root);
+  try {
+    const s = await authority.execute('snapshot') as PointOverrideSnapshot;
+    const first = await authority.execute('propose', propose(s)) as PointMoveProposal;
+    const conflict = await authority.execute('propose', propose(s, [{ key: key(), position: [1, 0, 0] }], [0, 2, 0])) as PointMoveProposal;
+    const second = await authority.execute('propose', propose(s, [{ key: key(1), position: [2, 0, 0] }], [0, 3, 0])) as PointMoveProposal;
+    const accepted = await authority.execute('approve', approve(s, first)) as PointOverrideSnapshot;
+    const pending = await authority.execute('pending') as PointMoveProposal[];
+    assert.deepEqual(pending, [{ ...second, revision: accepted.revision }]);
+    await assert.rejects(authority.execute('approve', approve(accepted, conflict)), failure('unknown-proposal'));
+    await authority.execute('decline', approve(accepted, pending[0]));
+    assert.deepEqual(await authority.execute('pending'), []);
+    assert.equal((await authority.execute('snapshot') as PointOverrideSnapshot).revision, accepted.revision);
+    await authority.execute('propose', propose(accepted, [{ key: key(1), position: [2, 0, 0] }], [0, 4, 0]));
+    await authority.execute('undo', { sessionId: accepted.sessionId, revision: accepted.revision, transactionId: accepted.nextUndoTransactionId });
+    assert.deepEqual(await authority.execute('pending'), []);
+  } finally { await authority.close(); await f.clean(); }
+});
+
 test('override HTTP local policy, body limits, envelopes and bounded admission', async () => {
   const f = await fixture(), routes = createPointOverrideRoutes(f.root);
   const server = createServer((request, response) => { void routes.handle(request, response).then(handled => { if (!handled) { response.statusCode = 404; response.end(); } }); });

@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { SCENE_POINT_LIMIT, type ScenePointName, type CropBox, type CropSelection, type PointObservation, type DatasetInfo, type Vec3, type PointOverrideSnapshot, type PointMoveProposal } from '@spatial/contracts';
+import { SCENE_POINT_LIMIT, type CropBox, type CropSelection, type PointObservation, type DatasetInfo, type Vec3, type PointOverrideSnapshot, type PointMoveProposal, type TorontoCadSnapshot } from '@spatial/contracts';
 import { createVisualCapture } from './visual-capture';
 import { updateStableOrbitControls } from './orbit-stability';
 import { createCropLayer } from './crop-render';
+import { createTorontoCadRender } from './toronto-cad-render';
 import { createPointOverrideRender } from './point-override-render';
 import { projectCropRectangle } from './crop-projection';
 import { createPolePickCache, createDetailPickCache, poleGestureKind, isPoleClick, type PoleSelection } from './pole-picking';
@@ -28,6 +29,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
   scene.add(points);
   const cropLayer = createCropLayer(scene);
   const pointOverrides = createPointOverrideRender(scene);
+  const cad = createTorontoCadRender(scene);
   const overlay = document.createElement('div'); overlay.className = 'selection-window';
   overlay.setAttribute('data-testid', 'selection-window'); overlay.hidden = true;
   Object.assign(overlay.style, { position: 'absolute', pointerEvents: 'none', border: '2px solid #ffd65a', background: '#ffd65a22', zIndex: '3', boxSizing: 'border-box' });
@@ -88,14 +90,14 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
   let queryPositions: { selected: Vec3; nearest?: Vec3 } | undefined;
   // Draft labels are disposable display markers, independent of semantic-query results.
   let draftMarkerSignature = '';
-  const draftMarkers = new Map<ScenePointName, { sprite: THREE.Sprite; texture: THREE.CanvasTexture; material: THREE.SpriteMaterial; artifactRevision: string }>();
-  const removeDraftMarker = (name: ScenePointName) => {
+  const draftMarkers = new Map<string, { sprite: THREE.Sprite; texture: THREE.CanvasTexture; material: THREE.SpriteMaterial; artifactRevision: string }>();
+  const removeDraftMarker = (name: string) => {
     const marker = draftMarkers.get(name);
     if (!marker) return;
     scene.remove(marker.sprite); marker.material.dispose(); marker.texture.dispose(); draftMarkers.delete(name);
   };
-  const createDraftMarker = (name: ScenePointName, artifactRevision: string) => {
-    // Numeric suffix only; full names/provenance remain in the attachment list.
+  const createDraftMarker = (name: string, artifactRevision: string, proposed = false) => {
+    // Copies keep the same number; amber versus mint distinguishes pending moves.
     // Fit even a safe-integer suffix, with at most 512 × 64 texels per marker.
     const label = name.slice('Point '.length);
     const canvas = document.createElement('canvas');
@@ -103,7 +105,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
     context.font = 'bold 34px system-ui';
     canvas.width = Math.min(512, Math.max(64, Math.ceil(context.measureText(label).width) + 28)); canvas.height = 64;
     context.beginPath(); context.roundRect(4, 5, canvas.width - 8, 54, 25);
-    context.fillStyle = '#8be6d4'; context.fill();
+    context.fillStyle = proposed ? '#ffb84d' : '#8be6d4'; context.fill();
     context.strokeStyle = '#ffffff'; context.lineWidth = 3; context.stroke();
     context.fillStyle = '#102b2e'; context.font = 'bold 34px system-ui'; context.textAlign = 'center'; context.textBaseline = 'middle';
     context.fillText(label, canvas.width / 2, 33, canvas.width - 28);
@@ -217,6 +219,8 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
     host.dataset.cropPoints = String(cropLayer.count);
     host.dataset.cropChunks = String(cropLayer.group.children.length);
     host.dataset.boxVisible = String(selection.visible);
+    host.dataset.cadBodies = String(cad.group.children.filter(m => !m.userData.pending).length);
+    host.dataset.cadGhosts = String(cad.group.children.filter(m => m.userData.pending).length);
     if (smoke) {
       host.dataset.draftMarkers = JSON.stringify([...draftMarkers].map(([name, marker]) => ({ name, position: marker.sprite.position.toArray() })));
       const detail = detailCaches.keys().next().value as THREE.Points | undefined;
@@ -238,6 +242,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
   animate();
   return {
     capture: () => {
+      if (cad.captureBlocked) throw new Error('Scene capture unavailable while Toronto CAD solids or ghosts are displayed: source-only image provenance cannot describe CAD imagery.');
       if (pointOverrides.captureBlocked) throw new Error('Scene screenshot capture is unavailable while point overrides or a move preview are active. Undo all point edits and clear the preview before capturing source-grounded imagery.');
       // Finish residual damping before freezing the view; it otherwise moves after the click.
       const damping = controls.enableDamping;
@@ -246,12 +251,16 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
     },
     isCaptureCurrent: visual.isCurrent,
     resolvePixel: visual.resolvePixel,
+    setCad(snapshot?: TorontoCadSnapshot) {
+      if (disposed) return;
+      visual.invalidate(); cad.set(snapshot);
+    },
     setPointOverrides(snapshot?: PointOverrideSnapshot) {
       if (disposed) return;
       visual.invalidate(); pickVersion++;
       pointOverrides.setPointOverrides(snapshot);
     },
-    setPointMovePreview(proposal?: PointMoveProposal) {
+    setPointMovePreview(proposal?: PointMoveProposal | readonly PointMoveProposal[]) {
       if (disposed) return;
       visual.invalidate(); pickVersion++;
       pointOverrides.setPointMovePreview(proposal);
@@ -290,17 +299,17 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       bounds = sample.dataset.bounds;
       if (!initialized) { initialized = true; frameDataset(); }
     },
-    setDraftMarkers(references: readonly { name: ScenePointName; position: Vec3; artifactRevision: string }[]) {
+    setDraftMarkers(references: readonly { name: string; position: Vec3; artifactRevision: string; proposed?: boolean; markerId?: string }[]) {
       if (disposed) return;
       const signature = JSON.stringify(references);
       // Explicit clear/replacement also invalidates an in-flight pin gesture.
       if (signature !== draftMarkerSignature) { visual.invalidate(); draftMarkerSignature = signature; pickVersion++; }
-      const active = new Map(references.filter(value => value.artifactRevision === dataset?.revision).slice(0, SCENE_POINT_LIMIT).map(value => [value.name, value]));
+      const active = new Map(references.filter(value => value.artifactRevision === dataset?.revision).slice(0, SCENE_POINT_LIMIT * 33).map(value => [value.markerId ?? value.name, value]));
       for (const [name, marker] of draftMarkers) {
         if (!active.has(name) || active.get(name)!.artifactRevision !== marker.artifactRevision) removeDraftMarker(name);
       }
       for (const [name, reference] of active) {
-        const marker = draftMarkers.get(name) ?? createDraftMarker(name, reference.artifactRevision);
+        const marker = draftMarkers.get(name) ?? createDraftMarker(reference.name, reference.artifactRevision, reference.proposed);
         marker.sprite.position.set(...reference.position); draftMarkers.set(name, marker);
       }
     },
@@ -356,7 +365,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       visual.dispose();
       controls.removeEventListener('change', controlsChanged);
       disposed = true; clearDetail(); pickCache?.dispose(); pickCache = undefined; finishGesture();
-      pointOverrides.dispose();
+      pointOverrides.dispose(); cad.dispose();
       markerGeometry.dispose(); markerMaterial.dispose(); winnerGeometry.dispose(); winnerMaterial.dispose(); lineGeometry.dispose(); lineMaterial.dispose();
       for (const name of draftMarkers.keys()) removeDraftMarker(name);
       delete host.dataset.draftMarkers;

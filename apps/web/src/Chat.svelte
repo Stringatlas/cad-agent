@@ -1,20 +1,19 @@
 <script lang="ts">
-  import { SCENE_POINT_LIMIT, type ProjectSnapshot, type PointOverrideSnapshot, type PointMoveProposal } from '@spatial/contracts';
+  import { SCENE_POINT_LIMIT, type ProjectSnapshot, type PointOverrideSnapshot } from '@spatial/contracts';
   import { ChatController, type ChatEntry } from './chat-client';
   import BoxControls from './BoxControls.svelte';
   import type { ProjectController, ProjectView } from './project-client';
   import type { TorontoDraftPoint, PointName } from './draft-context';
   import ModelChat from './ModelChat.svelte';
-  import PointEdits from './PointEdits.svelte';
   import { effectivePosition } from './point-override-client';
   import type { VisualModelSource } from './visual-model-source';
   import { modelScene } from './model-chat-client';
-  let { snapshot, view, controller: projectController, sceneMode, points, pointStatus, onclearpoint, visualSource, pointOverrides, onverifiedresult, onquerypoint, onpointstate, artifactRevision }: {
-    artifactRevision?: string;
+  let { snapshot, view, controller: projectController, sceneMode, points, pointStatus, onclearpoint, visualSource, pointOverrides, onverifiedresult, pointBlocked = true, onpointproposal = () => {}, oncadproposal = () => {}, ontorontostreaming = () => {}, torontoCadBlocked = true }: {
+    torontoCadBlocked?: boolean;
+    oncadproposal?: () => void; ontorontostreaming?: (streaming: boolean) => void;
+    pointBlocked?: boolean; onpointproposal?: () => void;
     pointOverrides?: PointOverrideSnapshot;
     onverifiedresult: (context: unknown) => void;
-    onquerypoint: (point: Omit<TorontoDraftPoint, 'name'>) => void;
-    onpointstate: (snapshot?: PointOverrideSnapshot, proposal?: PointMoveProposal) => void;
     visualSource?: VisualModelSource;
     snapshot?: ProjectSnapshot; view: ProjectView; controller: ProjectController; sceneMode: string;
     points: readonly TorontoDraftPoint[]; pointStatus: string; onclearpoint: (name: PointName) => void;
@@ -39,17 +38,11 @@
 </script>
 
 <aside class="chat" aria-label="Scene chat" data-testid="chat">
-  <header><div><p class="eyebrow">YOUR SPATIAL COPILOT</p><h2>Scene chat</h2></div><span class="readonly">Read-only model chat</span></header>
-  <div class="introduction">
-    <span class="intro-icon" aria-hidden="true">◇</span>
-    <h3>Start with a point of view.</h3>
-    <p>Pin points in the scene, then describe what you want to build or inspect.</p>
-    <p class="honesty">Models load automatically; choose a different model anytime before sending with explicit scene references. The model can inspect bound context, but cannot build channels or change geometry.</p>
-  </div>
-  <section class="attachments" data-testid="draft-attachments" aria-label="Scene point references">
-    <div class="section-heading"><strong>Scene references</strong><span>{listedPoints.length}/{SCENE_POINT_LIMIT} attached</span></div>
+  <header><h2>Chat</h2></header>
+  {#if pointStatus}<p class="point-status" role="status" data-testid="point-status">{pointStatus}</p>{/if}
+  <details class="attachments" data-testid="draft-attachments" aria-label="Scene point references">
+    <summary>Scene references <span>{listedPoints.length}/{SCENE_POINT_LIMIT}</span></summary>
     <p>Cmd/Ctrl-click adds a new numbered point. Removed numbers are never reused in this workspace; reload starts fresh.</p>
-    {#if pointStatus}<p role="status" data-testid="point-status">{pointStatus}</p>{/if}
     {#if listedPoints.length}
       <div class="point-list" role="list" aria-label="Numbered scene points">
       {#each listedPoints as point (point.name)}
@@ -69,11 +62,15 @@
     {:else}
       <p class="empty">{sceneMode === 'pole' ? 'Switch to Toronto3D or Synthetic demo to attach numbered points.' : 'Cmd/Ctrl-click any rendered cloud point to attach Point 1, Point 2, and more.'}</p>
     {/if}
-  </section>
-  <ModelChat {scene} {visualSource} points={activePoints} {onverifiedresult} />
-  {#if sceneMode === 'toronto'}<PointEdits {artifactRevision} points={activePoints} onselect={onquerypoint} onstate={onpointstate} />{/if}
+  </details>
+  <ModelChat {scene} {visualSource} points={activePoints} {onverifiedresult}
+    proposalsBlocked={sceneMode === 'demo' ? (!!view.pending || view.needsRefresh) : sceneMode === 'toronto' && (torontoCadBlocked || pointBlocked)}
+    onstreamingchange={streaming => { projectController.setModelStreaming(streaming); ontorontostreaming(streaming); }}
+    onauthorityproposal={kind => { if (sceneMode === 'toronto') { if (kind === 'cad') oncadproposal(); else onpointproposal(); } }}
+    oninvalidateproposals={() => projectController.clearModelProposals()}
+    onproposal={(proposal, current) => { if (sceneMode === 'demo') void projectController.admitModelProposal(proposal, () => sceneMode === 'demo' && current()); }} />
   <details class="technical" data-testid="inspection-tools">
-    <summary>Technical tools <span>Deterministic inspection &amp; approved parameters</span></summary>
+    <summary>Technical tools</summary>
     {#if snapshot}
       {#key snapshot}
       <section data-testid="chat-project-binding">
@@ -100,7 +97,7 @@
         <div class="actions"><button type="submit" disabled={entry?.state === 'pending' || view.pending === 'context'}>Send inspection</button><button type="button" onclick={() => { if (view.pending === 'context') projectController.cancel(); else controller?.cancel(); }} disabled={entry?.state !== 'pending' && view.pending !== 'context'}>Cancel inspection</button></div>
       </form>
       {#if view.context}<section aria-live="polite"><strong>Actual bound context · no model answer</strong><pre data-testid="chat-context">{JSON.stringify(view.context, null, 2)}</pre></section>{/if}
-      <details class="box-tools" data-testid="approved-box-tools"><summary>Box parameters &amp; exact approval</summary><BoxControls {view} controller={projectController} /></details>
+      {#if sceneMode === 'demo'}<details class="box-tools" data-testid="approved-box-tools"><summary>Box parameters &amp; exact approval</summary><BoxControls {view} controller={projectController} /></details>{/if}
       {#if entry}
         <section aria-live="polite" data-testid="chat-result" data-state={entry.state}>
           <h3>{entry.state}</h3><p>{entry.code}</p>
@@ -116,28 +113,25 @@
 </aside>
 
 <style>
-  .chat { min-width: 0; min-height: calc(100vh - 80px); background: #111b29; padding: 24px; }
-  header, .section-heading, .attachment-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .eyebrow { font-size: 9px; letter-spacing: 1.7px; color: #7992ad; margin: 0 0 4px; } h2 { font-size: 20px; margin: 0; font-weight: 550; }
-  .readonly { color: #dbc48d; background: #393222; border: 1px solid #57492e; border-radius: 20px; padding: 3px 8px; font-size: 10px; white-space: nowrap; }
-  .introduction { padding: 32px 0 24px; } .intro-icon { display: inline-block; font-size: 30px; line-height: 1; color: #86dfcc; margin-bottom: 10px; }
-  h3 { font-weight: 500; font-size: 18px; margin: 0 0 8px; } p { color: #9badc3; font-size: 12px; }
-  .introduction p { margin: 8px 0; } .introduction .honesty { color: #7e93ad; font-size: 11px; }
-  .attachments { border-top: 1px solid #2c394b; padding-top: 18px; } .section-heading strong { font-size: 12px; font-weight: 550; } .section-heading span { color: #7f93ad; font-size: 10px; }
-  .empty { border: 1px dashed #344660; border-radius: 8px; padding: 14px; color: #8096b0; }
-  .attachment { background: #172638; border: 1px solid #344b61; border-radius: 8px; margin: 10px 0; padding: 10px; }
+  .chat { box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; height: 100%; min-height: 0; min-width: 0; overflow: hidden; background: #202124; color: #f1f1f3; padding: 18px 16px 12px; }
+  header, .attachment-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  header { flex-shrink: 0; } h2 { font-size: 18px; margin: 0; font-weight: 600; letter-spacing: -.4px; }
+  h3 { font-size: 14px; font-weight: 550; } p { color: #a5a5ad; font-size: 11px; line-height: 1.5; }
+  .point-status { margin: 0; flex-shrink: 0; max-height: 52px; overflow: auto; color: #d7c697; }
+  .attachments, .technical { flex-shrink: 0; min-height: 0; border-top: 1px solid #ffffff12; padding-top: 9px; font-size: 11px; }
+  .attachments[open], .technical[open] { flex-shrink: 1; max-height: 30%; overflow: auto; }
+  summary { cursor: pointer; color: #b9b9c1; } summary:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid #70a9ff; outline-offset: 3px; }
+  .attachments > summary span { float: right; color: #8e8e98; font-variant-numeric: tabular-nums; }
+  .empty { padding: 6px 0; color: #92929c; }
+  .attachment { background: #151619; border: 1px solid #ffffff12; border-radius: 10px; margin: 8px 0; padding: 10px; }
   .attachment-heading { font-size: 11px; justify-content: start; } .attachment-heading > button { margin-left: auto; border: 0; padding: 0 5px; font-size: 18px; }
-  .point-list { max-height: 360px; overflow: auto; }
   .attachment-heading strong { overflow-wrap: anywhere; }
-  .coordinates { color: #c3d8e7; font-family: ui-monospace, monospace; font-size: 11px; overflow-wrap: anywhere; } .attachment summary, .hint { font-size: 10px; color: #91a7bf; }
-  label { display: block; font-size: 12px; margin: 12px 0 8px; color: #c1cfe0; }
-  input { width: 100%; background: #0d1724; color: #e4ecf7; border: 1px solid #3b506a; border-radius: 8px; padding: 12px; }
-  button { background: #1c2a40; color: #e4ecf7; border: 1px solid #3a4e66; border-radius: 6px; padding: 7px 10px; cursor: pointer; font-size: 12px; }
-  button:disabled { opacity: .4; }
-  .technical { border-top: 1px solid #2c394b; margin-top: 28px; padding-top: 16px; } .technical > summary { font-size: 12px; color: #b3c5d9; } .technical > summary span { display: block; margin-left: 16px; font-size: 10px; color: #788fa8; }
-  .technical section { border-top: 1px solid #344660; margin-top: 16px; padding-top: 14px; font-size: 12px; } .box-tools { margin-top: 20px; font-size: 12px; }
-  dt, .help { color: #91a6c0; font-size: 11px; } dt { margin-top: 8px; } dd { margin: 0; overflow-wrap: anywhere; font-size: 11px; }
-  .actions { display: flex; gap: 8px; flex-wrap: wrap; } pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; font-size: 10px; }
-  @media (max-width: 1000px) { .chat { padding: 18px; } }
-  @media (max-width: 760px) { .chat { min-height: auto; padding: 24px 18px; } .introduction { padding: 24px 0 16px; } }
+  .coordinates { color: #cdccd3; font-family: ui-monospace, monospace; font-size: 10px; overflow-wrap: anywhere; } .attachment summary, .hint { font-size: 10px; color: #92929c; }
+  label { display: block; font-size: 11px; margin: 10px 0 6px; color: #c9c9d0; }
+  input { box-sizing: border-box; width: 100%; background: #151619; color: #f1f1f3; border: 1px solid #ffffff20; border-radius: 8px; padding: 9px; }
+  button { background: #2c2d31; color: #ededf1; border: 1px solid #ffffff16; border-radius: 7px; padding: 7px 10px; cursor: pointer; font-size: 11px; }
+  button:disabled { opacity: .4; cursor: default; }
+  .technical section { border-top: 1px solid #ffffff14; margin-top: 12px; padding-top: 10px; font-size: 11px; } .box-tools { margin-top: 14px; font-size: 11px; }
+  dt, .help { color: #9898a3; font-size: 10px; } dt { margin-top: 8px; } dd { margin: 0; overflow-wrap: anywhere; font-size: 10px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; } pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; font-size: 10px; }
 </style>

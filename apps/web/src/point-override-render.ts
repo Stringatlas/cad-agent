@@ -11,7 +11,7 @@ export function createPointOverrideRender(scene: THREE.Scene) {
   const layers = new Map<THREE.Points, { sourceIds: Uint32Array; indexes: Map<number, number[]>; keySignature: string; originals: Map<number, Vec3> }>();
   let artifactRevision: string | undefined;
   let snapshot: PointOverrideSnapshot | undefined;
-  let proposal: PointMoveProposal | undefined;
+  let proposals: readonly PointMoveProposal[] = [];
   let fallbackEntries: PointOverrideSnapshot['entries'] = [];
   const fallback = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: 0xffffff, size: 3, sizeAttenuation: false }));
   const ghost = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: 0xffb84d, size: 10, sizeAttenuation: false, transparent: true, opacity: .65, depthWrite: false }));
@@ -57,7 +57,7 @@ export function createPointOverrideRender(scene: THREE.Scene) {
     }
     fallbackEntries = entries.filter(entry => !loaded.has(keyId(entry.key)));
     replaceGeometry(fallback, fallbackEntries.flatMap(entry => [...entry.position]));
-    const moves = proposal && proposal.artifactRevision === artifactRevision && (!snapshot || (proposal.sessionId === snapshot.sessionId && proposal.revision === snapshot.revision)) ? proposal.moves : [];
+    const moves = proposals.filter(proposal => proposal.artifactRevision === artifactRevision && (!snapshot || (proposal.sessionId === snapshot.sessionId && proposal.revision === snapshot.revision))).flatMap(proposal => proposal.moves);
     replaceGeometry(ghost, moves.flatMap(move => [...move.after]));
     replaceGeometry(lines, moves.flatMap(move => [...move.before, ...move.after]));
   }
@@ -67,7 +67,7 @@ export function createPointOverrideRender(scene: THREE.Scene) {
     setArtifactRevision(revision: string) {
       artifactRevision = revision;
       if (snapshot && snapshot.artifactRevision !== revision) snapshot = undefined;
-      if (proposal && proposal.artifactRevision !== revision) proposal = undefined;
+      proposals = proposals.filter(proposal => proposal.artifactRevision === revision);
       refresh();
     },
     register(object: THREE.Points, sourceIds: readonly number[]) {
@@ -80,8 +80,9 @@ export function createPointOverrideRender(scene: THREE.Scene) {
       snapshot = value && (!artifactRevision || value.artifactRevision === artifactRevision) ? structuredClone(value) : undefined;
       refresh();
     },
-    setPointMovePreview(value?: PointMoveProposal) {
-      proposal = value && (!artifactRevision || value.artifactRevision === artifactRevision) ? structuredClone(value) : undefined;
+    setPointMovePreview(value?: PointMoveProposal | readonly PointMoveProposal[]) {
+      const values = value ? (Array.isArray(value) ? value : [value]) as readonly PointMoveProposal[] : [];
+      proposals = structuredClone(values.filter(proposal => !artifactRevision || proposal.artifactRevision === artifactRevision));
       refresh();
     },
     resolveFallback(index: number): PoleSelection | undefined {
@@ -90,7 +91,7 @@ export function createPointOverrideRender(scene: THREE.Scene) {
       return { datasetId: 'toronto3d', artifactRevision, key: { ...entry.key }, position: [...entry.originalPosition] as unknown as Vec3 };
     },
     dispose() {
-      layers.clear(); snapshot = undefined; proposal = undefined; fallbackEntries = [];
+      layers.clear(); snapshot = undefined; proposals = []; fallbackEntries = [];
       for (const object of [fallback, ghost, lines]) { scene.remove(object); object.geometry.dispose(); object.material.dispose(); }
     },
   };

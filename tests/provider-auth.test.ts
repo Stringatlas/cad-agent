@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createHash, generateKeyPairSync, randomUUID, sign } from 'node:crypto';
-import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, linkSync, lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -450,6 +450,114 @@ test('credential files reject permissive modes, corrupt contents, symlinks and s
   rmSync(f.path); chmodSync(f.directory, 0o755);
   const fresh = f.auth();
   await assert.rejects(fresh.start('browser'), (error) => safeError(error, 'storage'));
+});
+
+test('dead-process auth lock is recovered without changing credentials or making provider calls', async (t) => {
+  const f = fixture(t); const auth = f.auth();
+  await f.signIn(auth); auth.close();
+  const original = readFileSync(f.path, 'utf8');
+  const calls = f.requests.length;
+  const deadPid = execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' });
+  const lock = `${f.path}.lock`;
+  writeFileSync(lock, `${deadPid}\n`, { mode: 0o600 });
+  const replacement = f.auth();
+  assert.equal(replacement.status().ready, true);
+  assert.equal(readFileSync(f.path, 'utf8'), original);
+  assert.equal(readFileSync(lock, 'utf8'), `${process.pid}\n`);
+  assert.equal(f.requests.length, calls);
+  assert.equal(existsSync(`${lock}.recover`), false);
+  assert.throws(() => f.auth(), (error) => safeError(error, 'storage'));
+  replacement.close();
+  assert.equal(existsSync(lock), false);
+});
+
+test('unsafe or ambiguous auth lock files are never recovered', async (t) => {
+  const f = fixture(t); const auth = f.auth(); await f.begin(auth); auth.close();
+  const lock = `${f.path}.lock`;
+  const original = readFileSync(f.path, 'utf8');
+  for (const contents of ['', 'garbage', '0\n', '-1\n', '1.5\n', '999999999999999999\n', '123\n456\n', `${process.pid}\n`]) {
+    writeFileSync(lock, contents, { mode: 0o600 });
+    assert.throws(() => f.auth(), (error) => safeError(error, 'storage'));
+    assert.equal(readFileSync(lock, 'utf8'), contents);
+    unlinkSync(lock);
+  }
+  writeFileSync(lock, '123\n', { mode: 0o644 });
+  assert.throws(() => f.auth(), (error) => safeError(error, 'storage'));
+  unlinkSync(lock);
+  const target = join(f.directory, 'lock-target');
+  writeFileSync(target, '123\n', { mode: 0o600 });
+  symlinkSync(target, lock);
+  assert.throws(() => f.auth(), (error) => safeError(error, 'storage'));
+  assert.ok(lstatSync(lock).isSymbolicLink());
+  unlinkSync(lock);
+  linkSync(target, lock);
+  assert.throws(() => f.auth(), (error) => safeError(error, 'storage'));
+  assert.equal(readFileSync(target, 'utf8'), '123\n');
+  unlinkSync(lock);
+  if (process.platform !== 'win32') {
+    execFileSync('mkfifo', ['-m', '600', lock]);
+    assert.throws(() => f.auth(), (error) => safeError(error, 'storage'));
+    assert.ok(lstatSync(lock).isFIFO());
+    unlinkSync(lock);
+  }
+  assert.equal(readFileSync(f.path, 'utf8'), original);
+  assert.equal(existsSync(`${lock}.recover`), false);
+});
+
+test('uncertain process ownership and interrupted recovery fail closed', async (t) => {
+  const f = fixture(t); const auth = f.auth(); await f.begin(auth); auth.close();
+  const lock = `${f.path}.lock`;
+  writeFileSync(lock, '123\n', { mode: 0o600 });
+  const kill = t.mock.method(process, 'kill', () => { throw Object.assign(new Error('denied'), { code: 'EPERM' }); });
+  assert.throws(() => f.auth(), (error) => safeError(error, 'storage'));
+  assert.equal(readFileSync(lock, 'utf8'), '123\n');
+  kill.mock.restore();
+  writeFileSync(`${lock}.recover`, '', { mode: 0o600 });
+  assert.throws(() => f.auth(), (error) => safeError(error, 'storage'));
+  assert.equal(readFileSync(lock, 'utf8'), '123\n');
+  assert.ok(existsSync(`${lock}.recover`));
+});
+
+test('closing an old runtime cannot unlink a replaced lock', async (t) => {
+  const f = fixture(t); const auth = f.auth(); await f.begin(auth);
+  const lock = `${f.path}.lock`;
+  unlinkSync(lock);
+  writeFileSync(lock, 'replacement\n', { mode: 0o600 });
+  auth.close();
+  assert.equal(readFileSync(lock, 'utf8'), 'replacement\n');
+});
+
+test('concurrent processes recovering a dead lock retain exactly one live owner', { timeout: 15_000 }, async (t) => {
+  const f = fixture(t); const auth = f.auth(); await f.begin(auth); auth.close();
+  const original = readFileSync(f.path, 'utf8');
+  const deadPid = execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' });
+  writeFileSync(`${f.path}.lock`, `${deadPid}\n`, { mode: 0o600 });
+  const source = `
+    import { ProviderAuth } from './apps/server/src/provider-auth.ts';
+    let auth;
+    process.on('message', () => {
+      try { auth = new ProviderAuth({ mode: 'chatgpt', credentialPath: process.argv[1] }); process.send('acquired'); }
+      catch { process.send('rejected'); }
+    });
+    process.send('ready');
+  `;
+  const children = Array.from({ length: 4 }, () => spawn(process.execPath,
+    ['--import', 'tsx', '--input-type=module', '-e', source, f.path], { stdio: ['ignore', 'ignore', 'inherit', 'ipc'] }));
+  t.after(() => { for (const child of children) child.kill('SIGKILL'); });
+  await Promise.all(children.map((child) => new Promise<void>((resolve, reject) => {
+    child.once('message', (message) => { assert.equal(message, 'ready'); resolve(); });
+    child.once('error', reject);
+    child.once('exit', () => reject(new Error('child exited before readiness')));
+  })));
+  const results = children.map((child) => new Promise<unknown>((resolve) => child.once('message', resolve)));
+  for (const child of children) child.send('go');
+  const outcomes = await Promise.all(results);
+  assert.equal(outcomes.filter((result) => result === 'acquired').length, 1);
+  assert.equal(outcomes.filter((result) => result === 'rejected').length, 3);
+  const winner = children[outcomes.indexOf('acquired')]!;
+  assert.equal(readFileSync(`${f.path}.lock`, 'utf8'), `${winner.pid}\n`);
+  assert.equal(readFileSync(f.path, 'utf8'), original);
+  assert.equal(existsSync(`${f.path}.lock.recover`), false);
 });
 
 test('logout during a callback rejects late credentials, clears disk and revokes the returned session', async (t) => {

@@ -24,7 +24,7 @@
   <h3>Box parameter proposal</h3>
   <p>Deterministic controls · meters · {view.snapshot?.frameId}. Parameter postconditions only, <strong>not CAD solids</strong>.</p>
   <form onsubmit={event => { event.preventDefault(); preview(); }}>
-    <fieldset disabled={!!view.pending || view.needsRefresh}>
+    <fieldset disabled={!!view.pending || view.needsRefresh || view.modelStreaming}>
       <label for="box-kind">Operation</label><select id="box-kind" bind:value={kind} onchange={change}><option value="update-box">Update existing box</option><option value="create-box">Create new box</option></select>
       <label for="box-id">Exact entity ID</label><input id="box-id" data-testid="box-id" bind:value={entityId} oninput={change} maxlength="64" />
       <label for="box-center">Local center X, Y, Z (m)</label><input id="box-center" data-testid="box-center" bind:value={center} oninput={change} maxlength="120" />
@@ -35,16 +35,16 @@
   {#if inputError}<p role="alert">{inputError}</p>{/if}
   {#if view.proposal}
     <div data-testid="box-proposal">
-      <strong>Non-authoritative wireframe preview — no commit</strong>
+      <strong>Non-authoritative amber ghost preview — no commit</strong>
       <p>Exact immutable proposal {view.proposal.proposalId}<br />Digest <code data-testid="proposal-digest">{view.proposal.digest}</code><br />Expires {new Date(view.proposal.expiresAt).toISOString()}</p>
       <pre data-testid="proposal-parameters">{JSON.stringify({ binding: { sessionId: view.proposal.sessionId, projectRevision: view.proposal.projectRevision, frameId: view.proposal.frameId, units: view.proposal.units }, edit: view.proposal.edit, before: view.proposal.before, after: view.proposal.after, coordinates: view.proposal.coordinates }, null, 2)}</pre>
-      <button data-testid="box-approve" disabled={!!view.pending || view.needsRefresh} onclick={() => void controller.approve()}>Approve exact proposal</button>
+      <button data-testid="box-approve" disabled={!!view.pending || view.needsRefresh || view.modelStreaming} onclick={() => void controller.approve()}>Approve exact proposal</button>
       <button onclick={() => controller.clearProposal()} disabled={!!view.pending}>Cancel preview</button>
     </div>
   {/if}
   <p>Next undo transaction: <code>{view.session?.nextUndoTransactionId ?? 'none'}</code></p>
   {#if view.session?.nextUndoTransactionId && !view.undoAvailable}<p>Undo receipt not held by this page. Undo is blocked rather than accepting an unverifiable inverse; retained server transaction is shown above.</p>{/if}
-  <button data-testid="project-undo" disabled={!view.undoAvailable || !!view.pending || view.needsRefresh} onclick={() => { if (confirm('Undo the latest retained transaction? This is a new geometry revision, not a revision rollback.')) void controller.undo(); }}>Undo latest edit</button>
+  <button data-testid="project-undo" disabled={!view.undoAvailable || !!view.pending || view.needsRefresh || view.modelStreaming} onclick={() => { if (confirm('Undo the latest retained transaction? This is a new geometry revision, not a revision rollback.')) void controller.undo(); }}>Undo latest edit</button>
   <button data-testid="project-cancel" disabled={!view.pending} onclick={() => controller.cancel()}>Cancel project request</button>
 </section>
 

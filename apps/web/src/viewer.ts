@@ -4,6 +4,7 @@ import type { ProjectState, ScenePointReference, BoxProposal } from '@spatial/co
 import { createEntityObject, highlight, resolvePickedEntityId } from './entities';
 import { createVisualCapture } from './visual-capture';
 import { updateStableOrbitControls } from './orbit-stability';
+import { createBoxGhost } from './proposal-ghosts';
 
 export function createViewer(host: HTMLElement, initial: ProjectState, onSelect: (id: string | null) => void,
   onPoint?: (point: Omit<ScenePointReference, 'name'>) => void, onRenderError?: (cause: unknown) => void,
@@ -144,6 +145,8 @@ export function createViewer(host: HTMLElement, initial: ProjectState, onSelect:
       // Finish residual damping before freezing the view; it otherwise moves after the click.
       const damping = controls.enableDamping;
       controls.enableDamping = false; controls.update(); controls.enableDamping = damping;
+      // Never ground pending ghost pixels as committed/project geometry.
+      if (overlays.children.some(object => object.userData.preview)) throw new Error('Screenshot capture unavailable while uncommitted box ghosts are visible. Accept or decline each preview first.');
       return visual.capture();
     },
     isCaptureCurrent: (id: string) => visual.isCurrent(id),
@@ -152,7 +155,7 @@ export function createViewer(host: HTMLElement, initial: ProjectState, onSelect:
       visual.invalidate(); state = next;
       objects.forEach(object => highlight(object, object.userData.entityId === next.selectedEntityId));
     },
-    updateOverlays(points: readonly ScenePointReference[], proposal?: BoxProposal) {
+    updateOverlays(points: readonly ScenePointReference[], proposal?: BoxProposal, modelProposals: readonly BoxProposal[] = []) {
       visual.invalidate(); clearOverlays();
       for (const point of points) {
         const marker = new THREE.Mesh(new THREE.SphereGeometry(0.09, 12, 8), new THREE.MeshBasicMaterial({ color: 0xffc766, depthTest: false }));
@@ -170,11 +173,7 @@ export function createViewer(host: HTMLElement, initial: ProjectState, onSelect:
           label.scale.set(0.45 * canvas.width / canvas.height, 0.45, 1); label.renderOrder = 11; overlays.add(label);
         }
       }
-      if (proposal) {
-        const geometry = new THREE.BoxGeometry(...proposal.after.dimensions), edges = new THREE.EdgesGeometry(geometry); geometry.dispose();
-        const preview = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0xffc766, depthTest: false }));
-        preview.position.set(...proposal.after.center); preview.userData.preview = true; preview.renderOrder = 5; overlays.add(preview);
-      }
+      for (const candidate of [...(proposal ? [proposal] : []), ...modelProposals]) overlays.add(...createBoxGhost(candidate));
     },
     dispose() {
       visual.dispose(); controls.removeEventListener('change', viewChanged);

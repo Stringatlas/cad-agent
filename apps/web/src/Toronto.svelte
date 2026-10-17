@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
+  import TorontoCad from './TorontoCad.svelte';
+  import PointEdits from './PointEdits.svelte';
+  import { TorontoCadController, type TorontoCadView } from './toronto-cad-client';
   import { assertCropBox, type CropBox, type CropSelection, type CropStats, type PointObservation, type PointOverrideSnapshot, type PointMoveProposal, type Vec3 } from '@spatial/contracts';
   import { createCropChannel } from './crop-client';
   import { cropFeedback, describeCropSelection, nextCropPhase, type CropPhase } from './crop-feedback';
@@ -11,23 +14,43 @@
   import type { PoleSelection } from './pole-picking';
   import { effectivePosition } from './point-override-client';
 
-  let { points = [], pointOverrides, pointPreview, onrevision = () => {}, allocatePointName, onpoint, onpoints = () => {}, onvisualsource = () => {} }: {
+  let { points = [], pointOverrides, pointPreview, pointRefresh = 0, onpointstate = () => {}, cadRefresh = 0, modelStreaming = false, oncadblocked = () => {}, onrevision = () => {}, allocatePointName, onpoint, onpoints = () => {}, onvisualsource = () => {} }: {
+    cadRefresh?: number; modelStreaming?: boolean; oncadblocked?: (blocked: boolean) => void;
+    pointRefresh?: number; onpointstate?: (snapshot?: PointOverrideSnapshot, proposal?: PointMoveProposal, blocked?: boolean) => void;
     pointOverrides?: PointOverrideSnapshot; pointPreview?: PointMoveProposal; onrevision?: (revision: string) => void;
     onvisualsource?: (source: VisualModelSource | undefined) => void;
     points?: readonly TorontoDraftPoint[]; allocatePointName: () => PointName;
     onpoint: (point: TorontoDraftPoint) => void; onpoints?: (points: readonly TorontoDraftPoint[]) => void;
   } = $props();
   const draftGate = createDraftPointGate();
+  let cadView = $state<TorontoCadView>({ busy: false, needsRefresh: true, status: 'Waiting for Toronto artifact…' });
+  const cadController = new TorontoCadController(value => { cadView = value; oncadblocked(value.busy || value.needsRefresh); });
+  let cadArtifact: string | undefined;
+  let cadToolsOpen = $state(false);
+  $effect(() => { if (cadView.snapshot?.proposals.length) cadToolsOpen = true; });
+  $effect(() => { const token = cadRefresh; untrack(() => { if (token && cadArtifact && !cadView.needsRefresh) void cadController.refresh(); }); });
+  $effect(() => { if (mounted) viewer?.setCad(cadView.snapshot ? $state.snapshot(cadView.snapshot) : undefined); });
   let mounted = $state(false);
-  const effectiveMarkers = $derived(points.map(point => {
-    let position = point.position;
-    try { position = effectivePosition(point, pointOverrides); } catch { /* A mismatched source stays original until explicit refresh/reselection. */ }
-    return { name: point.name, artifactRevision: point.artifactRevision, position };
-  }));
+  let retainedSnapshot = $state<PointOverrideSnapshot>();
+  let retainedProposals = $state<readonly PointMoveProposal[]>([]);
+  const sceneSnapshot = $derived(retainedSnapshot ?? pointOverrides);
+  const sceneProposals = $derived(retainedProposals);
+  const effectiveMarkers = $derived([
+    ...points.map(point => {
+      let position = point.position;
+      try { position = effectivePosition(point, sceneSnapshot); } catch { /* Source mismatch stays original. */ }
+      return { name: point.name, artifactRevision: point.artifactRevision, position };
+    }),
+    ...sceneProposals.flatMap(proposal => proposal.moves.map(move => ({
+      name: points.find(point => point.key.sourceFileId === move.key.sourceFileId && point.key.sourceRow === move.key.sourceRow)?.name ?? `File ${move.key.sourceFileId} row ${move.key.sourceRow}`,
+      artifactRevision: proposal.artifactRevision, position: move.after, proposed: true,
+      markerId: `${proposal.proposalId}:${move.key.sourceFileId}:${move.key.sourceRow}`,
+    }))),
+  ]);
   $effect(() => { if (mounted) viewer?.setDraftMarkers(effectiveMarkers); });
   // Svelte deep-state proxies must not cross the renderer's structuredClone boundary.
-  $effect(() => { if (mounted) viewer?.setPointOverrides(pointOverrides ? $state.snapshot(pointOverrides) : undefined); });
-  $effect(() => { if (mounted) viewer?.setPointMovePreview(pointPreview ? $state.snapshot(pointPreview) : undefined); });
+  $effect(() => { if (mounted) viewer?.setPointOverrides(sceneSnapshot ? $state.snapshot(sceneSnapshot) : undefined); });
+  $effect(() => { if (mounted) viewer?.setPointMovePreview($state.snapshot(sceneProposals)); });
   function pinPoint(selection: PoleSelection) {
     if (!alive || viewerError) return;
     const point = draftGate.accept(selection, allocatePointName());
@@ -65,7 +88,8 @@
   const displayChannel = createObservationChannel('display', sample => {
     if (draftGate.bind(sample.dataset.revision)) { onpoints([]); clearCrop(); }
     viewer?.update(sample); display = sample; onrevision(sample.dataset.revision);
-    viewer?.setPointOverrides(pointOverrides ? $state.snapshot(pointOverrides) : undefined); viewer?.setPointMovePreview(pointPreview ? $state.snapshot(pointPreview) : undefined);
+    if (cadArtifact !== sample.dataset.revision) { cadArtifact = sample.dataset.revision; cadController.bind(cadArtifact); void cadController.refresh(); }
+    viewer?.setPointOverrides(sceneSnapshot ? $state.snapshot(sceneSnapshot) : undefined); viewer?.setPointMovePreview($state.snapshot(sceneProposals));
     viewer?.setDraftMarkers(effectiveMarkers);
     if (!boxInitialized && sample.count) { boxInitialized = true; placeBox(sample.positions.slice(0, 3) as unknown as Vec3); }
   });
@@ -141,33 +165,41 @@
       void loadDisplay(); void loadHarness();
     }
     catch (error) { viewerError = String(error); }
-    return () => { alive = false; mounted = false; onvisualsource(undefined); draftGate.dispose(); onpoints([]); displayChannel.dispose(); harnessChannel.dispose(); cropChannel.dispose(); viewer?.dispose(); };
+    return () => { alive = false; mounted = false; onvisualsource(undefined); draftGate.dispose(); cadController.dispose(); onpoints([]); displayChannel.dispose(); harnessChannel.dispose(); cropChannel.dispose(); viewer?.dispose(); };
   });
 </script>
 
 <main>
-  <header class="scene-heading"><div><p class="eyebrow">LIVE SCENE / ORIGINAL DATA + VOLATILE OVERRIDES</p><h1>Toronto3D <span>Point cloud</span></h1></div><span class="scene-badge">{display?.count.toLocaleString() ?? '…'} overview points</span></header>
   <div class="workspace">
     <section class="scene-panel">
-      <div class="toolbar"><span>Drag to orbit <span class="divider">·</span> Scroll to zoom</span><button onclick={() => viewer?.frameDataset()}>Frame dataset</button></div>
+      <div class="toolbar"><span>Toronto3D</span><button onclick={() => viewer?.frameDataset()}>Frame dataset</button></div>
       <div class="viewport" data-testid="toronto-viewer" bind:this={host}></div>
       {#if viewerError}<p role="alert">Viewer unavailable: {viewerError}</p>{/if}
-      <div class="selection-bar"><span>Cmd/Ctrl-click to add a new numbered point · remove points in Scene references</span><button data-testid="clear-toronto-pins" disabled={!points.length} onclick={() => onpoints([])}>Clear points</button></div>
-      <div class="scene-footer"><span>Shift-drag a window for full-resolution detail</span><span>Toronto local frame · meters · Z-up</span></div>
-      {#if mounted}<VisualObservationPanel label="Toronto" capture={() => viewer!.capture()} isCurrent={id => viewer!.isCaptureCurrent(id)} resolvePixel={(id: string, x: number, y: number) => viewer!.resolvePixel(id, x, y)} />{/if}
-      <p class="crop-summary" data-testid="crop-summary" aria-live="polite">{cropStatus}</p>
-      {#if cropPhase === 'loading'}<div class="inline-crop-actions"><button data-testid="quick-cancel-crop" onclick={cancelCrop}>Cancel detail loading</button><span>{feedback.count}</span></div>{/if}
+      <div class="point-confirmation" data-testid="scene-point-confirmation">
+        <PointEdits {points} artifactRevision={display?.dataset.revision} refreshToken={pointRefresh} streaming={modelStreaming} onselect={selection => pinPoint(selection)} onstate={(snapshot, proposal, blocked, proposals) => { retainedSnapshot = snapshot; retainedProposals = proposals ?? []; onpointstate(snapshot, proposal, blocked); }} />
+      </div>
+      <div class="scene-feedback" hidden={cropPhase === 'idle'}>
+        <p class="crop-summary" data-testid="crop-summary" aria-live="polite">{cropStatus}</p>
+        {#if cropPhase === 'loading'}<div class="inline-crop-actions"><button data-testid="quick-cancel-crop" onclick={cancelCrop}>Cancel detail loading</button><span>{feedback.count}</span></div>{/if}
+      </div>
     </section>
     <aside>
-      <details class="technical" data-testid="toronto-technical"><summary>Scene tools &amp; data <span>Display quality, full-resolution crop, observation export</span></summary>
-      <details class="tool-section" open><summary>Display quality</summary>
+      <details class="technical" data-testid="toronto-technical" bind:open={cadToolsOpen}><summary>Scene tools</summary>
+      <div class="tools-content">
+      <details class="tool-section" open data-testid="toronto-cad-tools"><summary>CAD solids &amp; pending changes</summary><TorontoCad view={cadView} controller={cadController} streaming={modelStreaming} /></details>
+      <details class="tool-section"><summary>Navigation &amp; points</summary>
+        <p class="note">Drag to orbit · Scroll to zoom · Shift-drag for full-resolution detail. Cmd/Ctrl-click to pin a numbered point; remove individual points in Scene references.</p>
+        <p class="note">Toronto local frame · meters · Z-up.</p>
+        <button data-testid="clear-toronto-pins" disabled={!points.length} onclick={() => onpoints([])}>Clear points</button>
+      </details>
+      <details class="tool-section"><summary>Display quality</summary>
       <h2>User display LOD</h2>
       <label>Display point budget <select data-testid="display-budget" bind:value={displayBudget} onchange={event => { displayBudget = Number(event.currentTarget.value); void loadDisplay(); }}><option value={10_000}>10,000</option><option value={50_000}>50,000</option><option value={100_000}>100,000</option></select></label>
       <label>Display maximum depth <select data-testid="display-depth" bind:value={displayDepth} onchange={event => { displayDepth = Number(event.currentTarget.value); void loadDisplay(); }}>{#each [0, 1, 2, 3] as depth}<option value={depth}>{depth}</option>{/each}</select></label>
       <p data-testid="display-status" aria-live="polite">{displayStatus}</p>
       <p data-testid="display-count">Rendered sample: {display?.count ?? 0} points (depth {display?.lod.depth ?? '—'})</p>
       <button onclick={loadDisplay}>Reload display</button>
-      </details><details class="tool-section" open><summary>Full-resolution selection &amp; crop</summary>
+      </details><details class="tool-section"><summary>Full-resolution selection &amp; crop</summary>
       <h2>Full-resolution display selection</h2>
       <p class="note">Shift-click-drag a screen window to load every point through its camera volume automatically. Depth: camera near/far clipped to dataset extent, not just visible surfaces. Plain drag still orbits. Tiny Shift-click places the yellow axis-aligned box instead. Harness input is unchanged.</p>
       <p data-testid="selection-info" class="note">{selectionInfo}</p>
@@ -202,44 +234,47 @@
       {/if}
       <p class="note">Deterministic evenly spaced points across breadth-first levels 0–depth. Camera-independent, not screen-space LOD or an unbiased whole-cloud sample. Display first shows level 0. JSON contains local XYZ, RGB, semantic labels and stable source IDs; no model consumes it yet.</p>
       </details>
-      <p class="note">Read-only prepared cloud · 78.3M source points. Local meters · right-handed Z-up · world = local + [627285, 4841948, 0]. Session-only point overrides are separate from original semantic queries. No Toronto-to-project mapping or CAD edits.</p>
+      {#if mounted}<VisualObservationPanel label="Toronto" capture={() => viewer!.capture()} isCurrent={id => viewer!.isCaptureCurrent(id)} resolvePixel={(id: string, x: number, y: number) => viewer!.resolvePixel(id, x, y)} />{/if}
+      <p class="note">Read-only prepared cloud · 78.3M source points. Local meters · right-handed Z-up · world = local + [627285, 4841948, 0]. Session-only point overrides are separate from original semantic queries. Real CAD solids use a separate volatile Toronto authority. No Toronto-to-synthetic mapping.</p>
       <p class="note">CC BY-NC 4.0 · <a href="https://github.com/WeikaiTan/Toronto-3D">Toronto-3D</a>. Source UTM; no reprojection or independent CRS certification.</p>
+      </div>
       </details>
     </aside>
   </div>
 </main>
 
 <style>
-  main { min-width: 0; padding: 22px; }
-  .scene-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 18px; }
-  .eyebrow { color: #829bb4; font-size: 9px; letter-spacing: 1.7px; margin: 0 0 5px; }
-  h1 { font-size: 22px; font-weight: 550; margin: 0; } h1 span { font-size: 12px; font-weight: 400; color: #7890ac; margin-left: 10px; }
-  .scene-badge { color: #94aec6; border: 1px solid #2d4055; border-radius: 20px; padding: 4px 9px; font-size: 10px; white-space: nowrap; }
-  .workspace { min-width: 0; } .scene-panel { border: 1px solid #2a3c50; border-radius: 10px; background: #101927; overflow: hidden; }
-  section { min-width: 0; }
-  .toolbar { padding: 8px 14px; display: flex; gap: 8px; align-items: center; justify-content: space-between; font-size: 11px; color: #96abc2; border-bottom: 1px solid #243449; }
-  .divider { color: #4a627e; padding: 0 8px; }
-  .viewport { position: relative; width: 100%; height: clamp(380px, calc(100vh - 330px), 900px); min-height: 340px; }
+  main, .workspace, .scene-panel { position: relative; width: 100%; height: 100%; min-width: 0; min-height: 0; }
+  main { color: #f5f5f7; background: #151619; overflow: hidden; }
+  .viewport { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; }
   :global(canvas) { display: block; touch-action: none; }
-  .selection-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; border-top: 1px solid #2a3c50; padding: 8px 14px; font-size: 11px; color: #aac0d7; }
-  .selection-bar button { margin-left: auto; padding: 4px 8px; }
-  .scene-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 5px; padding: 0 14px 10px; font-size: 10px; color: #7f97b2; }
-  .crop-summary { font-size: 10px; color: #a4bad0; border-top: 1px solid #223246; padding: 8px 14px; margin: 0; overflow-wrap: anywhere; }
-  .inline-crop-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 0 14px 8px; font-size: 10px; color: #d9bd83; }
-  aside { margin-top: 16px; } .technical { border: 1px solid #293b50; border-radius: 8px; padding: 12px 14px; background: #101a28; }
-  summary { color: #bdcfe0; font-size: 12px; } .technical > summary > span { margin-left: 12px; color: #718aa5; font-size: 10px; }
-  .tool-section { border-top: 1px solid #2b3e54; margin-top: 14px; padding-top: 12px; }
-  .tool-section[open] { padding-bottom: 10px; } .tool-section summary { color: #9bc8c5; }
-  h2 { font-size: 12px; color: #a1b3ca; margin-top: 16px; font-weight: 500; }
-  label { display: block; margin: 10px 0; font-size: 12px; color: #9db2ca; }
-  select { display: block; width: 100%; max-width: 360px; margin-top: 4px; }
-  .box-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; max-width: 600px; }
+  .toolbar { position: absolute; z-index: 1; top: 16px; left: 16px; display: flex; align-items: center; gap: 10px; padding: 5px 10px; border: 1px solid #ffffff12; border-radius: 12px; background: #202124ed; font-size: 12px; }
+  .toolbar > span { font-weight: 550; }
+  .point-confirmation { position: absolute; right: 16px; bottom: 16px; z-index: 3; width: min(340px, calc(100% - 32px)); max-height: min(60%, 560px); overflow-y: auto; overscroll-behavior: contain; }
+  .toolbar button { background: transparent; border-color: transparent; color: #a8caff; padding: 6px; }
+  .scene-feedback { position: absolute; z-index: 1; left: 16px; bottom: 16px; max-width: min(520px, calc(100% - 32px)); max-height: 25%; overflow-y: auto; border: 1px solid #ffffff12; border-radius: 10px; background: #202124ed; }
+  .crop-summary { font-size: 11px; color: #b9bac1; padding: 9px 12px; margin: 0; overflow-wrap: anywhere; }
+  .inline-crop-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 0 12px 8px; font-size: 11px; color: #b9bac1; }
+  aside { position: absolute; z-index: 2; top: 16px; right: 16px; max-width: calc(100% - 32px); }
+  .technical { border: 1px solid #ffffff18; border-radius: 12px; background: #202124f5; box-shadow: 0 8px 32px #0003; }
+  .technical > summary { padding: 10px 14px; }
+  .technical[open] { width: 360px; max-width: 100%; }
+  .tools-content { padding: 0 14px 14px; box-sizing: border-box; max-height: min(65dvh, 620px); overflow-y: auto; overscroll-behavior: contain; }
+  summary { color: #e8e8ed; font-size: 12px; cursor: pointer; }
+  .tool-section { border-top: 1px solid #ffffff18; margin-top: 12px; padding-top: 12px; }
+  .tool-section[open] { padding-bottom: 8px; }
+  h2 { font-size: 12px; color: #a8a9b0; margin-top: 16px; font-weight: 500; }
+  label { display: block; margin: 10px 0; font-size: 12px; color: #b9bac1; }
+  select { display: block; width: 100%; margin-top: 4px; }
+  .box-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
   input { width: 100%; box-sizing: border-box; }
-  button, select, input { color: #d4e3f3; background: #1a2a3e; border: 1px solid #3a526b; border-radius: 6px; padding: 7px 10px; font-size: 12px; }
-  button, select { cursor: pointer; } button { margin: 4px 0; } button:disabled { opacity: .4; }
-  dt, .note { font-size: 11px; color: #869eb8; } dd { margin: 0 0 8px; font-size: 11px; overflow-wrap: anywhere; } p { font-size: 12px; }
-  a { color: #8bdccc; } [role="alert"] { color: #ffb2aa; padding: 10px 14px; overflow-wrap: anywhere; }
-  @media (max-width: 1000px) { main { padding: 16px; } .scene-badge { display: none; } h1 span { margin-left: 5px; } .technical > summary > span { display: block; margin: 4px 0 0 16px; } }
-  @media (max-width: 760px) { main { padding: 16px 12px; } .viewport { height: 52vh; min-height: 320px; } .scene-heading { margin-bottom: 12px; } .selection-bar { gap: 8px; font-size: 10px; } .scene-footer { font-size: 9px; } }
+  button, select, input { color: #f5f5f7; background: #2b2c30; border: 1px solid #ffffff1c; border-radius: 8px; padding: 8px 10px; font-size: 12px; }
+  button, select { cursor: pointer; } button { margin: 4px 0; } button:disabled { opacity: .4; cursor: default; }
+  button:not(:disabled):hover { border-color: #72737b; }
+  button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid #5b9cff; outline-offset: 2px; }
+  dt, .note { font-size: 11px; color: #a8a9b0; line-height: 1.5; } dd { margin: 0 0 8px; font-size: 11px; overflow-wrap: anywhere; } p { font-size: 12px; overflow-wrap: anywhere; }
+  a { color: #a8caff; }
+  [role="alert"] { position: absolute; z-index: 1; left: 16px; right: 16px; top: 64px; max-height: 25%; overflow-y: auto; margin: 0; color: #ffb2aa; background: #202124f5; border: 1px solid #ffb2aa44; border-radius: 10px; padding: 10px 14px; overflow-wrap: anywhere; }
+  @media (max-width: 600px) { .toolbar { top: 12px; left: 12px; gap: 4px; padding: 5px 8px; } .toolbar button { font-size: 11px; } aside { top: 12px; right: 12px; max-width: calc(100% - 24px); } .scene-feedback { left: 12px; bottom: 12px; max-width: calc(100% - 24px); } }
 
 </style>
