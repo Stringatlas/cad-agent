@@ -52,8 +52,8 @@
 <aside class="chat" aria-label="Scene chat" data-testid="chat">
   <header><h2>Chat</h2></header>
   {#if pointStatus}<p class="point-status" role="status" data-testid="point-status">{pointStatus}</p>{/if}
-  <details class="attachments" open={listedPoints.length > 0} data-testid="draft-attachments" aria-label="Scene point references">
-    <summary>Scene references <span>{listedPoints.length}/{SCENE_POINT_LIMIT}</span></summary>
+  <details class="attachments" data-testid="draft-attachments" aria-label="Scene point references">
+    <summary><span>Scene references</span><span class="reference-preview" title={listedPoints.map(point => `${point.name} · ${'datasetId' in point ? selectedType(point) : 'Synthetic'}`).join(', ')}>{listedPoints.map(point => `${point.name} · ${'datasetId' in point ? selectedType(point) : 'Synthetic'}`).join(', ') || 'None'}</span><span class="reference-count">{listedPoints.length}/{SCENE_POINT_LIMIT}</span></summary>
 
     {#if listedPoints.length}
       <div class="point-list" role="list" aria-label="Numbered scene points">
@@ -129,9 +129,13 @@
   h3 { font-size: 14px; font-weight: 550; } p { color: #a5a5ad; font-size: 11px; line-height: 1.5; }
   .point-status { margin: 0; flex-shrink: 0; max-height: 52px; overflow: auto; color: #d7c697; }
   .attachments, .technical { flex-shrink: 0; min-height: 0; border-top: 1px solid #ffffff12; padding-top: 9px; font-size: 11px; }
-  .attachments[open], .technical[open] { flex-shrink: 1; max-height: 30%; overflow: auto; }
+  .attachments[open], .technical[open] { flex-shrink: 0; max-height: 20%; overflow: auto; }
   summary { cursor: pointer; color: #b9b9c1; } summary:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid #70a9ff; outline-offset: 3px; }
-  .attachments > summary span { float: right; color: #8e8e98; font-variant-numeric: tabular-nums; }
+  .attachments > summary { display: flex; align-items: center; gap: 8px; }
+  .attachments > summary::before { content: '▸'; color: #8e8e98; }
+  .attachments[open] > summary::before { content: '▾'; }
+  .reference-preview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #a5a5af; }
+  .reference-count { margin-left: auto; color: #8e8e98; font-variant-numeric: tabular-nums; }
   .empty { padding: 6px 0; color: #92929c; }
   .attachment { background: #151619; border: 1px solid #ffffff12; border-radius: 10px; margin: 8px 0; padding: 10px; }
   .attachment-heading { font-size: 11px; justify-content: start; } .attachment-heading > button { margin-left: auto; border: 0; padding: 0 5px; font-size: 18px; }

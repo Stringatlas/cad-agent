@@ -12,23 +12,28 @@ const positive = (n: number) => Number.isSafeInteger(n) && n > 0;
 const hash = (v: unknown) => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
 const sameStat = (a: Stats, b: Stats) => a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
 function requireValid(v: unknown): asserts v { if (!v) throw new Error('Invalid preprocessing artifact'); }
-export function validSummaryFit(f: PrimitiveFit, points: number): boolean {
+export function validSummaryFit(f: PrimitiveFit, points: number, label?: number): boolean {
+  const expectedKind = label === 6 ? 'vertical-cylinder' : label === 4 ? 'footprint-height-extrusion' : label === 7 ? 'pca-xy-box' : undefined;
+  // Small serialization/roundoff tolerance, not a minimum acceptable fit quality.
+  const close = (a: number, b: number) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
   return !!f && ['vertical-cylinder', 'pca-xy-box', 'footprint-height-extrusion'].includes(f.kind) &&
+    (expectedKind === undefined || f.kind === expectedKind) &&
     ['fitted', 'insufficient', 'degenerate'].includes(f.status) && vector(f.center) && vector(f.dimensions) &&
     f.dimensions.every(n => n >= 0 && (f.status !== 'fitted' || n > 0)) && Number.isFinite(f.yawRadians) &&
-    (f.kind !== 'vertical-cylinder' || (Number.isFinite(f.radius) && f.radius! >= 0 && (f.status !== 'fitted' || f.radius! > 0))) &&
+    (f.kind !== 'vertical-cylinder' || (Number.isFinite(f.radius) && f.radius! >= 0 && (f.status !== 'fitted' || f.radius! > 0) &&
+      f.dimensions.slice(0, 2).every(n => close(n, 2 * f.radius!)))) &&
     Number.isFinite(f.toleranceMeters) && f.toleranceMeters > 0 && Number.isSafeInteger(f.evaluatedPoints) && f.evaluatedPoints >= 0 && f.evaluatedPoints <= points &&
-    (f.status !== 'fitted' || f.evaluatedPoints === points) &&
+    (f.status !== 'fitted' || (f.evaluatedPoints === points && f.rmseMeters !== null && f.coverage !== null && f.qualityScore !== null &&
+      close(f.qualityScore, f.coverage * Math.exp(-f.rmseMeters / f.toleranceMeters)))) &&
     (f.rmseMeters === null || (Number.isFinite(f.rmseMeters) && f.rmseMeters >= 0)) &&
     [f.coverage, f.qualityScore].every(n => n === null || (Number.isFinite(n) && n >= 0 && n <= 1)) &&
     f.qualityMeaning === 'coverage-times-exp-negative-normalized-rmse; heuristic-not-CAD-validity';
 }
-/** Read only a fixed operator path; never build an index or preprocess on an eye click. */
-export async function preprocessingSummary(dataset: DatasetInfo, bounds?: CropBox, path = process.env.SPATIAL_PREPROCESSING_PATH ?? DEFAULT_PREPROCESSING_PATH, signal?: AbortSignal) {
-  const base = { version: 'toronto-preprocessing-v1' as const, datasetId: 'toronto3d' as const, artifactRevision: dataset.revision,
-    frameId: 'toronto3d-local-v1' as const, units: 'm' as const };
-  try {
-    signal?.throwIfAborted(); if (bounds) assertCropBox(bounds);
+/** Full fixed-path artifact for queries; never use the capped display summary as a terrain model.
+ * Validates recorded binding, not a fresh original-payload hash audit. Never generates artifacts.
+ */
+export async function readPreprocessing(dataset: DatasetInfo, path = process.env.SPATIAL_PREPROCESSING_PATH ?? DEFAULT_PREPROCESSING_PATH, signal?: AbortSignal): Promise<ScenePreprocessing> {
+    signal?.throwIfAborted();
     path = resolve(path); path = join(await realpath(dirname(path)), basename(path));
     requireValid(await realpath(path) === path);
     const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -41,7 +46,7 @@ export async function preprocessingSummary(dataset: DatasetInfo, bounds?: CropBo
       m = JSON.parse(bytes.toString());
     } finally { await file.close(); }
     requireValid(m?.version === 'scene-preprocessing-v1' && m.complete === true && m.binding?.datasetId === dataset.id &&
-      m.binding.artifactRevision === dataset.revision && m.binding.frameId === base.frameId && m.binding.units === 'm' &&
+      m.binding.artifactRevision === dataset.revision && m.binding.frameId === 'toronto3d-local-v1' && m.binding.units === 'm' &&
       JSON.stringify(m.binding.coordinates) === JSON.stringify(dataset.coordinates) &&
       [m.binding.indexHash, m.binding.sourceHash, m.binding.instanceManifestHash, m.binding.membershipHash].every(hash) &&
       Array.isArray(m.instances) && m.instances.length <= 100000);
@@ -50,7 +55,7 @@ export async function preprocessingSummary(dataset: DatasetInfo, bounds?: CropBo
       requireValid(o && typeof o.id === 'string' && /^instance-[a-f0-9]{64}$/.test(o.id) && !ids.has(o.id) &&
         [4, 6, 7, 8].includes(o.label) && o.name === TORONTO_SEMANTIC_LABELS[o.label] && positive(o.points) &&
         o.bounds && vector(o.bounds.min) && vector(o.bounds.max) && o.bounds.min.every((n, i) => n <= o.bounds.max[i]) &&
-        (o.fit === undefined || validSummaryFit(o.fit, o.points))); ids.add(o.id);
+        (o.fit === undefined || validSummaryFit(o.fit, o.points, o.label))); ids.add(o.id);
     }
     const g = m.ground;
     requireValid(g && Number.isFinite(g.cellMeters) && g.cellMeters >= .1 && g.cellMeters <= 100 &&
@@ -62,6 +67,17 @@ export async function preprocessingSummary(dataset: DatasetInfo, bounds?: CropBo
       requireValid(c && Number.isSafeInteger(c.x) && Number.isSafeInteger(c.y) && Number.isFinite(c.x * g.cellMeters) && Number.isFinite(c.y * g.cellMeters) &&
         Number.isFinite(c.elevation) && Number.isFinite(c.maxElevation) && c.elevation <= c.maxElevation && positive(c.points) && !cellsSeen.has(key)); cellsSeen.add(key);
     }
+    signal?.throwIfAborted();
+    return m;
+}
+
+/** Read only a fixed operator path; never build an index or preprocess on an eye click. */
+export async function preprocessingSummary(dataset: DatasetInfo, bounds?: CropBox, path = process.env.SPATIAL_PREPROCESSING_PATH ?? DEFAULT_PREPROCESSING_PATH, signal?: AbortSignal) {
+  const base = { version: 'toronto-preprocessing-v1' as const, datasetId: 'toronto3d' as const, artifactRevision: dataset.revision,
+    frameId: 'toronto3d-local-v1' as const, units: 'm' as const };
+  try {
+    if (bounds) assertCropBox(bounds);
+    const m = await readPreprocessing(dataset, path, signal), g = m.ground;
     const intersects = (b: CropBox) => !bounds || b.min.every((n, i) => n <= bounds.max[i] && b.max[i] >= bounds.min[i]);
     const candidates = m.instances.filter(o => intersects(o.bounds));
     const groundCandidates = g.cells.filter(c => c.points >= g.minimumSupport && intersects({ min: [c.x * g.cellMeters, c.y * g.cellMeters, c.elevation], max: [(c.x + 1) * g.cellMeters, (c.y + 1) * g.cellMeters, c.elevation] }));

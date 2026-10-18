@@ -37,8 +37,9 @@ test('actual bounded JPEG decode rejects forged dimensions, MIME, hash, truncate
   const v = visual(); assert.deepEqual(await validateModelVisual(request(v), signal()), v);
   for (const bad of [{ ...v, crop: { ...v.crop!, outputWidth: 2 } }, { ...v, image: { ...v.image, sha256: 'a'.repeat(64) } },
     { ...v, image: { ...v.image, mimeType: 'image/png' as const, dataUrl: v.image.dataUrl.replace('image/jpeg', 'image/png') } },
-    withBytes(v, Buffer.from([0xff, 0xd8, 0xff, 0xd9])), withBytes(v, Buffer.from(v.image.dataUrl.split(',')[1], 'base64').subarray(0, 100)),
-    { ...v, binding: { ...v.binding, sourceRevision: 1 } }]) await assert.rejects(validateModelVisual(request(bad), signal()));
+    withBytes(v, Buffer.from([0xff, 0xd8, 0xff, 0xd9])), withBytes(v, Buffer.from(v.image.dataUrl.split(',')[1], 'base64').subarray(0, 100))]) await assert.rejects(validateModelVisual(request(bad), signal()));
+  const historical = { ...v, binding: { ...v.binding, sourceRevision: 1 } };
+  assert.deepEqual(await validateModelVisual(request(historical), signal()), historical);
   const bomb = Buffer.from(v.image.dataUrl.split(',')[1], 'base64');
   const marker = bomb.indexOf(Buffer.from([0xff, 0xc0])); assert.ok(marker > 0);
   bomb.writeUInt16BE(65535, marker + 5); bomb.writeUInt16BE(65535, marker + 7);

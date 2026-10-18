@@ -6,14 +6,13 @@
   let dialog: HTMLDialogElement;
   let preview = $state<HTMLDivElement>();
   let crop = $state<CropRect>({ x: 0, y: 0, width: 1, height: 1 });
-  let busy = $state(false), failure = $state(''), stale = $state(false);
+  let busy = $state(false), failure = $state('');
   let alive = true, ticket = 0;
   let drag: { id: number; x: number; y: number } | undefined;
   $effect(() => { if (observation) crop = { x: 0, y: 0, width: observation.viewport.width, height: observation.viewport.height }; });
   onMount(() => {
     dialog.showModal();
-    const timer = setInterval(() => { if (observation && !isCurrent()) stale = true; }, 150);
-    return () => { alive = false; ticket++; clearInterval(timer); dialog.close(); };
+    return () => { alive = false; ticket++; dialog.close(); };
   });
   function cancel() { ticket++; oncancel(); }
   function point(event: PointerEvent) {
@@ -21,7 +20,7 @@
     return { x: (event.clientX - bounds.left) / bounds.width * observation!.viewport.width, y: (event.clientY - bounds.top) / bounds.height * observation!.viewport.height };
   }
   function start(event: PointerEvent) {
-    if (!observation || busy || stale || event.button !== 0) return;
+    if (!observation || busy || event.button !== 0) return;
     event.preventDefault(); preview!.setPointerCapture(event.pointerId);
     drag = { id: event.pointerId, ...point(event) };
   }
@@ -34,7 +33,7 @@
     if (observation && Number.isFinite(value)) crop = clampCrop({ ...crop, [key]: value }, observation.viewport.width, observation.viewport.height);
   }
   async function attach() {
-    if (!observation || busy || stale) return;
+    if (!observation || busy) return;
     const current = observation, mine = ++ticket; busy = true; failure = '';
     try {
       const image = await compressScreenshot(current, crop, () => alive && mine === ticket && observation === current && isCurrent());
@@ -48,14 +47,13 @@
   <h2 id="screenshot-crop-title">Crop scene screenshot</h2>
   {#if loading}<p role="status">Capturing scene…</p>{/if}
   {#if error || failure}<p role="alert" data-testid="model-image-error">{error || failure}</p>{/if}
-  {#if stale}<p role="alert" data-testid="model-crop-stale">Stale screenshot — the view or context changed. Cancel and capture again.</p>{/if}
   {#if observation}
     <p>Drag a rectangle, or enter source-pixel coordinates below.</p>
     <div class="preview" data-testid="model-crop-preview" bind:this={preview} role="img" aria-label="Screenshot crop preview; use numeric controls below for keyboard selection" onpointerdown={start} onpointermove={move} onpointerup={finish} onpointercancel={() => drag = undefined} onlostpointercapture={() => drag = undefined}>
       <img src={observation.image.dataUrl} alt="Captured scene" draggable="false" />
       <div class="selection" style:left={`${100 * crop.x / observation.viewport.width}%`} style:top={`${100 * crop.y / observation.viewport.height}%`} style:width={`${100 * crop.width / observation.viewport.width}%`} style:height={`${100 * crop.height / observation.viewport.height}%`}></div>
     </div>
-    <fieldset disabled={busy || stale}><legend>Crop in original image pixels</legend>
+    <fieldset disabled={busy}><legend>Crop in original image pixels</legend>
       {#each ['x', 'y', 'width', 'height'] as key}
         <label>{key}<input aria-label={`Crop ${key}`} type="number" step="1" min={key === 'x' || key === 'y' ? 0 : 1} max={key === 'x' || key === 'width' ? observation.viewport.width : observation.viewport.height} value={crop[key as keyof CropRect]} oninput={event => numeric(key as keyof CropRect, event.currentTarget.valueAsNumber)} /></label>
       {/each}
@@ -68,7 +66,7 @@
     <p data-testid="model-image-capability-notice">Any listed model may be tried; the provider catalog does not verify image capability and the provider may reject it. Images are never silently removed or retried as text-only.</p>
     <p>Displayed coverage only, not the whole dataset. Model pixel coordinates refer to the attached crop and map back to the original capture. Browser-observed provenance is not independently verified CAD.</p>
   </details>
-  <div class="actions"><button type="button" onclick={cancel}>Cancel</button><button type="button" data-testid="model-crop-attach" disabled={!observation || loading || busy || stale || !!error} onclick={() => void attach()}>{busy ? 'Compressing…' : 'Attach JPEG'}</button></div>
+  <div class="actions"><button type="button" onclick={cancel}>Cancel</button><button type="button" data-testid="model-crop-attach" disabled={!observation || loading || busy || !!error} onclick={() => void attach()}>{busy ? 'Compressing…' : 'Attach JPEG'}</button></div>
 </dialog>
 
 <style>

@@ -10,6 +10,7 @@
   import { createPointSequence, replaceDraftPoint, type TorontoDraftPoint } from './draft-context';
   import type { ScenePointReference, PointOverrideSnapshot, PointMoveProposal } from '@spatial/contracts';
   import { verifiedNearestSelection } from './point-override-client';
+  import { placementWitnessSelection, type PlacementWitnessSelection } from './utility-box-evidence';
   let pointOverrides = $state<PointOverrideSnapshot>();
   let pointPreview = $state<PointMoveProposal>();
   let torontoRevision = $state<string>();
@@ -19,10 +20,12 @@
   async function selectVerified(context: unknown) {
     const generation = sourceGeneration, binding = JSON.stringify(points);
     try {
-      const result = await verifiedNearestSelection(context, points);
-      if (generation !== sourceGeneration || binding !== JSON.stringify(points) || result.point.artifactRevision !== torontoRevision) throw new Error('Result context changed; select a fresh result.');
+      const point = (context as { kind?: string })?.kind === 'utility-box-witness'
+        ? await placementWitnessSelection(context as PlacementWitnessSelection, points)
+        : (await verifiedNearestSelection(context, points)).point;
+      if (generation !== sourceGeneration || binding !== JSON.stringify(points) || point.artifactRevision !== torontoRevision) throw new Error('Result context changed; select a fresh result.');
       if (mode !== 'toronto') switchSource('toronto');
-      pinToronto({ ...result.point, name: pointSequence.allocate() });
+      pinToronto({ ...point, name: pointSequence.allocate() });
     } catch (error) { pointStatus = String(error); }
   }
   function addQueryPoint(point: Omit<TorontoDraftPoint, 'name'>) {

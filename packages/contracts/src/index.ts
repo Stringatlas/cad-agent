@@ -1,3 +1,5 @@
+export { ADAPTIVE_BINARY_MIME, ADAPTIVE_BINARY_LIMITS, encodeAdaptiveBinary, decodeAdaptiveBinary } from './adaptive-binary';
+export type { AdaptiveBinaryIdentity, AdaptiveBinaryInput, AdaptiveBinaryPayload } from './adaptive-binary';
 export { TORONTO_CAD_LIMITS } from './toronto-cad';
 export type { TorontoCadPrimitive, TorontoCadMesh, TorontoCadBody, TorontoCadBinding, TorontoCadProposal, TorontoCadSnapshot, TorontoCadErrorCode } from './toronto-cad';
 export { POINT_OVERRIDE_LIMITS, canonicalPointMoveProposalRequest, canonicalPointMoveApprovalRequest, canonicalPointMoveUndoRequest } from './point-overrides';

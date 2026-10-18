@@ -1,12 +1,13 @@
 import { canonicalBoxProposalRequest, canonicalPoleRequest, canonicalPointMoveProposalRequest, type PointOverrideSnapshot, type PointMoveProposal,
   type TorontoCadSnapshot, type TorontoCadProposal, type ModelScene, type ModelVisualObservation, type Vec3 } from '@spatial/contracts';
 import type { PointOverrideSession } from './point-overrides';
-import type { TorontoCadSession } from './toronto-cad-session';
+import { TorontoCadError, type TorontoCadSession } from './toronto-cad-session';
 import { randomUUID } from 'node:crypto';
 import { queryIndexedClosestPole } from './pole-index';
 import { ProjectSession } from './project-session';
 import { SemanticArtifact } from './semantic-artifact';
 import { ModelError, type BoundModelScene } from './provider-model';
+import { assessUtilityBox, checkPlacementTerrain, UTILITY_BOX_PRESET, type UtilityBoxAssessment } from './utility-box-placement';
 
 export interface ModelEditingAuthorities { readonly points: PointOverrideSession; readonly cad: TorontoCadSession }
 
@@ -21,16 +22,12 @@ export async function bindModelScene(scene: ModelScene, authority: ProjectSessio
   let closed = false;
   let artifact: SemanticArtifact | undefined;
   try {
-    if (visual && scene.mode === 'demo' && JSON.stringify(visual.binding.origin) !== JSON.stringify(authority.snapshot().project.coordinates.localOrigin)) throw new ModelError('stale-scene');
     const torontoEditing = scene.mode === 'toronto' ? editing : undefined;
     const pointState = torontoEditing ? await torontoEditing.points.execute('snapshot', undefined, signal) as PointOverrideSnapshot : undefined;
     const cadState = torontoEditing ? await torontoEditing.cad.execute('snapshot', undefined, signal) as TorontoCadSnapshot : undefined;
-    if (visual && torontoEditing && (pointState!.entries.length || cadState!.bodies.length || cadState!.proposals.length ||
-      (await torontoEditing.points.execute('pending', undefined, signal) as PointMoveProposal[]).length)) throw new ModelError('edited-scene-capture-unavailable');
     if (scene.toronto.length || visual && scene.mode === 'toronto' || torontoEditing) {
       artifact = await SemanticArtifact.open(directory, signal);
-      if (visual && visual.binding.sourceRevision !== artifact.dataset.revision ||
-        pointState && pointState.artifactRevision !== artifact.dataset.revision || cadState && cadState.artifactRevision !== artifact.dataset.revision) throw new ModelError('stale-scene');
+      if (pointState && pointState.artifactRevision !== artifact.dataset.revision || cadState && cadState.artifactRevision !== artifact.dataset.revision) throw new ModelError('stale-scene');
       for (const point of scene.toronto) {
         if (point.artifactRevision !== artifact.dataset.revision) throw new ModelError('stale-scene');
         if (point.key.sourceRow >= artifact.sourceCounts[point.key.sourceFileId] || point.position.some((v, i) =>
@@ -39,15 +36,15 @@ export async function bindModelScene(scene: ModelScene, authority: ProjectSessio
       await artifact.check(signal);
     }
     const retained = artifact;
+    const placements = new Map<string, Extract<UtilityBoxAssessment, { status: 'assessed' }>>();
     const checkEditing = async (querySignal: AbortSignal) => {
       if (!torontoEditing || !pointState || !cadState) return;
       const points = await torontoEditing.points.execute('snapshot', undefined, querySignal) as PointOverrideSnapshot;
       const cad = await torontoEditing.cad.execute('snapshot', undefined, querySignal) as TorontoCadSnapshot;
       if (points.sessionId !== pointState.sessionId || points.revision !== pointState.revision || points.artifactRevision !== pointState.artifactRevision ||
         cad.sessionId !== cadState.sessionId || cad.revision !== cadState.revision || cad.artifactRevision !== cadState.artifactRevision) throw new ModelError('stale-scene');
-      // The admitted image is a fixed clean observation. Creating a pending
-      // candidate does not retroactively edit those pixels; browser view-generation
-      // gates separately invalidate pixel resolution when ghosts are actually rendered.
+      // Images describe a past instant and never grant tool authority. All editing
+      // still binds current sessions/revisions above, independently of image metadata.
     };
     const nearestLabel: NonNullable<BoundModelScene['nearestLabel']> = async (args, querySignal) => {
       const combined = AbortSignal.any([signal, querySignal]); combined.throwIfAborted();
@@ -68,7 +65,7 @@ export async function bindModelScene(scene: ModelScene, authority: ProjectSessio
       return { searchGeometry: 'original-prepared-dataset', pointName: point.name, request, outcome };
     };
     return {
-      context: { mode: scene.mode, project, selectedGeometry, availableProjectBoxes, toronto: scene.toronto.map(point => ({ ...point,
+      context: { utilityBoxPreset: UTILITY_BOX_PRESET, mode: scene.mode, project, selectedGeometry, availableProjectBoxes, toronto: scene.toronto.map(point => ({ ...point,
         source: 'user-attached-toronto-record-reference', artifactValidation: 'revision-and-metadata-checked',
         recordValidation: 'unverified', mapping: 'unmapped-to-project' })),
       ...(torontoEditing ? { torontoEditing: { points: { sessionId: pointState!.sessionId, revision: pointState!.revision, artifactRevision: pointState!.artifactRevision, overrideCount: pointState!.entries.length,
@@ -77,14 +74,64 @@ export async function bindModelScene(scene: ModelScene, authority: ProjectSessio
           bodies: cadState!.bodies.map(({ bodyId, operation }) => ({ bodyId, operation })),
           proposals: cadState!.proposals.map(({ proposalId, operation }) => ({ proposalId, operation })) }, volatile: true } } : {}),
       capabilities: { inspectScene: true, nearestLabel: scene.mode === 'toronto' && scene.toronto.length > 0 && !!retained, boxParameterProposals: canPropose,
-        pointMoveProposals: !!torontoEditing && scene.toronto.length > 0, cadSolidProposals: !!torontoEditing, geometryMutation: false, cadVerification: !!torontoEditing },
+        utilityBoxAssessment: !!torontoEditing && scene.toronto.length > 0, pointMoveProposals: !!torontoEditing && scene.toronto.length > 0, cadSolidProposals: !!torontoEditing, geometryMutation: false, cadVerification: !!torontoEditing },
       nearestLabelSearchGeometry: 'original-prepared-dataset',
       limitations: ['Toronto original point record/position is not independently verified by this chat attachment boundary.',
         'Toronto and synthetic project frames are separate; no mapping exists.',
         'Synthetic box proposals are parameter-postconditions-not-cad candidates only. Toronto CAD tools, when available, retain kernel-validated pending solids, never publish. Human acceptance of each change is required.',
         'Toronto point proposals independently reread original records and check effective-position preconditions. Overrides do not change original-source nearest-label searches. All Toronto edits are volatile; restart clears them.',
-        'Images with edits or ghosts are blocked; rendering and publication are distinct from kernel validation. No model approval, decline or Undo tools exist.'] },
+        'Images may show past edits or ghosts and never grant current tool authority; rendering and publication are distinct from kernel validation. No model approval, decline or Undo tools exist.'] },
       ...(torontoEditing && pointState && cadState ? {
+        async assessUtilityBox(args, querySignal) {
+          const combined = AbortSignal.any([signal, querySignal, AbortSignal.timeout(25000)]);
+          if (closed) throw new ModelError('stale-scene');
+          await checkEditing(combined); await retained!.check(combined);
+          if (pointState.entries.length || cadState.bodies.length) return { status: 'unavailable', complete: false, reason: 'edited-state-unsupported' };
+          const point = scene.toronto.find(p => p.name === args.pointName);
+          if (!point) throw new ModelError('invalid-placement');
+          if (placements.size >= 4) return { status: 'unavailable', complete: false, reason: 'assessment-limit' };
+          try {
+            const result = await assessUtilityBox(retained!, point, args, combined);
+            await checkEditing(combined); await retained!.check(combined);
+            const assessmentId = randomUUID();
+            if (result.status === 'assessed') placements.set(assessmentId, structuredClone(result));
+            return { ...result, assessmentId, authorityBinding: { points: { sessionId: pointState.sessionId, revision: pointState.revision }, cad: { sessionId: cadState.sessionId, revision: cadState.revision } } };
+          } catch (error) {
+            await checkEditing(combined); await retained!.check(combined);
+            if (error instanceof ModelError) throw error;
+            return { status: 'unavailable', complete: false, reason: 'source-terrain-or-budget-unavailable', recovery: 'Prepare current source/terrain artifacts and retry; no placement was verified.' };
+          }
+        },
+        async proposeUtilityBox(assessmentId, querySignal) {
+          const combined = AbortSignal.any([signal, querySignal]); combined.throwIfAborted();
+          if (closed || pointState.entries.length || cadState.bodies.length) throw new ModelError('placement-unavailable');
+          await checkEditing(combined); await retained!.check(combined);
+          const assessment = placements.get(assessmentId);
+          if (!assessment) throw new ModelError('placement-assessment-unavailable');
+          await checkPlacementTerrain(retained!, assessment.binding.preprocessingHash, combined);
+          await checkEditing(combined);
+          const proposal = await torontoEditing.cad.execute('propose', { sessionId: cadState.sessionId, revision: cadState.revision,
+            artifactRevision: cadState.artifactRevision, operation: assessment.operation }, combined, async approvalSignal => {
+              const deadline = AbortSignal.any([approvalSignal ?? new AbortController().signal, AbortSignal.timeout(5000)]);
+              const current = await SemanticArtifact.open(directory, deadline);
+              try {
+                if (current.dataset.revision !== cadState.artifactRevision) throw new TorontoCadError('stale-artifact');
+                try { await checkPlacementTerrain(current, assessment.binding.preprocessingHash, deadline); }
+                catch { throw new TorontoCadError('stale-artifact'); }
+              } finally { await current.close(); }
+              // Last awaited precondition, independent of this model turn's lifetime.
+              let points: PointOverrideSnapshot;
+              try { points = await torontoEditing.points.execute('snapshot', undefined, deadline) as PointOverrideSnapshot; }
+              catch { throw new TorontoCadError('stale-revision'); }
+              if (points.sessionId !== pointState.sessionId || points.revision !== pointState.revision || points.entries.length ||
+                points.artifactRevision !== pointState.artifactRevision) throw new TorontoCadError('stale-revision');
+            }) as TorontoCadProposal;
+          await checkEditing(combined); await retained!.check(combined); placements.delete(assessmentId);
+          return { sessionId: proposal.sessionId, revision: proposal.revision, artifactRevision: proposal.artifactRevision,
+            datasetId: proposal.datasetId, frameId: proposal.frameId, units: proposal.units, proposalId: proposal.proposalId,
+            bodyId: proposal.bodyId, operation: proposal.operation, validation: proposal.validation, assessmentId,
+            finding: assessment.finding, needsBasePreparation: assessment.needsBasePreparation };
+        },
         async proposePointMove(args, querySignal) {
           const combined = AbortSignal.any([signal, querySignal]); combined.throwIfAborted();
           if (closed) throw new ModelError('stale-scene');
@@ -144,7 +191,7 @@ export async function bindModelScene(scene: ModelScene, authority: ProjectSessio
             datasetId: proposal.datasetId, frameId: proposal.frameId, units: proposal.units, proposalId: proposal.proposalId,
             bodyId: proposal.bodyId, operation: proposal.operation, validation: proposal.validation };
         },
-      } satisfies Pick<BoundModelScene, 'proposePointMove' | 'proposeNearestPointMove' | 'proposeCad'> : {}),
+      } satisfies Pick<BoundModelScene, 'assessUtilityBox' | 'proposeUtilityBox' | 'proposePointMove' | 'proposeNearestPointMove' | 'proposeCad'> : {}),
       ...(canPropose ? {
         async proposeBox(edit, querySignal) {
           const combined = AbortSignal.any([signal, querySignal]); combined.throwIfAborted();

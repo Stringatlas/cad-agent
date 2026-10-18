@@ -45,7 +45,7 @@ export function createVisualCapture(options: VisualCaptureOptions) {
     try { return !disposed && options.available() && !renderer.getContext().isContextLost(); }
     catch { return false; }
   };
-  const invalidate = () => { generation++; serial++; retained = undefined; };
+  const invalidate = () => { generation++; retained = undefined; };
   function state() {
     camera.updateMatrixWorld(true); scene.updateMatrixWorld(true);
     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
@@ -68,7 +68,7 @@ export function createVisualCapture(options: VisualCaptureOptions) {
           Object.entries(drawable.geometry.attributes).map(([name, attr]) => [name, attr.count, 'version' in attr ? attr.version : attr.data.version]),
           materials.map(material => [material.uuid, material.version, material.visible, material.opacity, material.side, 'size' in material ? material.size : null])];
       }) });
-    return { size, binding, coverage, objects: layers, signature };
+    return { size, pixelRatio: renderer.getPixelRatio(), binding, coverage, objects: layers, signature };
   }
   function current(bundle: NonNullable<typeof retained>): boolean {
     return available() && bundle.generation === generation && state().signature === bundle.signature;
@@ -91,15 +91,21 @@ export function createVisualCapture(options: VisualCaptureOptions) {
       const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
       if ([137, 80, 78, 71, 13, 10, 26, 10].some((byte, index) => bytes[index] !== byte)) throw new Error('Invalid PNG capture');
       const hash = await crypto.subtle.digest('SHA-256', bytes);
-      if (!available() || ticket !== serial || viewGeneration !== generation || state().signature !== before.signature) throw new Error('Visual capture became stale');
+      // PNG extraction and camera metadata were frozen synchronously. Navigation while
+      // hashing cannot invalidate those past pixels; only a newer capture/disposal wins.
+      if (disposed || ticket !== serial) throw new Error('Visual capture replaced or disposed');
       const observation: VisualObservation = Object.freeze({ schemaVersion: 1, observationId: crypto.randomUUID(), viewGeneration,
         image: Object.freeze({ mimeType: 'image/png', dataUrl, sha256: Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join(''), byteLength: bytes.length }),
-        viewport: Object.freeze({ width, height, pixelRatio: renderer.getPixelRatio(), pixelOrigin: 'top-left' }),
+        viewport: Object.freeze({ width, height, pixelRatio: before.pixelRatio, pixelOrigin: 'top-left' }),
         camera: detached({ position: frozenCamera.position.toArray() as unknown as Vec3, quaternion: frozenCamera.quaternion.toArray(), up: frozenCamera.up.toArray() as unknown as Vec3,
           near: frozenCamera.near, far: frozenCamera.far, fov: frozenCamera.fov, aspect: frozenCamera.aspect, zoom: frozenCamera.zoom,
           matrixWorld: frozenCamera.matrixWorld.toArray(), matrixWorldInverse: frozenCamera.matrixWorldInverse.toArray(), projectionMatrix: frozenCamera.projectionMatrix.toArray() }),
         binding: before.binding, coverage: before.coverage });
-      retained = { observation, signature: before.signature, camera: frozenCamera, objects: before.objects, generation: viewGeneration };
+      const bundle = { observation, signature: before.signature, camera: frozenCamera, objects: before.objects, generation: viewGeneration };
+      // Retain live pixel grounding only if the rendered scene still matches. The
+      // observation itself is immutable and does not depend on this disposable cache.
+      try { if (current(bundle)) retained = bundle; }
+      catch { /* Unavailable current metadata cannot invalidate already-captured pixels. */ }
       return observation;
     },
     /** Check retention and live view metadata without intersecting displayed geometry. */

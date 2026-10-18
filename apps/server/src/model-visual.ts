@@ -57,10 +57,12 @@ export async function validateModelVisual(call: ModelTurnRequest, signal: AbortS
   if (raw.length !== expected) invalid();
   for (let row = 0; row < height; row++) if (raw[row * rowBytes] > 4) invalid();
   }
-  const b = visual.binding, project = call.scene.project;
+  // Capture binding describes a past observation, not the authority granting tools.
+  // Validate its source/frame shape without comparing it to current session/revision.
+  const b = visual.binding;
   if (call.scene.mode === 'demo') {
-    if (!project || b.sourceId !== project.sessionId || b.sourceRevision !== project.projectRevision || b.frameId !== project.frameId) throw new ModelError('stale-scene');
+    if (typeof b.sourceRevision !== 'number') throw new ModelError('invalid-visual-observation');
   } else if (call.scene.mode !== 'toronto' || b.sourceId !== 'toronto3d' || b.frameId !== 'toronto3d-local-v1' ||
-    typeof b.sourceRevision !== 'string' || JSON.stringify(b.origin) !== '[627285,4841948,0]' || call.scene.toronto.some(p => p.artifactRevision !== b.sourceRevision)) throw new ModelError('stale-scene');
+    typeof b.sourceRevision !== 'string' || !b.sourceRevision.length || JSON.stringify(b.origin) !== '[627285,4841948,0]') throw new ModelError('invalid-visual-observation');
   return visual;
 }

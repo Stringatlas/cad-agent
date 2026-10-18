@@ -1,0 +1,46 @@
+# Task044 — bounded utility-box placement
+
+## Scope / acceptance
+Integrate the existing Toronto point references, original-source ground/index and human-approved native CAD workflow. No rotations, removals, reconstruction or regulatory clearance claims.
+
+- Resolve attached named point by original-record reread, Toronto local meters.
+- Explicit dimensions and +Y front-access depth (0 disables access check); documented illustrative preset 1.2 × 0.6 × 1.5m, access 1m, never an equipment/code standard. Explain assumptions; user may request different dimensions before Accept.
+- Assess supported ground at footprint center/corners, flag sampled base relief; unavailable terrain blocks proposal. Ground is cell-minimum evidence, not terrain certification.
+- Exact inclusive AABB occupancy over complete source index, conservative page broad phase and exact binary64 narrow phase. Exact counts independent of capped witnesses. Ground/Road_markings within 0.10m of the assessed base is separately counted as supporting-ground-band, never silently dropped. Every other in-volume point is an observed conflict.
+- Model assessment/proposal tools retain exact assessed operation; model cannot accept. Existing ghosts, per-change Accept/Decline and Undo remain the only publication path.
+- Original-source-only: reject assessment/proposal with ANY accepted point overrides or CAD bodies, or changed authority revisions. Pending candidates are not accepted state. No stale edited-state green check.
+- Evidence remains in existing tool disclosures, no permanent diagnostic panel. Reuse scene selection for witnesses if safely feasible. Preserve task043 composer/layout.
+- Tests: independent exact-box oracle, boundaries/caps/budgets, ground absent/incomplete/conflict, source/revision/edit binding, provider tool allowlist, pending kernel proposal and human-only publication. Current typecheck/tests/build and scoped diff; browser if approved connection available.
+
+## Risk
+Pre-edit graph: bindModelScene LOW; ProviderModel MEDIUM; canonicalModelChatEvent LOW; validateModelEvent HIGH (streamModelTurn/accept/send). HIGH warning reported before editing; targeted allowlist-only extension and regression tests. TorontoCadSession MEDIUM (server composition/routes/model callers). SpatialPageIndex UNKNOWN/unindexed: callers confirmed in spatial routes and tests; source verified. App selectVerified and ModelChat Svelte graph UNKNOWN: source confirms App→Chat→ModelChat event wiring and existing numbered-point selection/renderer path. Index one commit behind and excludes new task042 files.
+
+## Implementation / completed criteria
+- `utility-box-placement.ts`: original-record reread and prepared-index-only access (never build on a model request), strict 0.1..5m dimensions / 0..5m access, complete source/index/terrain binding and terrain hash. Supported body-center/four-corner ground plus two front-access corners; highest body sample sets base. Sampled relief >0.10m flags preparation. Missing/unsupported samples block assessment and proposal.
+- `SpatialPageIndex.box`: inclusive AABB page-BVH broad phase and exact binary64 point narrow phase; exact all-label counts, separate supporting-ground-band and obstruction counts; up to12 obstruction witnesses per volume. Each volume explicitly budgets20000 pages /10s; admitted model assessment has25s deadline. Budget/abort/identity failures never publish partial success.
+- `scene.assess_utility_box` / `scene.propose_utility_box`: strict dispatcher inputs, current-turn retained assessment ID and exact operation only. Existing native validation/tessellation, scene ghost and individual human Accept/Decline/Undo are reused; no model approval tool. A conflicting hypothetical can be proposed but never represents obstacle removal or a clear-site certificate.
+- Reject ANY accepted point override or CAD body. Source/revision checks gate assessment/proposal. Trusted retained CAD approval preconditions survive model-turn disposal, recheck terrain hash and point authority immediately before publication. Late precondition rejection removes already-discarded competing native candidates from the registry, avoiding dead handles.
+- Existing collapsed tool disclosure offers one source-reread conflict witness per body/access volume as a normal numbered scene pin with semantic label. No permanent panel or new routine paragraphs. Task043 collapsed references, conversation layout and composer reset are preserved.
+
+## Verification — 2026-10-17
+| Exact command | Result / artifact |
+| --- | --- |
+| `node --import tsx --test tests/utility-box-placement.test.ts tests/utility-box-evidence.test.ts tests/utility-box-tools.test.ts tests/model-toronto-proposals.test.ts tests/spatial-page-index.test.ts tests/model-chat-client.test.ts tests/toronto-cad.test.ts` |102/102 pass; `/tmp/task044-focused-final.log`. Actual native kernel candidates, fake provider tool rounds, exact fixture oracle, source/terrain/point-state binding, model approval rejection, witness reread, late-approval-registry consistency. |
+| `pnpm typecheck` |Pass, Svelte0 errors/0 warnings; `/tmp/task044-typecheck-final.log`. Includes tests compiler. |
+| `node --import tsx --test --test-concurrency=1 tests/*.test.ts` |780/780 pass, none skipped; `/tmp/task044-tests-serial.log`. Serial execution avoids existing global cache-directory observation race without changing assertions. |
+| `node --import tsx --test tests/*.test.ts` |Final parallel attempt779/780: preexisting `semantic-disk-storage.test.ts:181` compares GLOBAL `.building-*` directory list while another process finishes staging; before list includes another build, after is empty. No assertion weakened. `/tmp/task044-tests-parallel-final-attempt.log`. Earlier unchanged parallel reruns779/779 passed before the final added regression; `/tmp/task044-all-tests-rerun.log`. |
+| `pnpm build` |Pass after final guard change; existing >500kB chunk advisory only; `/tmp/task044-build-post-guard.log`. |
+| `node --import tsx scripts/check-utility-box-placement.ts` |Pass: independent unpruned reduction of every validated source-index record,78,320,210 points /19,122 pages; `/tmp/task044-actual-placement.json`, stderr `/tmp/task044-actual-placement.err` empty. Counts and every retained witness matched exact-volume oracle.41 terrain seeds needed to find supported full-preset site;8.33s seed-search/assessment,18.64s oracle (not per-click benchmark). |
+| LSP diagnostics for changed TS/new files; `lsp_diagnostics('*')` |Clean current TypeScript cache. No Svelte LSP; current svelte-check above covers it. |
+| `git diff --check` |Pass; inspected actual scoped tracked diff and new files. `/tmp/task044-scoped.diff`; `/tmp/task044-modelchat-combined.diff` includes prior task043 changes, only imports + collapsed evidence actions are task044. |
+| `gitnexus_detect_changes(scope:all)` then `node .gitnexus/run.cjs detect-changes --scope all --repo . --limit 10000` |Aggregate **CRITICAL**,26 tracked changed files /132 symbols /91 affected process hits across all dirty tasks. `/tmp/task044-graph-changes-full.txt`, `/tmp/task044-graph-full.err`. MCP output truncated; CLI repeats full changed-symbol summary but formats only10 process descriptions (+81). Stale index excludes new modules and misattributes line-shifted symbols. This is NOT clean/complete graph certification. No commit. |
+
+Actual site: assessed base140.0798045m, sampled relief0.2349855m (preparation flagged), body3 observed points (1 supporting-ground-band,2 conflicts), access6 conflicts;7 physical pages each. No claim of free space or regulatory suitability. Actual-data audit is read-only; native/provider integration uses isolated fixtures, no live provider inference or production edits.
+
+## Browser / remaining limitations
+Browser skill inspected. No browser tools/setup tool available in this child, `/tmp/pi-browser-daemon.sock` missing. Parent/task043 approved-CDP attempt already rejected403; no bypass or private Chrome launched. Actual desktop/mobile click→prompt→evidence→ghost→human approval and idle/selected/pending/error screenshots remain **unverified**. Reconnect approved browser and perform that bounded acceptance before sign-off.
+
+Ground remains sparse, outlier-sensitive observed minima; center/corner sampling is not continuous foundation support. Empty scan volume is not free-space/solid/surface clearance. Front is fixed +Y and access height equals explicit box height; no rotations, obstacle removal, alternatives search or code claims. Queries are intentionally original-only: any accepted edit blocks new assessments (even distant edits); future effective-geometry queries require separate scope. Existing generic CAD tools remain available for unrelated explicit operations; instructions require the assessed utility workflow and prohibit calling generic CAD as a substitute for utility assessment. A model's prose remains non-authoritative.
+
+## Status / next action
+Implementation complete; browser acceptance blocked; fresh-session review pending. No commit; all unrelated dirty files preserved. Next: approved browser workflow check and fresh review against this task/source diff, especially cross-authority approval preconditions and truthful sparse-ground/conflict interpretation. Handoff: `/tmp/task044-utility-box-handoff.md`.

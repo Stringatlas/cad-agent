@@ -1,5 +1,5 @@
 import { setImmediate as yieldTurn } from 'node:timers/promises';
-import type { Vec3 } from '@spatial/contracts';
+import { assertCropBox, type CropBox, type Vec3 } from '@spatial/contracts';
 import { SemanticArtifact, requireData } from './semantic-artifact';
 import { getSemanticDiskIndex, pagePoints, recordBytes, type SemanticDiskIndex, type SemanticDiskPage } from './semantic-disk-index';
 
@@ -59,8 +59,15 @@ export interface SpatialRadiusResult extends SpatialResult {
   /** Full exact match count; retained points are a deterministic capped subset, NOT the closest k. */
   readonly totalCount: number; readonly truncated: boolean; readonly maxResults: number; readonly points: readonly SpatialPoint[];
 }
+export type SpatialBoxPoint = Omit<SpatialPoint, 'distanceMeters'>;
+export interface SpatialBoxResult extends SpatialResult {
+  readonly bounds: CropBox; readonly totalCount: number; readonly countsByLabel: readonly number[];
+  readonly supportingGroundCount: number; readonly obstructionCount: number;
+  /** Capped obstruction witnesses only; counts always cover the full inclusive volume. */
+  readonly points: readonly SpatialBoxPoint[]; readonly truncated: boolean;
+}
 const lowerDistance = (q: Vec3, box: { min: Vec3; max: Vec3 }) => Math.hypot(...q.map((v, a) => Math.max(box.min[a] - v, v - box.max[a], 0)));
-const sourceOrder = (a: SpatialPoint, b: SpatialPoint) => a.source.preparedRecordIndex - b.source.preparedRecordIndex ||
+const sourceOrder = (a: SpatialBoxPoint, b: SpatialBoxPoint) => a.source.preparedRecordIndex - b.source.preparedRecordIndex ||
   a.source.sourceFileId - b.source.sourceFileId || a.source.sourceRow - b.source.sourceRow;
 
 /** Read-only ORIGINAL-source queries. Not an override/effective-position index or independent verifier.
@@ -92,6 +99,46 @@ export class SpatialPageIndex {
     const cap = options.maxResults ?? 1000;
     if (!Number.isSafeInteger(cap) || cap < 0 || cap > 10000) throw new RangeError('Radius result cap must be 0..10000');
     return await this.query(position, radiusMeters, cap, options) as SpatialRadiusResult;
+  }
+  /** Exact inclusive AABB occupancy, not a radius witness approximation or surface-clearance proof.
+   * Ground labels 1/2 at/below supportMaxZ are counted separately, never discarded from totalCount.
+   */
+  async box(bounds: CropBox, options: SpatialQueryOptions & { readonly maxResults?: number; readonly supportMaxZ?: number } = {}): Promise<SpatialBoxResult> {
+    assertCropBox(bounds);
+    const box = { min: vector(bounds.min), max: vector(bounds.max) }, signal = options.signal;
+    const maxPages = options.maxPages ?? this.disk.pages.length, maxMilliseconds = options.maxMilliseconds ?? 10000;
+    const cap = options.maxResults ?? 12, supportMaxZ = options.supportMaxZ;
+    if (!Number.isSafeInteger(maxPages) || maxPages < 0 || !Number.isSafeInteger(maxMilliseconds) || maxMilliseconds <= 0 ||
+      !Number.isSafeInteger(cap) || cap < 0 || cap > 100 || options.label !== undefined ||
+      (supportMaxZ !== undefined && !Number.isFinite(supportMaxZ))) throw new RangeError('Invalid box query budgets/options');
+    const started = performance.now(); let checkedPages = 0, checkedPoints = 0, totalCount = 0, supportingGroundCount = 0;
+    const countsByLabel = Array<number>(9).fill(0), points: SpatialBoxPoint[] = [];
+    const checkpoint = () => { signal?.throwIfAborted(); if (performance.now() - started >= maxMilliseconds) throw new RangeError('Spatial time budget exceeded'); };
+    const intersects = (node: PageKdNode) => box.min.every((n, a) => n <= node.max[a] && box.max[a] >= node.min[a]);
+    checkpoint(); await this.snapshot.check(signal); await this.disk.check(signal);
+    const visit = async (node: PageKdNode): Promise<void> => {
+      checkpoint(); if (!intersects(node)) return;
+      if (node.page === undefined) { await visit(node.left!); await visit(node.right!); return; }
+      if (checkedPages >= maxPages) throw new RangeError('Spatial page budget exceeded');
+      const page = this.disk.pages[node.page], bytes = await this.disk.readPage(page, signal); checkedPages++; checkpoint();
+      for (let n = 0; n < page.count; n++) {
+        checkedPoints++; const at = n * recordBytes;
+        const xyz: Vec3 = [bytes.readDoubleLE(at), bytes.readDoubleLE(at + 8), bytes.readDoubleLE(at + 16)];
+        if (!xyz.every((v, a) => v >= box.min[a] && v <= box.max[a])) continue;
+        const label = bytes.readUInt32LE(at + 36); totalCount++; countsByLabel[label]++;
+        if (supportMaxZ !== undefined && (label === 1 || label === 2) && xyz[2] <= supportMaxZ) { supportingGroundCount++; continue; }
+        if (points.length < cap) points.push(Object.freeze({ position: vector(xyz), label,
+          source: Object.freeze({ sourceFileId: bytes.readUInt32LE(at + 24), sourceRow: bytes.readUInt32LE(at + 28), preparedRecordIndex: bytes.readUInt32LE(at + 32) }),
+          artifactRevision: this.binding.artifactRevision, frameId: 'toronto3d-local-v1', units: 'm' }));
+      }
+      await yieldTurn(); checkpoint();
+    };
+    if (this.tree.root) await visit(this.tree.root);
+    await this.snapshot.check(signal); await this.disk.check(signal); checkpoint();
+    const obstructionCount = totalCount - supportingGroundCount;
+    return { complete: true, binding: this.binding, bounds: box, totalCount, countsByLabel, supportingGroundCount, obstructionCount,
+      points: points.sort(sourceOrder), truncated: obstructionCount > points.length,
+      statistics: { checkedPages, totalPages: this.disk.pages.length, checkedPoints, milliseconds: performance.now() - started } };
   }
   /** Point-to-source-point clearance only: NOT a solid/surface/obstacle clearance proof. */
   async clearance(position: Vec3, options: SpatialQueryOptions = {}): Promise<SpatialNearestResult & { readonly distanceMeters: number | null; readonly domain: 'original-source-points' }> {

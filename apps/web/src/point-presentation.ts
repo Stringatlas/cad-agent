@@ -7,8 +7,9 @@ export function semanticName(label: unknown): string {
     ? TORONTO_SEMANTIC_LABELS[label as TorontoSemanticLabel].replaceAll('_', ' ') : 'Unknown';
 }
 
-/** Match original provenance AND coordinates, never color or proximity to a derived fit. */
+/** UI-only source metadata; otherwise match original provenance AND coordinates, never color/proximity. */
 export function observedPointLabel(point: PoleSelection, observation?: PointObservation): TorontoSemanticLabel | undefined {
+  if (semanticName(point.semanticLabel) !== 'Unknown') return point.semanticLabel;
   if (!observation || observation.dataset.revision !== point.artifactRevision || observation.dataset.id !== point.datasetId) return;
   for (let i = 0; i < observation.count; i++) {
     if (observation.sourceIds[i * 2] !== point.key.sourceFileId || observation.sourceIds[i * 2 + 1] !== point.key.sourceRow) continue;

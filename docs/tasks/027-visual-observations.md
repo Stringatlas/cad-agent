@@ -2,6 +2,8 @@
 
 Status: implemented and independently corrective-reviewed (user authorized next harness must-have). Whole-checkout fresh-session review remains pending.
 
+Task045 supersedes historical capture/export staleness below: images remain usable observations after navigation/scene changes; only live pixel grounding expires. See [current task](045-historical-scene-screenshots.md) for evidence and limitations.
+
 ## Scope and acceptance
 - Explicit capture in demo and Toronto scenes: PNG bytes and SHA256, drawing-buffer viewport, camera pose/projection, local meter frame/origin, source revision, view generation, actual displayed sampling/detail coverage.
 - Renderer-owned disposable capture adapter; no renderer types in shared observation contracts. Capture consistency checked across asynchronous hashing. Camera, resize, scene/overlay, dataset/detail and lifecycle changes invalidate retained observations.

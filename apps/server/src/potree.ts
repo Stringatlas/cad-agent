@@ -5,6 +5,8 @@ import { createHash } from 'node:crypto';
 import { assertCropBox, assertCropSelection, type CropSelection, type CropBox, type DatasetInfo, type PointLod, type PointObservation, type Vec3 } from '@spatial/contracts';
 import { readFullResolutionCrop, CROP_LIMITS } from './crop';
 import { assertPointLod, sampleIndices } from '@spatial/agent-harness';
+import { DISPLAY_LIMITS, readDisplayHierarchy, type DisplayHierarchy, type DisplayPayload, type NativeDisplayNode } from './adaptive-display';
+import { setImmediate as yieldTurn } from 'node:timers/promises';
 
 export const READ_LIMITS = Object.freeze({ json: 64 * 1024, hierarchy: 64 * 1024, node: 4 * 1024 * 1024, total: 16 * 1024 * 1024 });
 interface Layout { rootBox?: CropBox; stride: number; scale: Vec3; offset: Vec3; bounds: DatasetInfo['bounds']; points: number; firstChunk: number; fields: Record<string, number> }
@@ -130,6 +132,67 @@ export function decodePoint(bytes: Buffer, index: number, layout: Layout) {
 /** Read-only prepared artifact adapter. No public filesystem paths or raw binary routes. */
 export class PotreeDataset {
   constructor(private readonly directory: string) {}
+  private displayCache?: { revision: string; identity: string; nodes: NativeDisplayNode[] };
+  /** Dedicated bounded native-display path; never changes observe/crop sampling semantics. */
+  private async nativeDisplay<T>(revision: string | undefined, signal: AbortSignal | undefined,
+    consume: (loaded: Awaited<ReturnType<PotreeDataset['load']>>, nodes: NativeDisplayNode[]) => Promise<T>): Promise<T> {
+    signal?.throwIfAborted();
+    const loaded = await this.load();
+    try {
+      if (revision !== undefined && revision !== loaded.dataset.revision) throw new Error('Stale display revision');
+      if (!loaded.layout.rootBox) throw new Error('Missing native root bounds');
+      const root = await realpath(this.directory);
+      const hierarchy = await safeOpen(root, 'octree/hierarchy.bin');
+      try {
+        const identityOf = async () => {
+          const identities = [];
+          for (const asset of ['octree/hierarchy.bin', 'octree/octree.bin']) {
+            const file = await safeOpen(root, asset);
+            try { const s = await file.stat(); identities.push([s.dev, s.ino, s.size, s.mtimeMs, s.ctimeMs]); }
+            finally { await file.close(); }
+          }
+          return JSON.stringify(identities);
+        };
+        const identity = await identityOf();
+        const hs = await hierarchy.stat(), ps = await loaded.payload.stat();
+        if (identity !== JSON.stringify([hs, ps].map(s => [s.dev, s.ino, s.size, s.mtimeMs, s.ctimeMs]))) throw new Error('Native artifact changed');
+        const cached = this.displayCache;
+        // Existing artifact revisions fingerprint the first chunk only. A changed proxy file
+        // with the same revision must fail closed rather than reuse a stale catalog.
+        if (cached?.revision === loaded.dataset.revision && cached.identity !== identity) throw new Error('Native artifact changed without revision');
+        const nodes = cached?.revision === loaded.dataset.revision ? cached.nodes : await readDisplayHierarchy({
+          first: loaded.hierarchy, rootBox: loaded.layout.rootBox, hierarchySize: loaded.hierarchySize,
+          payloadSize: loaded.size, stride: loaded.layout.stride, totalPoints: loaded.dataset.totalPoints,
+          readHierarchy: (offset, size) => readRange(hierarchy, offset, size, CROP_LIMITS.chunkBytes),
+        }, signal);
+        signal?.throwIfAborted();
+        const result = await consume(loaded, nodes);
+        signal?.throwIfAborted();
+        if (identity !== await identityOf() || (await this.info()).revision !== loaded.dataset.revision) throw new Error('Native artifact changed during read');
+        this.displayCache = { revision: loaded.dataset.revision, identity, nodes };
+        return result;
+      } finally { await hierarchy.close(); }
+    } finally { await loaded.payload.close(); }
+  }
+  async displayHierarchy(signal?: AbortSignal): Promise<DisplayHierarchy> {
+    return this.nativeDisplay(undefined, signal, async (loaded, nodes) => ({ dataset: loaded.dataset,
+      nodes: nodes.map(({ name, count, bounds }) => ({ name, count, bounds })) }));
+  }
+  async displayNode(revision: string, name: string, signal?: AbortSignal): Promise<DisplayPayload> {
+    if (!/^[a-f0-9]{64}$/.test(revision) || !/^r[0-7]{0,24}$/.test(name)) throw new RangeError('Invalid native display request');
+    return this.nativeDisplay(revision, signal, async (loaded, nodes) => {
+      const node = nodes.find(n => n.name === name);
+      if (!node) throw new RangeError('Unknown native display node');
+      const bytes = await readRange(loaded.payload, node.offset, node.size, DISPLAY_LIMITS.nodeBytes);
+      const positions: number[] = [], colors: number[] = [], sourceIds: number[] = [], labels: number[] = [];
+      for (let i = 0; i < node.count; i++) {
+        if (i % 2048 === 0) { await yieldTurn(); signal?.throwIfAborted(); }
+        const point = decodePoint(bytes, i, loaded.layout);
+        positions.push(...point.positions); colors.push(...point.colors); sourceIds.push(...point.sourceIds); labels.push(point.label);
+      }
+      return { dataset: loaded.dataset, name, count: node.count, positions, colors, sourceIds, labels };
+    });
+  }
   private async load() {
     const root = await realpath(this.directory);
     const metadata = await readSmall(root, 'octree/metadata.json');

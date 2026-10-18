@@ -86,13 +86,13 @@ test('two distinct tool requests are accepted; nonresolved bounded no-hit result
   }, attachment); assert.equal(posts, 2);
 });
 
-test('invalid, stale, mismatched and oversized pixel results never POST', async () => {
+test('invalid, mismatched and oversized pixel results never POST', async () => {
   const a = adapter(), r = request(a.attachment.observation);
   for (const result of [
     { status: 'resolved', observationId: 'wrong', x: 2, y: 3, provenance: {} },
     { status: 'resolved', observationId: 'observation-one', x: 1, y: 3, provenance: {} },
     { status: 'resolved', observationId: 'observation-one', x: 2, y: 3, provenance: { secret: 'x'.repeat(20000) } },
-    ...['stale', 'invalid', 'unknown'].map(status => ({ status, observationId: 'observation-one', x: 2, y: 3, reason: 'Not usable' })),
+    ...['invalid', 'unknown'].map(status => ({ status, observationId: 'observation-one', x: 2, y: 3, reason: 'Not usable' })),
   ]) {
     let posts = 0;
     await assert.rejects(streamModelTurn(r, signal(), () => {}, async path => path === '/chat/turn' ? response([start(r), tool(r), done(r)]) : (++posts, new Response(null, { status: 204 })),
@@ -100,34 +100,36 @@ test('invalid, stale, mismatched and oversized pixel results never POST', async 
   }
 });
 
-test('stale preflight/mismatched attachments and image continuation reject without traffic', async () => {
+test('mismatched attachments and image continuation reject without traffic', async () => {
   const a = adapter(), r = request(a.attachment.observation); let calls = 0;
   const f: typeof fetch = async () => { calls++; return response([]); };
   await assert.rejects(streamModelTurn(r, signal(), () => {}, f));
   await assert.rejects(streamModelTurn(request(), signal(), () => {}, f, a.attachment));
   await assert.rejects(streamModelTurn({ ...r, conversationId: 'previous' }, signal(), () => {}, f, a.attachment));
   await assert.rejects(streamModelTurn(r, signal(), () => {}, f, { ...a.attachment, observation: { ...a.attachment.observation, viewGeneration: 2 } }));
-  a.stale(); await assert.rejects(streamModelTurn(r, signal(), () => {}, f, a.attachment)); assert.equal(calls, 0);
+  assert.equal(calls, 0);
+  a.stale(); await streamModelTurn(r, signal(), () => {}, async () => response([start(r), done(r)]), a.attachment);
 });
 
-test('attachment stale after headers, during publish/resolution/POST blocks later publication', async () => {
+test('camera/view changes after headers, during publish/resolution/POST do not cancel historical-image answers', async () => {
   for (const when of ['headers', 'publish', 'resolution', 'post']) {
     const a = adapter(), r = request(a.attachment.observation), published: string[] = []; let posts = 0;
     const attachment = { ...a.attachment, resolvePixel(id: string, x: number, y: number) { const result = a.attachment.resolvePixel(id, x, y); if (when === 'resolution') a.stale(); return result; } };
-    await assert.rejects(streamModelTurn(r, signal(), e => { published.push(e.kind); if (when === 'publish') a.stale(); }, async path => {
+    await streamModelTurn(r, signal(), e => { published.push(e.kind); if (when === 'publish') a.stale(); }, async path => {
       if (path === '/chat/turn') { if (when === 'headers') a.stale(); return response([start(r), tool(r), done(r)]); }
       posts++; if (when === 'post') a.stale(); return new Response(null, { status: 204 });
-    }, attachment));
-    assert.ok(!published.includes('done')); assert.equal(posts, when === 'post' ? 1 : 0);
+    }, attachment);
+    assert.ok(published.includes('done')); assert.equal(posts, 1);
+    if (when === 'headers' || when === 'publish') assert.equal(a.resolutions.length, 0);
   }
 });
 
-test('stale attachment during a pending body read suppresses the next frame and completion', async () => {
+test('camera navigation during a pending body read preserves answer completion', async () => {
   const a = adapter(), r = request(a.attachment.observation), published: string[] = [];
   let body!: ReadableStreamDefaultController<Uint8Array>;
   const pending = streamModelTurn(r, signal(), e => published.push(e.kind), async () => new Response(new ReadableStream<Uint8Array>({ start(c) { body = c; c.enqueue(new TextEncoder().encode(lines([start(r)]))); } }), { headers: { 'Content-Type': 'application/x-ndjson' } }), a.attachment);
   while (!published.length) await delay(); a.stale(); body.enqueue(new TextEncoder().encode(lines([done(r)])));
-  await assert.rejects(pending); assert.deepEqual(published, ['start']);
+  body.close(); await pending; assert.deepEqual(published, ['start', 'done']);
 });
 
 test('abort from resolution is checked before result POST', async () => {
@@ -171,6 +173,34 @@ test('image-bytes omission and metadata-only image projection survive event vali
   assert.deepEqual(validateModelEvent(event, r), event);
 });
 
+test('historical image stays usable after a real scene rebind; request tools use current scene, not capture binding', async () => {
+  const a = adapter(), turns: ModelTurnRequest[] = [];
+  const client = new ModelChatController(() => {}, async (path, init) => {
+    if (path === '/chat/models') return Response.json({ mode: 'api-key', ready: true, generation: 'account-one', code: 'ready', models: [{ id: 'fixture-vision-vNext', label: 'Fixture' }] });
+    const r = JSON.parse(init!.body as string) as ModelTurnRequest; turns.push(r); return response([start(r), done(r)]);
+  });
+  const currentScene = { mode: 'demo' as const, project: { sessionId: 'current-session', projectRevision: 8, frameId: 'demo-local-v1' as const, units: 'm' as const, entityIds: [], points: [] }, toronto: [] };
+  try {
+    client.bind(scene); await client.refreshModels();
+    client.bind(currentScene); a.stale();
+    assert.equal(await client.send('Discuss the old image', a.attachment), true);
+    assert.equal(client.view.phase, 'completed');
+    assert.deepEqual(turns[0].scene, currentScene);
+    assert.equal(turns[0].visualObservation!.binding.sourceRevision, 0);
+    assert.equal(turns[0].visualObservation!.binding.sourceId, 'session-one');
+  } finally { client.dispose(); }
+});
+
+test('historical pixel tool reports unavailable without resolving against changed geometry', async () => {
+  const a = adapter(); a.stale(); const r = request(a.attachment.observation); let result: unknown;
+  await streamModelTurn(r, signal(), () => {}, async (path, init) => {
+    if (path === '/chat/turn') return response([start(r), tool(r), done(r)]);
+    result = JSON.parse(init!.body as string).result; return new Response(null, { status: 204 });
+  }, a.attachment);
+  assert.equal(a.resolutions.length, 0);
+  assert.deepEqual(result, { status: 'unavailable', observationId: 'observation-one', x: 2, y: 3, reason: 'Capture-time pixel grounding is no longer available' });
+});
+
 test('controller image turns force fresh conversation, discard returned ID and omit image on later text turns', async () => {
   const turns: ModelTurnRequest[] = [], a = adapter();
   const client = new ModelChatController(() => {}, async (path, init) => {
@@ -183,6 +213,6 @@ test('controller image turns force fresh conversation, discard returned ID and o
     assert.equal(await client.send('Image next', a.attachment), true); assert.equal(turns[1]!.conversationId, null); assert.equal(turns[1]!.model, 'fixture-vision-vNext'); assert.deepEqual(turns[1]!.visualObservation, a.attachment.observation);
     assert.equal(client.view.phase, 'completed'); assert.equal(client.view.continuationActive, false);
     await client.send('No retained image'); assert.equal(turns[2]!.conversationId, null); assert.ok(!Object.hasOwn(turns[2]!, 'visualObservation'));
-    a.stale(); assert.equal(await client.send('Do not send', a.attachment), false); assert.equal(turns.length, 3);
+    a.stale(); assert.equal(await client.send('Historical image', a.attachment), true); assert.equal(turns.length, 4);
   } finally { client.dispose(); }
 });

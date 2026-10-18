@@ -68,16 +68,17 @@ test('visual contract bounds and event/result schemas do not infer model capabil
   for (const bad of [{ ...v, viewport: { ...v.viewport, width: 4097 } }, { ...v, image: { ...v.image, byteLength: MODEL_VISUAL_LIMITS.pngBytes + 1 } }, { ...v, extra: true }, { ...v, image: { ...v.image, dataUrl: 'https://evil.invalid/image.png' } }]) assert.throws(() => canonicalModelVisualObservation(bad));
   assert.throws(() => canonicalModelVisualToolResult({ requestId: 'r', toolCallId: 't', nonce: 'n', observationId: 'o', result: { status: 'resolved', observationId: 'other', x: 1, y: 1, provenance: {} } }));
 });
-test('actual PNG bytes/hash/CRC/dimensions and revision binding are validated before dispatch', async t => {
+test('actual PNG bytes/hash/CRC/dimensions are validated before dispatch; image revisions are historical', async t => {
   const f = await fixture(t); const call = canonicalModelTurnRequest(f.call); await validateModelVisual(call, signal());
   for (const visual of [{ ...f.call.visualObservation!, image: { ...f.call.visualObservation!.image, sha256: '0'.repeat(64) } },
-    { ...f.call.visualObservation!, viewport: { ...f.call.visualObservation!.viewport, width: 1 } },
-    { ...f.call.visualObservation!, binding: { ...f.call.visualObservation!.binding, sourceRevision: 999 } }]) {
+    { ...f.call.visualObservation!, viewport: { ...f.call.visualObservation!.viewport, width: 1 } }]) {
     const e = await readEvents(await f.post({ ...f.call, visualObservation: visual })); assert.equal(e.at(-1)?.kind, 'error');
   }
   const bytes = png(); bytes[bytes.length - 1] ^= 1;
   await assert.rejects(validateModelVisual({ ...call, visualObservation: { ...call.visualObservation!, image: { ...call.visualObservation!.image, dataUrl: `data:image/png;base64,${bytes.toString('base64')}`, sha256: createHash('sha256').update(bytes).digest('hex') } } }, signal()));
   assert.equal(f.requests.length, 0);
+  const historical = { ...call.visualObservation!, binding: { ...call.visualObservation!.binding, sourceId: 'older-session', sourceRevision: 999, origin: [1, 2, 3] as const } };
+  assert.deepEqual(await validateModelVisual({ ...call, visualObservation: historical }, signal()), historical);
 });
 test('image pixel roundtrip is nonce-bound, origin-guarded, one-use, truthful and image turns are not retained', async t => {
   const f = await fixture(t); let answer: unknown;
@@ -126,12 +127,15 @@ test('API-key catalog model image rejection is explicit, with no text-only retry
 for (const args of [{ observationId: 'wrong', x: 1, y: 1 }, { observationId: 'observation-one', x: 2, y: 1 }, { observationId: 'observation-one', x: .5, y: 1 }]) test(`invalid model pixel arguments fail before browser RPC: ${JSON.stringify(args)}`, async t => {
   const f = await fixture(t, args); const events = await readEvents(await f.post(f.call)); assert.equal(events.some(e => e.kind === 'tool-request'), false); assert.equal(events.at(-1)?.kind, 'error'); assert.equal(f.requests.length, 1);
 });
-test('stale browser result stops provider continuation and abort clears broker', async t => {
+test('unavailable historical pixel grounding permits provider continuation; explicit abort still clears broker', async t => {
   const f = await fixture(t);
   const e = await readEvents(await f.post(f.call), async event => { if (event.kind !== 'tool-request') return; const { kind: _kind, x, y, ...identity } = event;
     assert.equal((await f.result({ ...identity, result: { status: 'stale', observationId: event.observationId, x, y, reason: 'camera changed' } })).status, 204);
   });
-  assert.deepEqual(e.at(-1), { kind: 'error', requestId: f.call.requestId, code: 'stale-scene' }); assert.equal(f.requests.length, 1);
+  assert.equal(e.at(-1)?.kind, 'done'); assert.equal(f.requests.length, 2);
+  const pixel = e.find(v => v.kind === 'tool' && v.name === 'resolve_visual_pixel');
+  assert.ok(pixel?.kind === 'tool'); assert.equal((pixel.context as { result: { status: string } }).result.status, 'unavailable');
+  assert.match(String(f.requests[0].instructions), /capture-time.*may predate/);
   const controller = new AbortController(); let request: ModelChatEvent | undefined;
   const broker = new ModelVisualBroker('r', controller.signal, async e => { request = e; });
   const pending = broker.resolve({ observationId: 'o', x: 0, y: 0 }, 't'); assert.equal(broker.waiting, true); controller.abort(); await assert.rejects(pending); assert.equal(broker.waiting, false); assert.ok(request);

@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import type { VisualObservation } from '@spatial/contracts';
 import { clampCrop, compressScreenshot, cropOutputSize, dragCrop, SCREENSHOT_JPEG_QUALITY } from '../apps/web/src/screenshot-crop';
 
-test('compression hashes actual JPEG bytes, accepts >2 MiB local PNG, preserves metadata and rejects late stale output', async () => {
+test('compression hashes actual JPEG bytes, accepts >2 MiB local PNG, preserves historical metadata and rejects cancelled preparation', async () => {
   const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
   const source: VisualObservation = { schemaVersion: 1, observationId: 'source-one', viewGeneration: 4,
     image: { mimeType: 'image/png', dataUrl: 'data:image/png;base64,cG5n', sha256: 'a'.repeat(64), byteLength: 3 * 1024 * 1024 },
@@ -35,9 +35,9 @@ test('compression hashes actual JPEG bytes, accepts >2 MiB local PNG, preserves 
     assert.ok(!JSON.stringify(result).includes(source.image.dataUrl)); assert.equal(canvas.width, 0); assert.equal(canvas.height, 0);
     for (const phase of ['decode', 'encode', 'read']) {
       valid = true; staleAt = phase;
-      await assert.rejects(compressScreenshot(source, rect, () => valid), /stale/);
+      await assert.rejects(compressScreenshot(source, rect, () => valid), /cancelled/);
     }
-    valid = false; await assert.rejects(compressScreenshot(source, rect, () => valid), /stale/);
+    valid = false; await assert.rejects(compressScreenshot(source, rect, () => valid), /cancelled/);
   } finally {
     for (const [key, descriptor] of Object.entries(descriptors)) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key);

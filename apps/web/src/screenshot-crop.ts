@@ -22,9 +22,9 @@ export function cropOutputSize(width: number, height: number): { width: number; 
   return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
 }
 
-/** PNG remains local. Every asynchronous boundary checks the live source/session. */
+/** PNG remains local. The callback gates preparation lifecycle/cancellation, NOT live view or geometry currency. */
 export async function compressScreenshot(source: VisualObservation, rect: CropRect, isCurrent: () => boolean): Promise<ModelVisualObservation> {
-  const check = () => { if (!isCurrent()) throw new Error('Screenshot is stale. Capture again.'); };
+  const check = () => { if (!isCurrent()) throw new Error('Screenshot preparation cancelled.'); };
   check();
   if (source.image.mimeType !== 'image/png' || source.image.byteLength > MODEL_VISUAL_LIMITS.sourcePngBytes) throw new Error('Source screenshot exceeds the 12 MiB capture limit.');
   const crop = clampCrop(rect, source.viewport.width, source.viewport.height), output = cropOutputSize(crop.width, crop.height);

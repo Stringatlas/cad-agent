@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
 import { createDemoProject } from '../packages/project-state/src/index';
 import { PROJECT_FRAME_ID, type ProjectSnapshot, type ScenePointReference } from '../packages/contracts/src/index';
 import { modelScene, ModelChatController } from '../apps/web/src/model-chat-client';
@@ -111,8 +112,10 @@ test('model UI renders safe content, keeps local draft IDs and exposes explicit 
   assert.match(source, /if \(document\.visibilityState === 'visible'\) revalidate\(\)/);
   assert.match(source, /document\.addEventListener\('visibilitychange', visibility\);\s*revalidate\(\);/);
   assert.match(source, /view\.catalogPhase === 'ready' && view\.catalog\?\.ready/);
-  assert.ok(source.includes('data-testid="model-history-notice"')); assert.ok(source.includes('{view.historyNotice}'));
-  assert.ok(!/draft\s*=\s*''/.test(source.replace("let draft = $state('');", '')));
+  assert.ok(!source.includes('data-testid="model-history-notice"')); assert.ok(!source.includes('{view.historyNotice}'));
+  assert.ok(!source.includes('Original prepared-dataset search only.'));
+  assert.match(source, /oninput=\{\(\) => draftRevision\+\+\}/);
+  assert.match(source, /if \(draftRevision === revision\) draft = ''/);
   const integration = readFileSync(new URL('../apps/web/src/Chat.svelte', import.meta.url), 'utf8');
   assert.match(integration, /<ModelChat\s+\{scene\}\s+\{visualSource\}\s+points=\{activePoints\}\s+\{onverifiedresult\}/);
   assert.ok(integration.includes('onproposal={(proposal, current) =>'));
@@ -133,6 +136,38 @@ test('model UI renders safe content, keeps local draft IDs and exposes explicit 
   assert.ok(!source.includes('supported vision-model list')); assert.ok(!source.includes('modelSupportsVisualInput'));
   assert.ok(crop.includes('the provider catalog does not verify image capability')); assert.ok(crop.includes('the provider may reject it'));
   assert.ok(source.includes('!catalogModelSelected')); assert.ok(crop.includes('Images are never silently removed or retried as text-only.'));
-  assert.ok(source.includes('controller.send(draft, current)')); assert.ok(integration.includes('<BoxControls {view} controller={projectController} />'));
+  assert.ok(source.includes('controller.send(submitted, current)')); assert.ok(integration.includes('<BoxControls {view} controller={projectController} />'));
+  assert.ok(!integration.includes('open={listedPoints.length > 0}'));
+  assert.ok(integration.includes('class="reference-preview"'));
+  assert.match(integration, /\.attachments\[open\], \.technical\[open\] \{[^}]*max-height: 20%/);
   assert.ok(integration.includes('void projectController.context()')); assert.ok(integration.includes('void controller?.submit(command)'));
+});
+
+test('composer clears only a completed unchanged submission and retains failed/rejected or newer drafts', async () => {
+  const source = readFileSync(new URL('../apps/web/src/ModelChat.svelte', import.meta.url), 'utf8');
+  // Execute the component's actual send handler without substituting controller semantics.
+  // DOM/layout acceptance still needs the existing-browser verification.
+  const handler = source.slice(source.indexOf('  async function send() {'), source.indexOf("  let draft = $state('');"));
+  for (const scenario of ['completed', 'rejected', 'error', 'cancelled', 'changed', 'changed-back', 'blocked']) {
+    let finish!: (sent: boolean) => void;
+    let calls = 0, removals = 0;
+    const attachment = {};
+    const scope = { canSend: scenario !== 'blocked', draft: 'Submitted message', draftRevision: 0, attachment,
+      view: { phase: 'streaming' }, removeAttachment: () => { removals++; },
+      controller: { send: (text: string, image: unknown) => {
+        calls++; assert.equal(text, 'Submitted message'); assert.equal(image, attachment);
+        return new Promise<boolean>(resolve => { finish = resolve; });
+      } } };
+    const send = runInNewContext(`${handler}; send`, scope) as () => Promise<void>;
+    const pending = send();
+    if (scenario === 'blocked') { await pending; assert.equal(calls, 0); assert.equal(scope.draft, 'Submitted message'); continue; }
+    if (scenario === 'changed' || scenario === 'changed-back') {
+      scope.draft = scenario === 'changed' ? 'Next message' : 'Submitted message';
+      scope.draftRevision += scenario === 'changed' ? 1 : 2;
+    }
+    scope.view.phase = ['error', 'cancelled'].includes(scenario) ? scenario : 'completed';
+    finish(scenario !== 'rejected'); await pending;
+    assert.equal(scope.draft, scenario === 'completed' ? '' : scenario === 'changed' ? 'Next message' : 'Submitted message', scenario);
+    assert.equal(removals, ['completed', 'changed', 'changed-back'].includes(scenario) ? 1 : 0, scenario);
+  }
 });

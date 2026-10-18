@@ -70,7 +70,7 @@ export function createPointOverrideRender(scene: THREE.Scene) {
       proposals = proposals.filter(proposal => proposal.artifactRevision === revision);
       refresh();
     },
-    register(object: THREE.Points, sourceIds: readonly number[]) {
+    register(object: THREE.Points, sourceIds: ArrayLike<number>) {
       const attribute = object.geometry.getAttribute('position');
       if (sourceIds.length !== attribute.count * 2) throw new Error('Missing override render provenance');
       layers.set(object, { sourceIds: Uint32Array.from(sourceIds), indexes: new Map(), keySignature: '', originals: new Map() }); refresh();

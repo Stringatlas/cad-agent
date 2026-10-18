@@ -4,6 +4,8 @@ Status: Implemented; independent incremental review READY
 
 Historical model-name allowlist/unsupported-model UI below is superseded by [task029](029-catalog-model-image-input.md). Current admission is catalog membership, not inferred vision capability; provider rejection stays explicit.
 
+[Task045](045-historical-scene-screenshots.md) supersedes historical stale-image admission/cancellation rules below: mixed and older captured images remain observations, while current tools/approvals retain independent authority checks. Lost live pixel grounding returns unavailable, not an interrupted answer.
+
 ## Ownership
 - Implementation: parent UI, isolated backend/contracts and client agents.
 - Review: independent fresh child review READY, no actionable defects (`/tmp/spatial-task028/independent-review.md`); whole-checkout review remains pending separately.

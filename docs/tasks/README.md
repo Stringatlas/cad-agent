@@ -4,10 +4,17 @@ Use [TEMPLATE.md](TEMPLATE.md) for bounded work with testable acceptance criteri
 
 ## Index
 
-Latest: [035 — Chat-first conversation and scene-native point review](035-chat-point-move-review.md) — implemented;695/695 tests and browser checks pass; fresh-session review pending.
+Latest: [046 — Bounded high-quality point rendering](046-rendering-optimization.md) — default3M native ceiling, binary streaming, dense GPU batches, circular splats and demand rendering.807 tests/typecheck/build and13 actual-cloud browser checks pass; fresh-session review pending.
 
 | Task | Status |
 | --- | --- |
+| [046 — Bounded high-quality point rendering](046-rendering-optimization.md) | Implemented and browser-tuned;1–3M points/2–6px comparisons,23 draw calls at3M, idle draw suppression, exact picking/capture/error/mobile checks.807 tests/typecheck/build pass; fresh-session review pending. |
+| [045 — Historical scene screenshots](045-historical-scene-screenshots.md) | Implemented; capture-time observations independent of live pixel grounding/current tool authority. Browser/fresh review pending. |
+| [044 — Bounded utility-box placement](044-utility-box-placement.md) | Implemented; exact original-source body/access counts, grounded base and model/native approval integration. Actual78M-point occupancy oracle passes; browser/fresh review pending. |
+| [043 — Chat UI cleanup](043-chat-ui-cleanup.md) | Implemented; restrained references, conversation priority and successful-send draft reset. Browser acceptance blocked; fresh review pending. |
+| [042 — Terrain and full-source spatial queries](042-scene-query-completion.md) | Implemented; observed-minimum terrain interpolation and nearest/radius/point-distance HTTP.770/770 tests, typecheck/build and actual full-source oracle pass. Not model-callable or CAD clearance; fresh review pending. |
+| [041 — Opt-in camera-driven rendering](041-opt-in-adaptive-rendering.md) | Implemented; historical opt-in default superseded by task046. Optional lazy adaptive channel with disposal on disable. No new persistent UI.746/746 tests/typecheck/build pass; browser recheck blocked; fresh review pending. |
+| [040 — Camera-driven point-cloud detail](040-camera-driven-point-cloud-lod.md) | Implemented; bounded native chunk streaming, near/far refinement and compact quality controls. Exact native picking/labels, independent crops, desktop/mobile browser checks pass. Fresh-session review pending; graph/composite-command limitations recorded in task. |
 | [035 — Chat-first conversation and scene-native point review](035-chat-point-move-review.md) | Implemented;695/695 tests, typechecks/build, five two-point browser and six native-CAD regression groups pass. Safe Markdown, per-point verified destinations and individual scene Confirm/Reject. Fresh-session review pending. |
 | [034 — Toronto point edits and real CAD solids](034-toronto-cad-workspace.md) | Implemented;677/677 tests, typecheck/build and six actual-kernel fixture browser groups pass. Volatile Toronto solids/point proposals; live-provider/production-scale and fresh-session review pending. |
 | [001 — Project foundation](001-project-foundation.md) | Ready for fresh review; baseline and browser smoke passed. |

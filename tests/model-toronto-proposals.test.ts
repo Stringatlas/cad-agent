@@ -133,17 +133,28 @@ test('Toronto strict tools reject malformed arguments, model-selected keys, bind
   }
 });
 
-test('image admission refuses pending point ghosts and accepted Toronto CAD bodies', async t => {
+test('historical images admit point/CAD ghosts, edited points and accepted solids without weakening current authority binding', async t => {
   const f = await dataset(t), bound = await f.bind();
-  // Image decoding/hash/shape is validated separately before bindModelScene.
-  const visual = { binding: { sourceRevision: f.state.artifactRevision } } as ModelVisualObservation;
+  // Image decoding/hash/shape is validated separately before bindModelScene. An older
+  // artifact revision in the image cannot grant or replace current tool permissions.
+  const visual = { binding: { sourceRevision: 'older-captured-artifact' } } as ModelVisualObservation;
+  const imageBind = async () => {
+    const next = await bindModelScene(f.scene, f.project, f.root, signal(), visual, { points: f.points, cad: f.cad });
+    t.after(() => next.close()); await next.check(); return next;
+  };
   const proposal = await bound.proposePointMove!({ pointNames: ['Point 1'], translation: [0, 1, 0] }, signal());
-  await assert.rejects(bindModelScene(f.scene, f.project, f.root, signal(), visual, { points: f.points, cad: f.cad }), { code: 'edited-scene-capture-unavailable' });
-  await f.points.execute('decline', { sessionId: proposal.sessionId, revision: proposal.revision, proposalId: proposal.proposalId });
-  const cadProposal = await bound.proposeCad!({ kind: 'box', center: [2, 2, 2], dimensions: [1, 1, 1] }, signal()) as { sessionId: string; revision: number; artifactRevision: string; proposalId: string };
-  await assert.rejects(bindModelScene(f.scene, f.project, f.root, signal(), visual, { points: f.points, cad: f.cad }), { code: 'edited-scene-capture-unavailable' });
+  const pendingPoints = await imageBind();
+  await f.points.execute('approve', { sessionId: proposal.sessionId, revision: proposal.revision, proposalId: proposal.proposalId });
+  await assert.rejects(pendingPoints.check(), { code: 'stale-scene' });
+  const editedPoints = await imageBind();
+  const cadProposal = await editedPoints.proposeCad!({ kind: 'box', center: [2, 2, 2], dimensions: [1, 1, 1] }, signal()) as { sessionId: string; revision: number; artifactRevision: string; proposalId: string };
+  const pendingCad = await imageBind();
   await f.cad.execute('approve', { sessionId: cadProposal.sessionId, revision: cadProposal.revision, artifactRevision: cadProposal.artifactRevision, proposalId: cadProposal.proposalId });
-  await assert.rejects(bindModelScene(f.scene, f.project, f.root, signal(), visual, { points: f.points, cad: f.cad }), { code: 'edited-scene-capture-unavailable' });
+  await assert.rejects(pendingCad.check(), { code: 'stale-scene' });
+  const acceptedCad = await imageBind();
+  const next = await acceptedCad.proposeCad!({ kind: 'box', center: [5, 5, 5], dimensions: [1, 1, 1] }, signal()) as { revision: number };
+  assert.equal(next.revision, cadProposal.revision + 1);
+  assert.equal((await f.cad.execute('snapshot') as TorontoCadSnapshot).bodies.length, 1, 'model only proposed; human publication remains separate');
 });
 
 test('closed, cancelled, stale CAD revision and replaced artifacts fail closed before new proposal retention', async t => {

@@ -30,12 +30,18 @@ export function validatePreprocessing(value: unknown, revision: string): Preproc
         o.bounds.min.some((n: number, i: number) => n > o.bounds.max[i])) throw new Error('Invalid derived instance bounds');
     ids.add(o.id);
     const f = o.fit;
-    if (f && (!['vertical-cylinder', 'pca-xy-box', 'footprint-height-extrusion'].includes(f.kind) ||
+    const expectedKind = o.label === 6 ? 'vertical-cylinder' : o.label === 4 ? 'footprint-height-extrusion' : o.label === 7 ? 'pca-xy-box' : undefined;
+    // Match the artifact validator's numerical tolerance; poor quality remains a valid observation.
+    const close = (a: number, b: number) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
+    if (f !== undefined && (!f || !['vertical-cylinder', 'pca-xy-box', 'footprint-height-extrusion'].includes(f.kind) ||
+      (expectedKind !== undefined && f.kind !== expectedKind) ||
       !['fitted', 'insufficient', 'degenerate'].includes(f.status) || !vector(f.center) || !vector(f.dimensions) ||
       f.dimensions.some((n: number) => n < 0 || (f.status === 'fitted' && n === 0)) || !Number.isFinite(f.yawRadians) ||
-      (f.kind === 'vertical-cylinder' && (!Number.isFinite(f.radius) || f.radius! < 0 || (f.status === 'fitted' && f.radius === 0))) ||
+      (f.kind === 'vertical-cylinder' && (!Number.isFinite(f.radius) || f.radius! < 0 || (f.status === 'fitted' && f.radius === 0) ||
+        f.dimensions.slice(0, 2).some((n: number) => !close(n, 2 * f.radius!)))) ||
       !Number.isFinite(f.toleranceMeters) || f.toleranceMeters <= 0 || !Number.isSafeInteger(f.evaluatedPoints) || f.evaluatedPoints < 0 || f.evaluatedPoints > o.points ||
-      (f.status === 'fitted' && f.evaluatedPoints !== o.points) ||
+      (f.status === 'fitted' && (f.evaluatedPoints !== o.points || f.rmseMeters === null || f.coverage === null || f.qualityScore === null ||
+        !close(f.qualityScore, f.coverage * Math.exp(-f.rmseMeters / f.toleranceMeters)))) ||
       (f.rmseMeters !== null && (!Number.isFinite(f.rmseMeters) || f.rmseMeters < 0)) ||
       [f.coverage, f.qualityScore].some(n => n !== null && (!Number.isFinite(n) || n < 0 || n > 1)) ||
       f.qualityMeaning !== 'coverage-times-exp-negative-normalized-rmse; heuristic-not-CAD-validity')) throw new Error('Invalid observed fit');

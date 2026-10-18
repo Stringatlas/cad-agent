@@ -28,8 +28,6 @@
   }
   function download() {
     if (!observation) return;
-    check();
-    if (stale) return;
     const url = URL.createObjectURL(new Blob([JSON.stringify(observation)], { type: 'application/json' }));
     const link = document.createElement('a'); link.href = url; link.download = `visual-${observation.observationId}.json`; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 0);
@@ -46,7 +44,7 @@
   <button type="button" data-testid="capture-visual" disabled={busy} onclick={() => void takeCapture()}>{busy ? 'Capturing…' : 'Capture current view'}</button>
   {#if error}<p role="alert" data-testid="visual-error">{error}</p>{/if}
   {#if observation}
-    <p role="status" data-testid="visual-status">{stale ? 'Stale capture — view changed or viewer unavailable. Capture again before resolving or exporting.' : 'Captured view — pixel references are valid only while this view remains unchanged.'}</p>
+    <p role="status" data-testid="visual-status">{stale ? 'Captured image retained; pixel grounding unavailable.' : 'Captured view — pixel grounding available while this view remains unchanged.'}</p>
     <p>Image {observation.viewport.width} × {observation.viewport.height} · top-left origin · integer drawing-buffer pixels (not CSS pixels). Click the preview to resolve a pixel.</p>
     <button class="preview" type="button" aria-label="Resolve pixel in captured image" disabled={stale} onclick={event => {
       const rect = event.currentTarget.getBoundingClientRect();
@@ -59,7 +57,7 @@
       <button data-testid="resolve-visual" type="submit">Resolve pixel</button>
     </form>
     {#if result}<pre data-testid="visual-resolution">{JSON.stringify(result, null, 2)}</pre>{/if}
-    <button type="button" data-testid="download-visual" disabled={stale} onclick={download}>Download image + metadata JSON</button>
+    <button type="button" data-testid="download-visual" onclick={download}>Download image + metadata JSON</button>
     <details><summary>Capture metadata / SHA256 / coverage</summary><pre data-testid="visual-metadata">{JSON.stringify(metadata, null, 2)}</pre></details>
   {/if}
 </details>

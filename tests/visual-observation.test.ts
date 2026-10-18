@@ -80,6 +80,22 @@ test('zoom and DPR retain drawing-buffer projection and never use CSS pixels', a
   }
 });
 
+test('capture admits opaque solids and translucent ghosts as past imagery; meshes never become point provenance', async () => {
+  for (const opacity of [1, .25]) {
+    const f = fixture();
+    const solid = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshBasicMaterial({ opacity, transparent: opacity < 1 }));
+    solid.position.z = 2; f.scene.add(solid);
+    const observation = await f.capture.capture();
+    assert.ok(observation.image.byteLength > 0);
+    assert.equal(f.capture.resolvePixel(observation.observationId, 50, 50).status, 'no-hit', 'CAD/ghost mesh does not become a source point');
+    solid.position.x = 4; f.camera.position.x = 3; f.revision(); f.capture.invalidate();
+    assert.equal(observation.camera.position[0], 0); assert.equal(observation.binding.sourceRevision, 1);
+    assert.equal(f.capture.isCurrent(observation.observationId), false, 'only live pixel grounding is unavailable');
+    assert.ok(observation.image.dataUrl.startsWith('data:image/png;base64,'));
+    f.capture.dispose(); solid.geometry.dispose(); solid.material.dispose();
+  }
+});
+
 test('currency checks never raycast and wrong or superseded IDs preserve the latest capture', async () => {
   const f = fixture();
   f.points.raycast = () => { assert.fail('Currency checks must not raycast points'); };
@@ -250,16 +266,16 @@ test('camera, resize, binding, coverage, geometry, scene layer and explicit gene
   }
 });
 
-test('capture rejects async races, mutation during hashing, invalid PNG and unavailable/context loss', async () => {
+test('capture preserves past pixels through navigation while hashing; replacement, invalid bytes and unavailable capture reject', async () => {
   const f = fixture();
   const pending = f.capture.capture(); f.camera.position.x++;
-  await assert.rejects(pending, /stale/);
+  const past = await pending; assert.equal(past.camera.position[0], 0); assert.equal(f.capture.isCurrent(past.observationId), false);
   const race = fixture();
   const first = race.capture.capture(), second = race.capture.capture();
-  await assert.rejects(first, /stale/); await second;
+  await assert.rejects(first, /replaced/); await second;
   const invalidated = fixture();
   const inFlight = invalidated.capture.capture(); invalidated.capture.invalidate();
-  await assert.rejects(inFlight, /stale/);
+  const retained = await inFlight; assert.equal(invalidated.capture.isCurrent(retained.observationId), false);
   const bad = fixture(); bad.badPng(); await assert.rejects(bad.capture.capture(), /PNG/);
   const huge = fixture(); huge.huge(); await assert.rejects(huge.capture.capture(), /limits/);
   const hugePng = fixture(); hugePng.hugePng(); await assert.rejects(hugePng.capture.capture(), /limit/);

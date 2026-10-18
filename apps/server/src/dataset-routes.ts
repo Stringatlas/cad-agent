@@ -1,18 +1,23 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { PotreeDataset } from './potree';
+import { DISPLAY_LIMITS, parseDisplayRequest } from './adaptive-display';
 import { once } from 'node:events';
-import { assertCropSelection, canonicalPoleRequest, type NearestPoleRequest, type CropSelection } from '@spatial/contracts';
+import { ADAPTIVE_BINARY_MIME, encodeAdaptiveBinary, assertCropSelection, canonicalPoleRequest, type NearestPoleRequest, type CropSelection } from '@spatial/contracts';
 import { streamClosestPole } from './pole-transport';
 import { preprocessingSummary } from './preprocessing-summary';
+import { createSpatialQueryRoutes } from './spatial-query-routes';
+import { createGroundQueryRoutes } from './ground-query-routes';
 import { parseSourcePointRequest, readSourcePoint, type SourcePointRequest } from './source-point';
 
 export const DEFAULT_DATASET_ROOT = fileURLToPath(new URL('../../../data/processed/toronto3d/prepared/', import.meta.url));
 
 export function createDatasetRoutes(directory = DEFAULT_DATASET_ROOT) {
   const dataset = new PotreeDataset(directory);
+  const spatialQueries = createSpatialQueryRoutes(directory), groundQueries = createGroundQueryRoutes(directory);
   let active = 0;
   return async (request: IncomingMessage, response: ServerResponse): Promise<boolean> => {
+    if (await spatialQueries(request, response) || await groundQueries(request, response)) return true;
     const send = (status: number, body: unknown) => {
       if (response.destroyed) return;
       response.statusCode = status;
@@ -28,11 +33,20 @@ export function createDatasetRoutes(directory = DEFAULT_DATASET_ROOT) {
       send(403, { error: 'Local access only' }); return true;
     }
     // No CORS, file paths, write operations, or raw assets. Ranges are deliberately unsupported.
-    if (request.method !== 'GET' || !['/datasets/toronto3d', '/datasets/toronto3d/observation', '/datasets/toronto3d/crop', '/datasets/toronto3d/closest-pole', '/datasets/toronto3d/closest-label', '/datasets/toronto3d/preprocessing', '/datasets/toronto3d/point'].includes(url.pathname)) {
+    if (request.method !== 'GET' || !['/datasets/toronto3d', '/datasets/toronto3d/observation', '/datasets/toronto3d/crop', '/datasets/toronto3d/closest-pole', '/datasets/toronto3d/closest-label', '/datasets/toronto3d/preprocessing', '/datasets/toronto3d/point', '/datasets/toronto3d/display-hierarchy', '/datasets/toronto3d/display-node'].includes(url.pathname)) {
       send(404, { error: 'Not found' }); return true;
     }
     if (request.headers.range) { send(416, { error: 'Raw byte ranges are not exposed' }); return true; }
     if ((request.url?.length ?? 0) > 4096) { send(400, { error: 'Query too long' }); return true; }
+    const displayHierarchy = url.pathname === '/datasets/toronto3d/display-hierarchy';
+    const displayNode = url.pathname === '/datasets/toronto3d/display-node';
+    let displayRequest: ReturnType<typeof parseDisplayRequest> | undefined;
+    if (displayHierarchy || displayNode) {
+      try {
+        if (displayNode) displayRequest = parseDisplayRequest(url.searchParams);
+        else if ([...url.searchParams.keys()].length) throw new RangeError();
+      } catch { send(400, { error: 'Expected exact native node name and artifact revision; hierarchy takes no query' }); return true; }
+    }
     const metadata = url.pathname === '/datasets/toronto3d';
     const crop = url.pathname === '/datasets/toronto3d/crop';
     const preprocessing = url.pathname === '/datasets/toronto3d/preprocessing';
@@ -78,7 +92,7 @@ export function createDatasetRoutes(directory = DEFAULT_DATASET_ROOT) {
     const keys = [...url.searchParams.keys()];
     const purpose = url.searchParams.get('purpose');
     const budget = url.searchParams.get('budget') ?? '', depth = url.searchParams.get('depth') ?? '';
-    if ((metadata && keys.length) || (!metadata && !crop && !pole && !preprocessing && !sourcePoint && (keys.length !== 3 || new Set(keys).size !== 3 || keys.some(key => !['purpose', 'budget', 'depth'].includes(key)) ||
+    if ((metadata && keys.length) || (!metadata && !crop && !pole && !preprocessing && !sourcePoint && !displayHierarchy && !displayNode && (keys.length !== 3 || new Set(keys).size !== 3 || keys.some(key => !['purpose', 'budget', 'depth'].includes(key)) ||
       (purpose !== 'display' && purpose !== 'harness') || !/^[1-9]\d{0,5}$/.test(budget) || !/^[0-3]$/.test(depth)))) {
       send(400, { error: 'Expected purpose=display|harness, budget=positive integer, depth=0..3' }); return true;
     }
@@ -88,10 +102,21 @@ export function createDatasetRoutes(directory = DEFAULT_DATASET_ROOT) {
     const abort = () => controller.abort();
     response.once('close', abort);
     // Optional metadata never occupies admission indefinitely or prepares the cloud.
-    const deadline = sourcePoint ? setTimeout(abort, 3000) : undefined;
+    const deadline = sourcePoint || displayHierarchy || displayNode ? setTimeout(abort, sourcePoint ? 3000 : DISPLAY_LIMITS.deadlineMs) : undefined;
     deadline?.unref();
     try {
-      if (pointRequest) {
+      if (displayHierarchy || displayRequest) {
+        const result = displayRequest ? await dataset.displayNode(displayRequest.revision, displayRequest.name, controller.signal) : await dataset.displayHierarchy(controller.signal);
+        controller.signal.throwIfAborted();
+        const binary = displayRequest?.format === 'binary';
+        const body = binary ? encodeAdaptiveBinary(result as Awaited<ReturnType<PotreeDataset['displayNode']>>) : JSON.stringify(result);
+        if ((typeof body === 'string' ? Buffer.byteLength(body) : body.byteLength) > DISPLAY_LIMITS.responseBytes) throw new Error('Native display response exceeds limits');
+        controller.signal.throwIfAborted();
+        response.setHeader('Content-Type', binary ? ADAPTIVE_BINARY_MIME : 'application/json; charset=utf-8');
+        response.setHeader('Cache-Control', 'no-store');
+        response.setHeader('Content-Length', typeof body === 'string' ? Buffer.byteLength(body) : body.byteLength);
+        response.end(body);
+      } else if (pointRequest) {
         response.setHeader('Content-Type', 'application/json; charset=utf-8');
         response.setHeader('Cache-Control', 'no-store');
         send(200, await readSourcePoint(directory, pointRequest, controller.signal));
@@ -115,7 +140,9 @@ export function createDatasetRoutes(directory = DEFAULT_DATASET_ROOT) {
       }
     } catch (error) {
       // Do not reveal filesystem names or malformed prepared-file contents to the client.
-      if (sourcePoint) {
+      if (displayHierarchy || displayNode) {
+        if (!response.destroyed) send(error instanceof RangeError ? 400 : 503, { error: 'Native display unavailable, stale or exceeds limits; retry hierarchy' });
+      } else if (sourcePoint) {
         if (!response.destroyed) send(503, { error: 'Original point type unavailable; retry later' });
       } else if (!controller.signal.aborted) {
         const message = error instanceof RangeError ? 'LOD or selection exceeds input limits (sample display 100000, harness 4096, depth 3)' : 'Prepared Toronto3D unavailable or unsupported; full resolution incomplete (no downsampling)';

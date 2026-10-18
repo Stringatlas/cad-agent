@@ -3,6 +3,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { SCENE_POINT_LIMIT, type CropBox, type CropSelection, type PointObservation, type DatasetInfo, type Vec3, type PointOverrideSnapshot, type PointMoveProposal, type TorontoCadSnapshot } from '@spatial/contracts';
 import { createVisualCapture } from './visual-capture';
 import { updateStableOrbitControls } from './orbit-stability';
+import { createAdaptiveDisplay, type AdaptiveSettings, type AdaptiveStats } from './adaptive-display';
+import { createAdaptiveRender } from './adaptive-render';
 import { createCropLayer } from './crop-render';
 import { createTorontoCadRender } from './toronto-cad-render';
 import { createPreprocessingLayer, type PreprocessingSummary } from './preprocessing-overlays';
@@ -11,7 +13,7 @@ import { projectCropRectangle } from './crop-projection';
 import { createPolePickCache, createDetailPickCache, poleGestureKind, isPoleClick, type PoleSelection } from './pole-picking';
 
 /** Disposable point projection; prepared dataset remains authoritative, not this render cache. */
-export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) => void, onSelect?: (selection: CropSelection) => void, onFailure?: (error: string) => void, onQuery?: (selection: PoleSelection) => void) {
+export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) => void, onSelect?: (selection: CropSelection) => void, onFailure?: (error: string) => void, onQuery?: (selection: PoleSelection) => void, onAdaptiveStatus?: (stats: AdaptiveStats) => void) {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x101927);
   const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 10_000);
@@ -47,12 +49,28 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
   const raycaster = new THREE.Raycaster();
   let pickCache: ReturnType<typeof createPolePickCache> | undefined;
   const detailCaches = new Map<THREE.Object3D, ReturnType<typeof createDetailPickCache>>();
+  const nativeMaterial = new THREE.PointsMaterial({ vertexColors: true, size: 4, sizeAttenuation: false });
+  // Opaque circular splats retain depth testing/writes: no transparency sort or
+  // blending passes, and no square corners around isolated source samples.
+  nativeMaterial.onBeforeCompile = shader => {
+    shader.fragmentShader = shader.fragmentShader.replace('#include <clipping_planes_fragment>',
+      '#include <clipping_planes_fragment>\nif (dot(gl_PointCoord - 0.5, gl_PointCoord - 0.5) > 0.25) discard;');
+  };
+  nativeMaterial.customProgramCacheKey = () => 'opaque-circular-splats-v1';
+  const native = createAdaptiveRender(nativeMaterial, {
+    register: (object, ids) => pointOverrides.register(object, ids),
+    unregister: object => pointOverrides.unregister(object),
+  });
+  scene.add(native.group);
+  let adaptiveStats: AdaptiveStats = { loadedPoints: 0, chunks: 0, pending: 0, budgetLimited: false, error: null };
+  let adaptiveRevision: string | undefined;
+  const frustum = new THREE.Frustum(), projection = new THREE.Matrix4();
   let pickVersion = 0, dataset: DatasetInfo | undefined;
   let overview: { count: number; sampleHash: string; lod: PointObservation['lod']; algorithm: string; candidatePoints: number } | undefined;
   let detailState = 'idle';
   const clearDetail = () => { visual.invalidate(); detailState = 'idle'; pickVersion++; for (const [object, cache] of detailCaches) { pointOverrides.unregister(object as THREE.Points); cache.dispose(); } detailCaches.clear(); cropLayer.clear(); material.transparent = false; material.opacity = 1; };
-  let disposed = false;
-  const visual = createVisualCapture({
+  let disposed = false, renderDirty = true, renderedFrames = 0;
+  const captureSource = createVisualCapture({
     renderer, scene, camera,
     available: () => !disposed && !gpuFailed && !!dataset && !!overview,
     binding: () => {
@@ -60,16 +78,24 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       return { sourceId: dataset.id, sourceRevision: dataset.revision, frameId: 'toronto3d-local-v1', units: dataset.coordinates.units,
         origin: dataset.coordinates.localOrigin, upAxis: dataset.coordinates.upAxis, handedness: dataset.coordinates.handedness };
     },
-    coverage: () => ({ kind: 'sampled-overview-with-partial-dataset-detail', complete: false,
-      displayedPointCount: (overview?.count ?? 0) + cropLayer.count,
+    coverage: () => ({ kind: 'sampled-overview-with-adaptive-and-manual-detail', complete: false,
+      displayedPointCount: (points.visible ? overview?.count ?? 0 : 0) + cropLayer.count + adaptiveStats.loadedPoints,
+      adaptive: adaptive ? { ...adaptiveStats, nodes: native.names, settings: { ...adaptiveSettings } } : null,
       datasetPointCount: dataset?.totalPoints ?? 0,
-      overview: overview ? { displayedPointCount: overview.count, sampleHash: overview.sampleHash, lod: { budget: overview.lod.budget, depth: overview.lod.depth },
+      overview: overview ? { displayedPointCount: points.visible ? overview.count : 0, sampleHash: overview.sampleHash, lod: { budget: overview.lod.budget, depth: overview.lod.depth },
         algorithm: overview.algorithm, candidatePoints: overview.candidatePoints, opacity: material.opacity } : null,
       detail: { displayedPointCount: cropLayer.count, chunkCount: cropLayer.group.children.length, state: detailState },
-      scope: 'Displayed sampled overview and retained detail only; never whole-dataset evidence' }),
-    points: () => [points, ...cropLayer.group.children],
+      observation: 'capture-time-rendered-scene-not-current-geometry',
+      layers: { cadSolidsOrGhosts: cad.captureBlocked, pointEditsOrPreview: pointOverrides.captureBlocked, derivedOverlays: preprocessing.count },
+      pointProvenance: pointOverrides.captureBlocked ? 'unavailable-for-edited-imagery' : 'original-source-records-only',
+      pointCountScope: 'overview-adaptive-manual-detail-only-excludes-edit-preview-and-fallback-markers',
+      scope: 'Displayed scene including CAD solids, pending ghosts, point edits and overlays when present; not whole-dataset or authoritative geometry evidence' }),
+    points: () => [...(points.visible ? [points] : []), ...native.objects, ...cropLayer.group.children],
     resolve: (object, index) => {
-      const original = (object === points ? pickCache : detailCaches.get(object))?.resolve(index);
+      // Original pick caches do not describe effective/preview positions. Keep image
+      // capture usable but do not falsely ground edited imagery to original coordinates.
+      if (pointOverrides.captureBlocked) return;
+      const original = object === points ? pickCache?.resolve(index) : detailCaches.get(object)?.resolve(index) ?? native.resolve(object, index);
       if (!original || !dataset || original.artifactRevision !== dataset.revision) return;
       return { datasetId: original.datasetId, artifactRevision: original.artifactRevision,
         key: { sourceFileId: original.key.sourceFileId, sourceRow: original.key.sourceRow }, position: original.position,
@@ -77,6 +103,25 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
         layer: object === points ? 'overview' : 'detail' };
     },
   });
+  const visual = { ...captureSource, invalidate() { renderDirty = true; captureSource.invalidate(); } };
+  let adaptiveSettings: Partial<AdaptiveSettings> = {};
+  let adaptive: ReturnType<typeof createAdaptiveDisplay> | undefined;
+  const makeAdaptive = onAdaptiveStatus ? () => createAdaptiveDisplay({
+    add(payload) {
+      if (disposed || gpuFailed || payload.dataset.revision !== dataset?.revision) throw new Error('Scene unavailable; reload display.');
+      native.add(payload);
+      points.visible = false; pickVersion++; visual.invalidate();
+    },
+    remove(name) {
+      native.remove(name);
+      points.visible = native.count === 0; pickVersion++; visual.invalidate();
+    },
+    removeMany(names) {
+      native.remove(names);
+      points.visible = native.count === 0; pickVersion++; visual.invalidate();
+    },
+    status(stats) { adaptiveStats = stats; onAdaptiveStatus(stats); },
+  }) : undefined;
   const controlsChanged = () => visual.invalidate();
   controls.addEventListener('change', controlsChanged);
   const queryMarkers = new THREE.Group(); scene.add(queryMarkers);
@@ -153,9 +198,9 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       raycaster.params.Points.threshold = camera.position.distanceTo(controls.target) * 2 * Math.tan(camera.fov * Math.PI / 360) / Math.max(rect.height, 1) * 6;
       raycaster.setFromCamera(new THREE.Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1), camera);
       // Detail is the active picking layer; overview is context/fallback only.
-      const hit = raycaster.intersectObjects([...detailCaches.keys()])[0] ?? raycaster.intersectObject(pointOverrides.fallback)[0] ?? raycaster.intersectObject(points)[0];
-      const cache = hit?.object === points ? start.cache : detailCaches.get(hit?.object);
-      const resolved = hit?.index === undefined ? undefined : hit.object === pointOverrides.fallback ? pointOverrides.resolveFallback(hit.index) : cache?.resolve(hit.index);
+      const hit = raycaster.intersectObjects([...detailCaches.keys(), ...native.objects])[0] ?? raycaster.intersectObject(pointOverrides.fallback)[0] ?? (points.visible ? raycaster.intersectObject(points)[0] : undefined);
+      const resolved = hit?.index === undefined ? undefined : hit.object === pointOverrides.fallback ? pointOverrides.resolveFallback(hit.index) :
+        hit.object === points ? start.cache?.resolve(hit.index) : detailCaches.get(hit.object)?.resolve(hit.index) ?? native.resolve(hit.object, hit.index);
       if (resolved) onQuery?.(resolved);
       return;
     }
@@ -167,10 +212,10 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
     if (Math.hypot(dx, dy) > 4) return;
     raycaster.params.Points.threshold = camera.position.distanceTo(controls.target) * 2 * Math.tan(camera.fov * Math.PI / 360) / Math.max(rect.height, 1) * 6;
     raycaster.setFromCamera(new THREE.Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1), camera);
-    const hit = raycaster.intersectObjects([...cropLayer.group.children, pointOverrides.fallback, points])[0];
+    const hit = raycaster.intersectObjects([...cropLayer.group.children, ...native.objects, pointOverrides.fallback, ...(points.visible ? [points] : [])])[0];
     if (hit && hit.index !== undefined) {
       const original = hit.object === pointOverrides.fallback ? pointOverrides.resolveFallback(hit.index) :
-        (hit.object === points ? pickCache : detailCaches.get(hit.object))?.resolve(hit.index);
+        (hit.object === points ? pickCache?.resolve(hit.index) : detailCaches.get(hit.object)?.resolve(hit.index) ?? native.resolve(hit.object, hit.index));
       if (original) onPick?.(original.position);
     }
   };
@@ -208,16 +253,29 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
   const smoke = new URLSearchParams(location.search).has('smoke');
   function animate() {
     frame = requestAnimationFrame(animate);
-    if (!pointerStart) updateStableOrbitControls(camera, controls);
-    if (!gpuFailed) {
+    if (!pointerStart && updateStableOrbitControls(camera, controls)) renderDirty = true;
+    if (!gpuFailed && renderDirty) {
+      renderDirty = false;
       try {
-        renderer.render(scene, camera);
+        if (adaptive && dataset && host.clientHeight > 0) {
+          camera.updateMatrixWorld();
+          frustum.setFromProjectionMatrix(projection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+          adaptive.update({ position: camera.position.toArray() as [number, number, number],
+            planes: frustum.planes.map(p => [p.normal.x, p.normal.y, p.normal.z, p.constant] as const),
+            viewportHeight: host.clientHeight, fovDegrees: camera.fov });
+        }
+        renderer.render(scene, camera); renderedFrames++;
         const gl = renderer.getContext(), error = gl.getError();
         if (error !== gl.NO_ERROR) failGpu(`GPU rendering failed (${error === gl.OUT_OF_MEMORY ? 'out of memory' : error}); full resolution incomplete. Clear detail and reload the scene; no downsampling.`);
       } catch (error) { failGpu(`Rendering/resource failure: ${String(error)}. Full resolution incomplete; reload the scene.`); }
     }
     host.dataset.ready = String(!gpuFailed);
     host.dataset.points = String(renderer.info.render.points);
+    host.dataset.adaptivePoints = String(adaptiveStats.loadedPoints);
+    host.dataset.adaptiveChunks = String(adaptiveStats.chunks);
+    host.dataset.adaptivePending = String(adaptiveStats.pending);
+    host.dataset.adaptiveLimited = String(adaptiveStats.budgetLimited);
+    host.dataset.adaptiveError = adaptiveStats.error ?? '';
     host.dataset.cropPoints = String(cropLayer.count);
     host.dataset.cropChunks = String(cropLayer.group.children.length);
     host.dataset.boxVisible = String(selection.visible);
@@ -225,7 +283,17 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
     host.dataset.cadGhosts = String(cad.group.children.filter(m => m.userData.pending).length);
     if (smoke) {
       host.dataset.draftMarkers = JSON.stringify([...draftMarkers].map(([name, marker]) => ({ name, position: marker.sprite.position.toArray() })));
-      const detail = detailCaches.keys().next().value as THREE.Points | undefined;
+      host.dataset.adaptiveNodes = JSON.stringify(native.names);
+      host.dataset.drawCalls = String(renderer.info.render.calls);
+      host.dataset.renderedFrames = String(renderedFrames);
+      host.dataset.nativeBatches = String(native.chunks);
+      host.dataset.gpuGeometries = String(renderer.info.memory.geometries);
+      const detail = [...detailCaches.keys(), ...native.objects].find(object => {
+        const positions = (object as THREE.Points).geometry.getAttribute('position');
+        if (!positions?.count) return false;
+        const p = new THREE.Vector3().fromBufferAttribute(positions, 0).project(camera);
+        return Math.abs(p.x) < .8 && Math.abs(p.y) < .8 && Math.abs(p.z) < 1;
+      }) as THREE.Points | undefined;
       const detailPositions = detail?.geometry.getAttribute('position');
       if (detailPositions?.count) {
         const point = new THREE.Vector3().fromBufferAttribute(detailPositions, 0).project(camera);
@@ -243,14 +311,32 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
   }
   animate();
   return {
+    startAdaptive() {
+      if (disposed || !dataset || !makeAdaptive) return;
+      if (!adaptive) { adaptive = makeAdaptive(); adaptive.configure(adaptiveSettings); }
+      if (adaptiveRevision !== dataset.revision) {
+        adaptiveRevision = dataset.revision; adaptive.bind(dataset);
+      }
+      visual.invalidate();
+    },
+    stopAdaptive() {
+      adaptive?.dispose(); adaptive = undefined; adaptiveRevision = undefined;
+      adaptiveStats = { loadedPoints: 0, chunks: 0, pending: 0, budgetLimited: false, error: null };
+      onAdaptiveStatus?.(adaptiveStats); visual.invalidate();
+    },
+    configureAdaptive(settings: Partial<AdaptiveSettings>) {
+      adaptive?.configure(settings); adaptiveSettings = { ...adaptiveSettings, ...settings }; visual.invalidate();
+    },
+    retryAdaptive() { adaptive?.retry(); },
+    setPointSize(size: number) {
+      if (!Number.isFinite(size) || size < 2 || size > 6) throw new RangeError('Point size must be 2–6 pixels');
+      nativeMaterial.size = size; visual.invalidate();
+    },
     setPreprocessing(summary?: PreprocessingSummary) {
       if (disposed) return;
       visual.invalidate(); preprocessing.set(summary);
     },
     capture: () => {
-      if (preprocessing.count) throw new Error('Hide derived instance bounds before source-grounded screenshot capture; these overlays are not CAD solids.');
-      if (cad.captureBlocked) throw new Error('Scene capture unavailable while Toronto CAD solids or ghosts are displayed: source-only image provenance cannot describe CAD imagery.');
-      if (pointOverrides.captureBlocked) throw new Error('Scene screenshot capture is unavailable while point overrides or a move preview are active. Undo all point edits and clear the preview before capturing source-grounded imagery.');
       // Finish residual damping before freezing the view; it otherwise moves after the click.
       const damping = controls.enableDamping;
       controls.enableDamping = false; controls.update(); controls.enableDamping = damping;
@@ -298,6 +384,9 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       previous.dispose();
       if (dataset && dataset.revision !== sample.dataset.revision) clearDetail();
       dataset = sample.dataset; pickVersion++;
+      if (adaptive && adaptiveRevision && adaptiveRevision !== dataset.revision) {
+        adaptiveRevision = dataset.revision; adaptive.bind(dataset);
+      }
       pointOverrides.setArtifactRevision(dataset.revision);
       pointOverrides.register(points, sample.sourceIds);
       overview = { count: sample.count, sampleHash: sample.sampleHash, lod: { ...sample.lod }, algorithm: sample.algorithm, candidatePoints: sample.candidatePoints };
@@ -369,6 +458,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
     viewCenter(): Vec3 { return controls.target.toArray() as [number, number, number]; },
     frameDataset,
     dispose() {
+      adaptive?.dispose(); native.dispose(); scene.remove(native.group); nativeMaterial.dispose();
       visual.dispose();
       controls.removeEventListener('change', controlsChanged);
       disposed = true; clearDetail(); pickCache?.dispose(); pickCache = undefined; finishGesture();

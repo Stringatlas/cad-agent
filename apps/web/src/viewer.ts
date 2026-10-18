@@ -51,7 +51,9 @@ export function createViewer(host: HTMLElement, initial: ProjectState, onSelect:
       frameId: binding?.frameId ?? 'synthetic-local', units: 'm', origin: state.coordinates.localOrigin }),
     coverage: () => ({ kind: 'synthetic-project-display', complete: true,
       displayedPointCount: state.entities.reduce((n, entity) => n + (entity.kind === 'point-cloud' ? entity.points.length : 0), 0),
-      wholeDatasetCoverage: false, geometry: 'mesh-proposal-not-CAD', overlays: overlays.children.length }),
+      wholeDatasetCoverage: false, geometry: 'mesh-proposal-not-CAD', overlays: overlays.children.length,
+      observation: 'capture-time-rendered-scene-not-current-geometry',
+      pendingGhosts: overlays.children.some(object => object.userData.preview) }),
     points: () => objects,
     resolve: (object, index) => {
       const id = resolvePickedEntityId(state, object), entity = state.entities.find(entity => entity.id === id);
@@ -146,7 +148,6 @@ export function createViewer(host: HTMLElement, initial: ProjectState, onSelect:
       const damping = controls.enableDamping;
       controls.enableDamping = false; controls.update(); controls.enableDamping = damping;
       // Never ground pending ghost pixels as committed/project geometry.
-      if (overlays.children.some(object => object.userData.preview)) throw new Error('Screenshot capture unavailable while uncommitted box ghosts are visible. Accept or decline each preview first.');
       return visual.capture();
     },
     isCaptureCurrent: (id: string) => visual.isCurrent(id),

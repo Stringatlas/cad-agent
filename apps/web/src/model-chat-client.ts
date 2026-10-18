@@ -10,6 +10,7 @@ export const MODEL_CLIENT_LIMITS = Object.freeze({ catalogBytes: 1024 * 1024, st
   maxTurns: MODEL_CHAT_LIMITS.turns, maxTools: MODEL_CHAT_LIMITS.toolCalls, historyBytes: MODEL_CHAT_LIMITS.historyBytes });
 export interface VisualModelAttachment {
   readonly observation: ModelVisualObservation;
+  /** Pixel grounding availability only; historical image input remains usable when false. */
   isCurrent(): boolean;
   resolvePixel(id: string, x: number, y: number): VisualPixelResolution;
 }
@@ -57,7 +58,7 @@ export function validateModelEvent(value: unknown, request: ModelTurnRequest): M
   if (r.kind === 'delta' && (typeof r.text !== 'string' || !r.text.length || r.text.length > MODEL_CLIENT_LIMITS.outputChars)) throw new Error('Invalid text delta');
   if (r.kind === 'tool') {
     if (r.name !== 'inspect_scene' && !(r.name === 'resolve_visual_pixel' && request.visualObservation) &&
-      !(r.name === 'nearest_label' && request.scene.mode === 'toronto' && request.scene.toronto.length > 0) &&
+      !(['nearest_label', 'assess_utility_box', 'propose_utility_box'].includes(String(r.name)) && request.scene.mode === 'toronto' && request.scene.toronto.length > 0) &&
       !(['propose_point_move', 'propose_point_move_to_nearest_label', 'propose_cad_box', 'propose_cad_cylinder'].includes(String(r.name)) && request.scene.mode === 'toronto' && (!String(r.name).startsWith('propose_point_move') || request.scene.toronto.length > 0)) &&
       !((r.name === 'propose_box_create' || r.name === 'propose_box_update') && request.scene.mode === 'demo' && request.scene.project)) throw new Error('Unsupported tool');
     canonicalProtocolJson(r.context, { maxDepth: 12, maxNodes: 4096, maxArrayLength: 256, maxStringLength: 12000 });
@@ -124,7 +125,6 @@ export async function streamModelTurn(request: ModelTurnRequest, signal: AbortSi
     request.conversationId !== null : attachment !== undefined) throw new Error('Invalid visual attachment');
   const guard = () => {
     signal.throwIfAborted();
-    if (attachment && !attachment.isCurrent()) throw new Error('Stale visual attachment');
   };
   guard();
   token(request.requestId); token(request.generation); modelId(request.model);
@@ -153,7 +153,14 @@ export async function streamModelTurn(request: ModelTurnRequest, signal: AbortSi
       toolIds.add(event.toolCallId); nonces.add(event.nonce);
       guard();
       const source = modelVisualSourcePixel(observation, event.x, event.y);
-      const result = attachment.resolvePixel(event.observationId, source.x, source.y);
+      let result: VisualPixelResolution;
+      // Never intersect current geometry using a historical camera. Missing live grounding
+      // is an ordinary tool observation, not a reason to discard the image or answer.
+      if (!attachment.isCurrent()) result = { status: 'unavailable', observationId: event.observationId, ...source, reason: 'Capture-time pixel grounding is no longer available' };
+      else {
+        result = attachment.resolvePixel(event.observationId, source.x, source.y);
+        if (result.status === 'stale') result = { ...result, status: 'unavailable' };
+      }
       guard();
       // Validate the adapter's SOURCE identity before translating only coordinates back to the sent image.
       canonicalModelVisualToolResult({ requestId: request.requestId, toolCallId: event.toolCallId,
@@ -361,7 +368,6 @@ export class ModelChatController {
       this.set({ code: 'history-limit-new-chat-required' }); return false;
     }
     if (attachment) {
-      try { if (!attachment.isCurrent()) return false; } catch { return false; }
       this.conversationId = null;
     }
     this.invalidate(); const currentGeneration = this.generation, controller = this.active = new AbortController();
@@ -386,15 +392,15 @@ export class ModelChatController {
         this.set({ messages: [...next], code: event.kind === 'tool' ? 'inspecting-bound-scene' : 'receiving-model-response' });
         if (event.kind === 'tool' && request.scene.mode === 'toronto') {
           if (event.name === 'propose_point_move' || (event.name === 'propose_point_move_to_nearest_label' && protocolRecord(event.context).status === 'pending')) torontoAuthorities.add('points');
-          if (event.name === 'propose_cad_box' || event.name === 'propose_cad_cylinder') torontoAuthorities.add('cad');
+          if (event.name === 'propose_cad_box' || event.name === 'propose_cad_cylinder' || event.name === 'propose_utility_box') torontoAuthorities.add('cad');
         }
         if (event.kind === 'tool' && (event.name === 'propose_box_create' || event.name === 'propose_box_update') && request.scene.mode === 'demo') {
           const context = protocolRecord(event.context);
           protocolKeys(context, ['kind', 'proposal']);
           if (context.kind !== 'project-box-proposal' || protocolRecord(protocolRecord(context.proposal).edit).kind !==
             (event.name === 'propose_box_create' ? 'create-box' : 'update-box')) throw new ModelTurnFailure('invalid-or-unavailable-stream');
-          // Ghost overlays stale a captured view. For image turns admit only after clean EOF,
-          // not halfway through the pixel-grounding protocol that still needs that view.
+          // Retain existing post-EOF proposal admission for image turns; approval and
+          // authority binding are independent of capture-time image observations.
           if (attachment) proposalsAfterImage.push(context.proposal);
           else this.proposalEvents.onproposal?.(context.proposal, () => current() && !controller.signal.aborted);
         }

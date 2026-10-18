@@ -46,7 +46,7 @@ test('fits and supported observed ground tiles render and dispose alongside boun
   const scene = new THREE.Scene(), layer = createPreprocessingLayer(scene);
   const observed: PreprocessingSummary = { ...summary, overlays: [{ ...summary.overlays[0], fit: {
     kind: 'vertical-cylinder', status: 'fitted', center: [1.5, 2.5, 122], dimensions: [1, 1, 4], radius: .5, yawRadians: 0,
-    evaluatedPoints: 20, toleranceMeters: .2, rmseMeters: .1, coverage: .9, qualityScore: .5,
+    evaluatedPoints: 20, toleranceMeters: .2, rmseMeters: .1, coverage: .9, qualityScore: .9 * Math.exp(-.1 / .2),
     qualityMeaning: 'coverage-times-exp-negative-normalized-rmse; heuristic-not-CAD-validity' } }],
     ground: { cellMeters: 2, origin: [0, 0], minimumSupport: 3, method: 'observed-cell-minimum-v1',
       cells: [{ x: 0, y: 0, elevation: 120, maxElevation: 121, points: 3 }] } };
@@ -62,6 +62,36 @@ test('fits and supported observed ground tiles render and dispose alongside boun
   assert.throws(() => validatePreprocessing({ ...observed, ground: { ...observed.ground, cells: [{ ...observed.ground!.cells[0], points: 2 }] } }, revision));
   assert.throws(() => validatePreprocessing({ ...observed, overlays: [{ ...observed.overlays[0], fit: { ...observed.overlays[0].fit, radius: -1 } }] }, revision));
   layer.dispose(); assert.equal(scene.children.length, 0);
+});
+test('browser fit schema rejects null/malformed metrics and mismatched class, evaluation or dimensions', () => {
+  const fit = {
+    kind: 'vertical-cylinder' as const, status: 'fitted' as const, center: [1.5, 2.5, 122], dimensions: [1, 1, 4], radius: .5, yawRadians: 0,
+    evaluatedPoints: 20, toleranceMeters: .2, rmseMeters: .1, coverage: .9, qualityScore: .9 * Math.exp(-.1 / .2),
+    qualityMeaning: 'coverage-times-exp-negative-normalized-rmse; heuristic-not-CAD-validity',
+  };
+  const withFit = (value: unknown, label = 6) => ({ ...summary, overlays: [{ ...summary.overlays[0], label, fit: value }] });
+  for (const invalid of [
+    null,
+    ...['rmseMeters', 'coverage', 'qualityScore'].flatMap(key => [
+      { ...fit, [key]: null }, { ...fit, [key]: undefined }, { ...fit, [key]: '0.5' }, { ...fit, [key]: NaN },
+    ]),
+    { ...fit, rmseMeters: -1 }, { ...fit, coverage: 2 }, { ...fit, qualityScore: -1 },
+    { ...fit, toleranceMeters: 0 }, { ...fit, evaluatedPoints: 19 }, { ...fit, evaluatedPoints: 21 },
+    { ...fit, qualityScore: fit.qualityScore + 1e-6 }, { ...fit, radius: 0 },
+    { ...fit, dimensions: [1.1, 1, 4] }, { ...fit, dimensions: [1, 1.1, 4] },
+    { ...fit, kind: 'pca-xy-box' },
+  ]) assert.throws(() => validatePreprocessing(withFit(invalid), revision), /Invalid observed fit/);
+  for (const label of [4, 7]) assert.throws(() => validatePreprocessing(withFit(fit, label), revision), /Invalid observed fit/);
+  for (const accepted of [
+    fit,
+    { ...fit, rmseMeters: 100, coverage: 0, qualityScore: 0 },
+    { ...fit, qualityScore: fit.qualityScore + 5e-10, dimensions: [1 + 5e-10, 1, 4] },
+    ...['insufficient', 'degenerate'].map(status => ({ ...fit, status, evaluatedPoints: 0,
+      radius: 0, dimensions: [0, 0, 0], rmseMeters: null, coverage: null, qualityScore: null })),
+  ]) assert.doesNotThrow(() => validatePreprocessing(withFit(accepted), revision));
+  for (const [label, kind] of [[4, 'footprint-height-extrusion'], [7, 'pca-xy-box']] as const) {
+    assert.doesNotThrow(() => validatePreprocessing(withFit({ ...fit, kind }, label), revision));
+  }
 });
 test('summary client rejects HTTP and oversized responses instead of inventing overlays', async () => {
   const original = globalThis.fetch;

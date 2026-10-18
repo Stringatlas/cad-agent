@@ -2,6 +2,8 @@
   import { onMount, tick, untrack } from 'svelte';
   import { MODEL_VISUAL_LIMITS, modelVisualImageSize, type ModelScene, type ModelVisualObservation, type VisualObservation } from '@spatial/contracts';
   import ScreenshotCrop from './ScreenshotCrop.svelte';
+  import { placementWitnesses } from './utility-box-evidence';
+  import { semanticName } from './point-presentation';
   import SafeMarkdown from './SafeMarkdown.svelte';
   import { ModelChatController, MODEL_CLIENT_LIMITS, modelFailureDescription, type ModelChatView, type VisualModelAttachment } from './model-chat-client';
   import type { VisualModelSource } from './visual-model-source';
@@ -23,7 +25,7 @@
       return validatePoleResult(c.outcome, request).status === 'verified-found';
     } catch { return false; }
   }
-  let attachment = $state<VisualModelAttachment>(), captureBusy = $state(false), captureError = $state(''), captureStale = $state(false);
+  let attachment = $state<VisualModelAttachment>(), captureBusy = $state(false), captureError = $state('');
   let captureTicket = 0, alive = true;
   let cameraButton: HTMLButtonElement;
   async function restoreCameraFocus() {
@@ -34,24 +36,25 @@
   let cropCurrent: () => boolean = () => false;
   let cropAttach: (image: ModelVisualObservation) => void = () => {};
   function removeAttachment() {
-    captureTicket++; captureBusy = false; attachment = undefined; captureStale = false; captureError = '';
+    captureTicket++; captureBusy = false; attachment = undefined; captureError = '';
     cropOpen = false; cropObservation = undefined; cropCurrent = () => false; cropAttach = () => {};
   }
   async function attachScreenshot() {
-    const source = visualSource, binding = JSON.stringify(scene), model = view.model, generation = view.catalog?.generation;
+    const source = visualSource, mode = scene.mode;
     if (!source || !catalogModelSelected) return;
     removeAttachment(); const ticket = ++captureTicket; captureBusy = true; cropOpen = true;
-    const current = () => alive && ticket === captureTicket && source === visualSource && binding === JSON.stringify(scene) && model === view.model && generation === view.catalog?.generation;
+    // The bytes describe the captured instant, not the current camera or authority.
+    const current = () => alive && ticket === captureTicket && mode === scene.mode;
     try {
       const observation = await source.capture();
       if (!alive || ticket !== captureTicket) return;
-      if (!current() || !source.isCurrent(observation.observationId)) throw new Error('View or context changed during capture. Cancel and capture again.');
+      if (!current()) return;
       if (observation.image.byteLength > MODEL_VISUAL_LIMITS.sourcePngBytes) throw new Error('Source screenshot exceeds the 12 MiB capture limit.');
       const observationId = observation.observationId;
-      cropCurrent = () => current() && source.isCurrent(observationId);
+      cropCurrent = current;
       cropAttach = image => {
-        if (!cropCurrent()) { captureError = 'Screenshot is stale. Cancel and capture again.'; return; }
-        attachment = { observation: image, isCurrent: cropCurrent, resolvePixel: (id, x, y) => source.resolvePixel(id, x, y) };
+        if (!cropCurrent()) return;
+        attachment = { observation: image, isCurrent: () => source.isCurrent(observationId), resolvePixel: (id, x, y) => source.resolvePixel(id, x, y) };
         cropOpen = false; cropObservation = undefined;
       };
       cropObservation = observation;
@@ -60,27 +63,27 @@
   }
   async function send() {
     if (!canSend) return;
-    const current = attachment;
-    const sent = await controller.send(draft, current);
-    if (sent && attachment === current) removeAttachment();
+    const current = attachment, submitted = draft, revision = draftRevision;
+    const sent = await controller.send(submitted, current);
+    if (sent && view.phase === 'completed') {
+      // A newer edit (even back to the same text) belongs to the next message.
+      if (draftRevision === revision) draft = '';
+      if (attachment === current) removeAttachment();
+    }
   }
   let draft = $state('');
+  let draftRevision = 0;
   let view = $state<ModelChatView>({ catalogPhase: 'idle', model: '', phase: 'idle', code: 'refresh-models', messages: [] });
   const catalogModelSelected = $derived(view.catalogPhase === 'ready' && view.catalog?.ready && !!view.catalog.models.some(model => model.id === view.model));
   const controller = new ModelChatController(value => { view = value; onstreamingchange(value.phase === 'streaming'); }, undefined, undefined, undefined,
     { onproposal: (proposal, current) => onproposal(proposal, current), oninvalidate: () => oninvalidateproposals(), onauthorityproposal: kind => onauthorityproposal(kind) });
   $effect(() => controller.bind(scene));
-  // A replacement scene/source invalidates even a capture still waiting for pixels.
-  const sceneKey = $derived(JSON.stringify(scene));
-  $effect(() => { sceneKey; visualSource; untrack(() => { removeAttachment(); oninvalidateproposals(); if (view.phase === 'streaming') controller.cancel(); }); });
-  const canSend = $derived(!proposalsBlocked && view.catalogPhase === 'ready' && view.catalog?.ready && !!view.model && view.phase !== 'streaming' && !!draft.trim() && !captureBusy && !cropOpen && (!attachment || !captureStale));
+  // Mode switches clear local image input. Geometry/view changes do not rewrite past pixels.
+  // controller.bind independently owns current scene/tool binding and response invalidation.
+  const captureMode = $derived(scene.mode);
+  $effect(() => { captureMode; untrack(() => removeAttachment()); });
+  const canSend = $derived(!proposalsBlocked && view.catalogPhase === 'ready' && view.catalog?.ready && !!view.model && view.phase !== 'streaming' && !!draft.trim() && !captureBusy && !cropOpen);
   onMount(() => {
-    const timer = setInterval(() => {
-      if (attachment && !captureStale && !attachment.isCurrent()) {
-        captureStale = true;
-        if (view.phase === 'streaming') controller.cancel();
-      }
-    }, 250);
     // Discovery is read-only. Focus alone never erases a conversation or retries inference.
     const revalidate = () => { void controller.refreshModels(); };
     const changed = () => { removeAttachment(); controller.accountChanged(); revalidate(); };
@@ -90,7 +93,7 @@
     document.addEventListener('visibilitychange', visibility);
     revalidate();
     return () => {
-      alive = false; captureTicket++; clearInterval(timer);
+      alive = false; captureTicket++;
       window.removeEventListener('spatial-provider-change', changed);
       window.removeEventListener('focus', revalidate);
       document.removeEventListener('visibilitychange', visibility);
@@ -128,8 +131,8 @@
     <pre data-testid="model-scene-context">{JSON.stringify(scene, null, 2)}</pre>
     <p class="continuation" data-testid="model-continuation">{view.continuationActive ? 'Active server continuation · retained server history can be replayed on the next send.' : 'No active server continuation · retained messages are display-only; the next send starts a new server conversation.'}</p>
   </details>
+  <details class="boundary"><summary>Changes require your approval</summary><p>{scene.mode === 'toronto' ? 'Chat can propose point translations and real kernel solids in Toronto local meters. Accept or Decline each retained change; only human Accept publishes. State is volatile.' : 'Chat can propose synthetic box changes, never approve them. Review each ghost; parameter checks are not CAD verification.'}</p></details>
   </details>
-  {#if view.historyNotice}<p class="history-notice" role="status" data-testid="model-history-notice">{view.historyNotice}</p>{/if}
   {#if view.messages.length}
     <div class="history" aria-live="polite" data-testid="model-history">
       {#each view.messages as message, index (index)}
@@ -159,8 +162,13 @@
             </details>
           {/if}
           {#each message.tools as context}
-            <details class="tool-context"><summary>Scene tool · actual context / evidence (not approval)</summary><pre data-testid="model-tool-context">{JSON.stringify(context, null, 2)}</pre></details>
-            {#if selectableNearest(context)}<button type="button" data-testid="model-select-nearest" onclick={() => onverifiedresult(context)}>Select verified result</button><p>Original prepared-dataset search only. Select attaches the original winner with complete query evidence; it does not move geometry.</p>{/if}
+            <details class="tool-context"><summary>Scene tool · actual context / evidence (not approval)</summary>
+              {#each placementWitnesses(context, points) as evidence}
+                <button type="button" data-testid="model-select-placement-witness" onclick={() => onverifiedresult(evidence)}>Show {evidence.volume === 'body' ? 'box' : 'access'} conflict · {semanticName(evidence.witness.label)}</button>
+              {/each}
+              <pre data-testid="model-tool-context">{JSON.stringify(context, null, 2)}</pre>
+            </details>
+            {#if selectableNearest(context)}<button type="button" data-testid="model-select-nearest" onclick={() => onverifiedresult(context)}>Select verified result</button>{/if}
           {/each}
           {#if message.state === 'incomplete'}
             {@const failure = modelFailureDescription(message.failureCode)}
@@ -183,13 +191,13 @@
       {@const size = modelVisualImageSize(attachment.observation)}
       <div class="screenshot-attachment" aria-label="Attached scene screenshot">
         <img data-testid="model-image-preview" src={attachment.observation.image.dataUrl} alt="Scene crop attached to the next send" />
-        <span data-testid="model-image-status" role="status">{captureStale ? 'Stale screenshot — recapture or remove.' : `${size.width} × ${size.height} JPEG · ${Math.ceil(attachment.observation.image.byteLength / 1024)} KB`}</span>
+        <span data-testid="model-image-status" role="status">{size.width} × {size.height} JPEG · {Math.ceil(attachment.observation.image.byteLength / 1024)} KB</span>
         <button type="button" title="Remove screenshot" aria-label="Remove screenshot" data-testid="model-remove-screenshot" disabled={view.phase === 'streaming'} onclick={removeAttachment}>×</button>
       </div>
     {/if}
     {#if captureError && !cropOpen}<p role="alert" data-testid="model-image-error">{captureError}</p>{/if}
     <label class="draft-label" for="local-draft">Message</label>
-    <textarea id="local-draft" data-testid="local-draft" bind:value={draft} rows="2" maxlength={MODEL_CLIENT_LIMITS.textChars} placeholder="Ask about the scene…" onkeydown={event => {
+    <textarea id="local-draft" data-testid="local-draft" bind:value={draft} rows="2" maxlength={MODEL_CLIENT_LIMITS.textChars} placeholder="Ask about the scene…" oninput={() => draftRevision++} onkeydown={event => {
       if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
         if (!event.repeat) void send();
@@ -204,11 +212,9 @@
     </div>
   </form>
   <div class="progress" role="status" data-testid="local-draft-status" data-state={view.phase}>
-    {#if view.phase !== 'idle' || view.code === 'history-limit-new-chat-required'}<p>{view.code}</p>{/if}
-    {#if view.phase === 'streaming'}<p>Streaming model text · proposals are previews only. Accept/Decline waits for the stream to end.</p>{/if}
-    {#if view.phase === 'error' || view.phase === 'cancelled'}<p>No automatic retry. Partial text is incomplete; no geometry was changed by this chat.</p>{/if}
+    {#if view.phase === 'streaming'}<p>Responding…</p>{/if}
+    {#if view.code === 'history-limit-new-chat-required'}<p>Conversation limit reached. Start a new chat to continue.</p>{/if}
   </div>
-  <details class="boundary"><summary>Changes require your approval</summary><p>{scene.mode === 'toronto' ? 'Chat can propose point translations and real kernel solids in Toronto local meters. Accept or Decline each retained change; only human Accept publishes. State is volatile.' : 'Chat can propose synthetic box changes, never approve them. Review each ghost; parameter checks are not CAD verification.'}</p></details>
   {#if proposalsBlocked && view.phase !== 'streaming'}<p role="status">Sending is blocked while an authority request is pending or Refresh is required. Refresh the active point/CAD authority before proposing more changes.</p>{/if}
 </section>
 {#if cropOpen}<ScreenshotCrop observation={cropObservation} loading={captureBusy} error={captureError} isCurrent={() => cropCurrent()} onattach={image => { cropAttach(image); void restoreCameraFocus(); }} oncancel={() => { removeAttachment(); void restoreCameraFocus(); }} />{/if}
@@ -230,7 +236,6 @@
   .bound-scene { font-size: 10px; color: #9999a4; margin: 8px 0; }
   summary { cursor: pointer; overflow-wrap: anywhere; }
   pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; font-size: 10px; }
-  .history-notice { border-left: 2px solid #c9af74; padding: 6px 9px; color: #dbc898; background: #29271f; }
   .history { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; margin: 16px 0 0; }
   article { box-sizing: border-box; min-width: 0; max-width: 94%; padding: 12px; border-radius: 14px 14px 14px 4px; background: #28292e; border: 1px solid #ffffff0b; }
   article.assistant { align-self: flex-start; }

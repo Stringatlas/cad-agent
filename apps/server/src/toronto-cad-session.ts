@@ -13,6 +13,8 @@ export class TorontoCadSession {
   private readonly kernel = new CadWorkerClient({ sessionId: this.sessionId, projectRevision: 0, frameId: 'toronto3d-local-v1' });
   private bodies = new Map<string, TorontoCadBody>();
   private proposals = new Map<string, TorontoCadProposal>();
+  /** Trusted retained application preconditions; never supplied through HTTP/model arguments. */
+  private approvalChecks = new Map<string, (signal?: AbortSignal) => Promise<void>>();
   private history: { transactionId: string; bodyId: string }[] = [];
   private active = false;
   private closed = false;
@@ -52,7 +54,7 @@ export class TorontoCadSession {
   private async discard(proposals: Iterable<TorontoCadProposal>, signal?: AbortSignal) {
     for (const proposal of proposals) await this.kernel.execute({ kind: 'delete', body: proposal.validation.body }, signal);
   }
-  async execute(operation: 'snapshot' | 'propose' | 'approve' | 'decline' | 'undo', value?: unknown, signal?: AbortSignal): Promise<TorontoCadSnapshot | TorontoCadProposal> {
+  async execute(operation: 'snapshot' | 'propose' | 'approve' | 'decline' | 'undo', value?: unknown, signal?: AbortSignal, approvalCheck?: (signal?: AbortSignal) => Promise<void>): Promise<TorontoCadSnapshot | TorontoCadProposal> {
     if (this.active) throw new TorontoCadError('busy');
     this.ready(signal); this.active = true;
     let candidate: CadBodyResult | undefined;
@@ -72,7 +74,9 @@ export class TorontoCadSession {
         const mesh = await this.kernel.execute({ kind: 'tessellate', body: candidate.body }, signal) as TorontoCadMesh;
         await this.artifact.check(signal); this.ready(signal);
         const proposal: TorontoCadProposal = { ...this.binding(), proposalId: randomUUID(), bodyId: candidate.body.bodyId, operation: primitive, validation: candidate, mesh };
-        this.proposals.set(proposal.proposalId, copy(proposal)); candidate = undefined;
+        this.proposals.set(proposal.proposalId, copy(proposal));
+        if (approvalCheck) this.approvalChecks.set(proposal.proposalId, approvalCheck);
+        candidate = undefined;
         return copy(proposal);
       }
       if (operation === 'undo') {
@@ -83,18 +87,24 @@ export class TorontoCadSession {
         await this.discard(this.proposals.values(), signal);
         await this.kernel.execute({ kind: 'delete', body: body.validation.body }, signal);
         await this.artifact.check(signal); this.ready(signal);
-        this.bodies.delete(held.bodyId); this.history.pop(); this.proposals.clear(); this.revision++;
+        this.bodies.delete(held.bodyId); this.history.pop(); this.proposals.clear(); this.approvalChecks.clear(); this.revision++;
       } else {
         const held = this.proposals.get(request.proposalId as string);
         if (!held) throw new TorontoCadError('unknown-proposal');
         if (operation === 'decline') {
-          await this.discard([held], signal); await this.artifact.check(signal); this.ready(signal); this.proposals.delete(held.proposalId);
+          await this.discard([held], signal); await this.artifact.check(signal); this.ready(signal); this.proposals.delete(held.proposalId); this.approvalChecks.delete(held.proposalId);
         } else {
           if (this.bodies.size >= TORONTO_CAD_LIMITS.bodies) throw new TorontoCadError('resource-limit');
-          await this.discard([...this.proposals.values()].filter(p => p.proposalId !== held.proposalId), signal);
-          await this.artifact.check(signal); this.ready(signal);
+          await this.approvalChecks.get(held.proposalId)?.(signal);
+          const others = [...this.proposals.values()].filter(p => p.proposalId !== held.proposalId);
+          await this.discard(others, signal);
+          // A later application-precondition rejection must not leave deleted native handles in the pending registry.
+          for (const other of others) { this.proposals.delete(other.proposalId); this.approvalChecks.delete(other.proposalId); }
+          await this.artifact.check(signal);
+          // Last await before synchronous publication: a point edit during earlier native work cannot slip through.
+          await this.approvalChecks.get(held.proposalId)?.(signal); this.ready(signal);
           const { proposalId: _id, sessionId: _s, revision: _r, artifactRevision: _a, datasetId: _d, frameId: _f, units: _u, ...body } = held;
-          this.bodies.set(held.bodyId, body); this.history.push({ transactionId: randomUUID(), bodyId: held.bodyId }); this.proposals.clear(); this.revision++;
+          this.bodies.set(held.bodyId, body); this.history.push({ transactionId: randomUUID(), bodyId: held.bodyId }); this.proposals.clear(); this.approvalChecks.clear(); this.revision++;
         }
       }
       return this.snapshot();

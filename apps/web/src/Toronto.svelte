@@ -17,6 +17,7 @@
   import { fetchPreprocessing, type PreprocessingSummary } from './preprocessing-overlays';
   import PreprocessingLegend from './PreprocessingLegend.svelte';
   import { observedPointLabel } from './point-presentation';
+  import { DEFAULT_ADAPTIVE_SETTINGS, type AdaptiveStats } from './adaptive-display';
 
   let { points = [], pointOverrides, pointPreview, pointRefresh = 0, onpointstate = () => {}, cadRefresh = 0, modelStreaming = false, oncadblocked = () => {}, onrevision = () => {}, allocatePointName, onpoint, onpoints = () => {}, onvisualsource = () => {} }: {
     cadRefresh?: number; modelStreaming?: boolean; oncadblocked?: (blocked: boolean) => void;
@@ -63,7 +64,24 @@
   }
   let host: HTMLDivElement;
   let viewer: ReturnType<typeof createTorontoViewer> | undefined;
+  let adaptiveEnabled = $state(true);
+  let pointSize = $state(4);
   let displayBudget = $state(50_000), displayDepth = $state(3);
+  let nearRadius = $state(DEFAULT_ADAPTIVE_SETTINGS.nearRadius);
+  let pixelThreshold = $state(DEFAULT_ADAPTIVE_SETTINGS.pixelThreshold);
+  let pointBudget = $state(DEFAULT_ADAPTIVE_SETTINGS.pointBudget);
+  let adaptiveStats = $state<AdaptiveStats>({ loadedPoints: 0, chunks: 0, pending: 0, budgetLimited: false, error: null });
+  function tuneDisplay() {
+    if (!Number.isFinite(nearRadius) || nearRadius < 0 || nearRadius > 200) return;
+    viewer?.configureAdaptive({ nearRadius, pixelThreshold, pointBudget });
+  }
+  function toggleAdaptive() {
+    if (adaptiveEnabled) {
+      clearCrop(); viewer?.setBox(); viewer?.startAdaptive();
+    } else {
+      viewer?.stopAdaptive(); focusStreet();
+    }
+  }
   let harnessBudget = $state(1024), harnessDepth = $state(2);
   let display = $state<PointObservation>(), observation = $state<PointObservation>();
   let displayStatus = $state('Waiting'), harnessStatus = $state('Waiting');
@@ -110,7 +128,8 @@
     const box = representativeStreetChunk(display); if (!box) return;
     center = box.min.map((n, i) => (n + box.max[i]) / 2);
     dimensions = box.min.map((n, i) => box.max[i] - n);
-    changeBox(); viewer?.frameBox(); void loadSelection(box);
+    changeBox(); viewer?.frameBox();
+    if (adaptiveEnabled) viewer?.setBox(); else void loadSelection(box);
   }
   let cropRevision: string | undefined;
   $effect(() => { if (mounted) viewer?.setDetailState(cropPhase); });
@@ -186,6 +205,7 @@
           // Only once per artifact, never on orbit/zoom or ordinary LOD reload.
           if (!boxInitialized) focusStreet();
         }
+        if (adaptiveEnabled) viewer?.startAdaptive();
       }
     }
     catch (error) { if (alive && request === displayRequest) displayStatus = String(error); }
@@ -206,7 +226,8 @@
   }
   onMount(() => {
     try {
-      viewer = createTorontoViewer(host, placeBox, selectWindow, viewerFailure, pinPoint); mounted = true;
+      viewer = createTorontoViewer(host, placeBox, selectWindow, viewerFailure, pinPoint, stats => { adaptiveStats = stats; });
+      tuneDisplay(); mounted = true;
       const current = viewer;
       onvisualsource({ capture: () => current.capture(), isCurrent: id => current.isCaptureCurrent(id), resolvePixel: (id, x, y) => current.resolvePixel(id, x, y) });
       void loadDisplay(); void loadHarness();
@@ -227,6 +248,7 @@
       {#if overlaysVisible}<div class="preprocessing-feedback"><PreprocessingLegend summary={overlaySummary} loading={overlayLoading} status={overlayStatus} refresh={showPreprocessing} /></div>{/if}
       <div class="viewport" data-testid="toronto-viewer" bind:this={host}></div>
       {#if viewerError}<p role="alert">Viewer unavailable: {viewerError}</p>{/if}
+      {#if adaptiveEnabled && adaptiveStats.error && !viewerError}<div class="scene-feedback" role="status"><p class="crop-summary">Detail unavailable. <button data-testid="quick-retry-display" onclick={() => viewer?.retryAdaptive()}>Retry</button></p></div>{/if}
       <div class="point-confirmation" data-testid="scene-point-confirmation">
         <PointEdits {points} toolsHost={pointToolsHost} artifactRevision={display?.dataset.revision} refreshToken={pointRefresh} streaming={modelStreaming} onselect={selection => pinPoint(selection)} onstate={(snapshot, proposal, blocked, proposals) => { retainedSnapshot = snapshot; retainedProposals = proposals ?? []; onpointstate(snapshot, proposal, blocked); }} />
       </div>
@@ -248,11 +270,19 @@
         <button data-testid="clear-toronto-pins" disabled={!points.length} onclick={() => onpoints([])}>Clear points</button>
       </details>
       <details class="tool-section"><summary>Display quality</summary>
-      <h2>User display LOD</h2>
+      <label class="mode-toggle"><input data-testid="adaptive-display-toggle" type="checkbox" bind:checked={adaptiveEnabled} onchange={event => { adaptiveEnabled = event.currentTarget.checked; toggleAdaptive(); }} disabled={!display || !!viewerError} />Camera-driven detail</label>
+      {#if adaptiveEnabled}
+      <label>Full detail within (m)<input data-testid="display-near-radius" type="number" min="0" max="200" step="5" bind:value={nearRadius} onchange={tuneDisplay} /></label>
+      <label>Distant detail <select data-testid="display-threshold" bind:value={pixelThreshold} onchange={event => { pixelThreshold = Number(event.currentTarget.value); tuneDisplay(); }}><option value={160}>Coarse</option><option value={80}>Balanced</option><option value={40}>Fine</option><option value={20}>Very fine</option></select></label>
+      <label>Point budget <select data-testid="display-budget" bind:value={pointBudget} onchange={event => { pointBudget = Number(event.currentTarget.value); tuneDisplay(); }}><option value={500_000}>500,000</option><option value={1_000_000}>1 million</option><option value={2_000_000}>2 million</option><option value={3_000_000}>3 million</option></select></label>
+      <label>Point size <select data-testid="display-point-size" bind:value={pointSize} onchange={event => { pointSize = Number(event.currentTarget.value); viewer?.setPointSize(pointSize); }}><option value={2}>2 px</option><option value={3}>3 px</option><option value={4}>4 px</option><option value={5}>5 px</option><option value={6}>6 px</option></select></label>
+      <p data-testid="display-status" aria-live="polite">{adaptiveStats.error ? 'Detail unavailable.' : adaptiveStats.pending ? 'Loading detail…' : adaptiveStats.budgetLimited ? 'Point budget reached' : displayStatus === 'Ready' ? 'Ready' : displayStatus}</p>
+      {#if adaptiveStats.error}<button data-testid="retry-display" onclick={() => viewer?.retryAdaptive()}>Retry detail</button>{/if}
+      {:else}
       <label>Display point budget <select data-testid="display-budget" bind:value={displayBudget} onchange={event => { displayBudget = Number(event.currentTarget.value); void loadDisplay(); }}><option value={10_000}>10,000</option><option value={50_000}>50,000</option><option value={100_000}>100,000</option></select></label>
       <label>Display maximum depth <select data-testid="display-depth" bind:value={displayDepth} onchange={event => { displayDepth = Number(event.currentTarget.value); void loadDisplay(); }}>{#each [0, 1, 2, 3] as depth}<option value={depth}>{depth}</option>{/each}</select></label>
       <p data-testid="display-status" aria-live="polite">{displayStatus}</p>
-      <p data-testid="display-count">Rendered sample: {display?.count ?? 0} points (depth {display?.lod.depth ?? '—'})</p>
+      {/if}
       <button onclick={loadDisplay}>Reload display</button>
       </details><details class="tool-section"><summary>Full-resolution selection &amp; crop</summary>
       <h2>Full-resolution display selection</h2>
@@ -323,6 +353,8 @@
   h2 { font-size: 12px; color: #a8a9b0; margin-top: 16px; font-weight: 500; }
   label { display: block; margin: 10px 0; font-size: 12px; color: #b9bac1; }
   select { display: block; width: 100%; margin-top: 4px; }
+  .mode-toggle { display: flex; align-items: center; gap: 8px; }
+  .mode-toggle input { width: auto; margin: 0; }
   .box-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
   input { width: 100%; box-sizing: border-box; }
   button, select, input { color: #f5f5f7; background: #2b2c30; border: 1px solid #ffffff1c; border-radius: 8px; padding: 8px 10px; font-size: 12px; }
