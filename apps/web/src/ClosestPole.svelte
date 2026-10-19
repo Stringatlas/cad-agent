@@ -102,7 +102,7 @@
       <div class="tools-content">
       <details class="tool-section"><summary>Navigation &amp; query guide</summary>
       <p>Cmd/Ctrl-click an overview or full-resolution point to find the closest {labelName}-labelled stored point across the whole prepared Toronto3D dataset.</p>
-      <p class="note">Orbit: drag · Zoom: scroll · Window: Shift-drag · Query: Cmd/Ctrl-click</p>
+      <p class="note">Focus scene: click or Tab · Fly: W/S forward/back, A/D strafe · Orbit: drag · Zoom: scroll · Window: Shift-drag · Query: Cmd/Ctrl-click</p>
       <p class="note">Semantic point proxy measured with 3D Euclidean distance, not object-instance detection or fitted geometry. Local meters · right-handed Z-up · world origin [627285, 4841948, 0].</p>
       <p class="note">Cyan: selected point · Pink: verified {labelName}-labelled point · Yellow: distance. Frame result moves the camera only when requested. Shift takes precedence and never queries. Window detail is display-only; search remains whole-dataset. Ctrl-click context menus are suppressed on this canvas.</p>
       </details>

@@ -1,6 +1,6 @@
-import { MODEL_CHAT_LIMITS, MODEL_INSPECTION_LIMITS, MODEL_VISUAL_LIMITS, canonicalModelVisualToolResult, modelVisualImageSize, modelVisualSourcePixel, type ModelVisualObservation, type VisualPixelResolution, type ModelRequestInspection, type ModelRequestPhase, canonicalModelScene, canonicalModelTurnRequest, canonicalModelCatalog, canonicalModelChatEvent,
+import { MODEL_CHAT_LIMITS, MODEL_INSPECTION_LIMITS, MODEL_VISUAL_LIMITS, canonicalModelVisualToolResult, canonicalModelVisualObservation, modelVisualImageSize, modelVisualSourcePixel, type ModelVisualObservation, type VisualPixelResolution, type ModelRequestInspection, type ModelRequestPhase, canonicalModelScene, canonicalModelTurnRequest, canonicalModelCatalog, canonicalModelChatEvent,
   canonicalSceneContextRequest, canonicalProtocolJson, freezeProtocolValue, protocolKeys, protocolRecord, protocolToken,
-  type ModelCatalog, type ModelScene, type ModelTurnRequest, type ModelChatEvent, type ProjectSnapshot } from '@spatial/contracts';
+  type ModelCaptureRequest, type ModelReferenceSelection, type ModelAreaOfInterest, type ModelCatalog, type ModelScene, type ModelTurnRequest, type ModelChatEvent, type ProjectSnapshot } from '@spatial/contracts';
 import type { TorontoDraftPoint } from './draft-context';
 import type { ProjectView } from './project-client';
 
@@ -26,12 +26,12 @@ function modelId(value: unknown): string {
 }
 /** Only references from the visible scene enter a turn; hidden-mode retained pins never leak. */
 export function modelScene(mode: string, snapshot: ProjectSnapshot | undefined,
-  view: Pick<ProjectView, 'selectedId' | 'points' | 'needsRefresh'>, points: readonly TorontoDraftPoint[]): ModelScene {
+  view: Pick<ProjectView, 'selectedId' | 'points' | 'needsRefresh'>, points: readonly TorontoDraftPoint[], areaOfInterest?: ModelAreaOfInterest): ModelScene {
   if (mode !== 'demo' && mode !== 'toronto' && mode !== 'pole') throw new Error('Unknown scene');
   const project = snapshot && !view.needsRefresh ? canonicalSceneContextRequest({ sessionId: snapshot.sessionId,
     projectRevision: snapshot.project.revision, frameId: snapshot.frameId, units: snapshot.project.coordinates.units,
     entityIds: mode === 'demo' && view.selectedId ? [view.selectedId] : [], points: mode === 'demo' ? view.points : [] }) : null;
-  return freezeProtocolValue(canonicalModelScene({ mode, project, toronto: mode === 'toronto' ? points : [] }));
+  return freezeProtocolValue(canonicalModelScene({ mode, project, toronto: mode === 'toronto' ? points : [], ...(mode === 'toronto' && areaOfInterest ? { areaOfInterest } : {}) }));
 }
 export function validateModelCatalog(value: unknown): ModelCatalog {
   const r = protocolRecord(canonicalModelCatalog(value)); protocolKeys(r, ['mode', 'ready', 'code', 'generation', 'models']);
@@ -49,7 +49,7 @@ export function validateModelCatalog(value: unknown): ModelCatalog {
 /** Exact downstream envelope validation; tool data is bounded inert JSON, never markup or executable calls. */
 export function validateModelEvent(value: unknown, request: ModelTurnRequest): ModelChatEvent {
   const r = protocolRecord(canonicalModelChatEvent(value));
-  const keys: Record<string, string[]> = { 'request-inspection': ['inspection'], 'request-phase': ['round', 'phase'], start: ['conversationId', 'model'], delta: ['text'], tool: ['name', 'context'], 'tool-request': ['toolCallId', 'nonce', 'observationId', 'x', 'y'], done: ['conversationId'], error: ['code'] };
+  const keys: Record<string, string[]> = { 'browser-request': ['toolCallId', 'nonce', 'action'], 'approval-wait': ['proposalId', 'authority'], 'approval-result': ['proposalId', 'authority', 'outcome', 'scene'], 'request-inspection': ['inspection'], 'request-phase': ['round', 'phase'], start: ['conversationId', 'model'], delta: ['text'], tool: ['name', 'context'], 'tool-request': ['toolCallId', 'nonce', 'observationId', 'x', 'y'], done: ['conversationId'], error: ['code'] };
   if (typeof r.kind !== 'string' || !Object.hasOwn(keys, r.kind)) throw new Error('Unknown event');
   protocolKeys(r, ['kind', 'requestId', ...keys[r.kind]!]);
   if (r.requestId !== request.requestId) throw new Error('Wrong request identity');
@@ -57,7 +57,7 @@ export function validateModelEvent(value: unknown, request: ModelTurnRequest): M
   if (r.kind === 'start' && (r.model !== request.model || (request.conversationId !== null && r.conversationId !== request.conversationId))) throw new Error('Wrong conversation/model');
   if (r.kind === 'delta' && (typeof r.text !== 'string' || !r.text.length || r.text.length > MODEL_CLIENT_LIMITS.outputChars)) throw new Error('Invalid text delta');
   if (r.kind === 'tool') {
-    if (r.name !== 'inspect_scene' && !(r.name === 'resolve_visual_pixel' && request.visualObservation) &&
+    if (!['inspect_scene', 'capture_scene', 'select_reference'].includes(String(r.name)) && !(r.name === 'resolve_visual_pixel' && request.visualObservation) &&
       !(['nearest_label', 'assess_utility_box', 'propose_utility_box'].includes(String(r.name)) && request.scene.mode === 'toronto' && request.scene.toronto.length > 0) &&
       !(['propose_point_move', 'propose_point_move_to_nearest_label', 'propose_cad_box', 'propose_cad_cylinder'].includes(String(r.name)) && request.scene.mode === 'toronto' && (!String(r.name).startsWith('propose_point_move') || request.scene.toronto.length > 0)) &&
       !((r.name === 'propose_box_create' || r.name === 'propose_box_update') && request.scene.mode === 'demo' && request.scene.project)) throw new Error('Unsupported tool');
@@ -117,12 +117,17 @@ export async function fetchModelCatalog(signal: AbortSignal, fetcher: typeof fet
   text += decoder.decode();
   return validateModelCatalog(JSON.parse(text));
 }
-export async function streamModelTurn(request: ModelTurnRequest, signal: AbortSignal, publish: (event: ModelChatEvent) => void,
-  fetcher: typeof fetch = (input, init) => globalThis.fetch(input, init), attachment?: VisualModelAttachment): Promise<string> {
+export interface ModelAgentCallbacks {
+  oncapture?: (request: ModelCaptureRequest, isCurrent: () => boolean) => Promise<VisualModelAttachment>;
+  onselectreference?: (reference: ModelReferenceSelection, isCurrent: () => boolean) => Promise<ModelScene>;
+  onapprovalwait?: (waiting: boolean) => void;
+  onauthorityrefresh?: () => Promise<ModelScene>;
+}
+export async function streamModelTurn(request: ModelTurnRequest, signal: AbortSignal, publish: (event: ModelChatEvent) => unknown | Promise<unknown>,
+  fetcher: typeof fetch = (input, init) => globalThis.fetch(input, init), attachment?: VisualModelAttachment, agent: ModelAgentCallbacks = {}): Promise<string> {
   request = canonicalModelTurnRequest(request);
-  const observation = request.visualObservation;
-  if (observation ? !attachment || JSON.stringify(attachment.observation) !== JSON.stringify(observation) ||
-    request.conversationId !== null : attachment !== undefined) throw new Error('Invalid visual attachment');
+  let observation = request.visualObservation;
+  if (observation ? !attachment || JSON.stringify(attachment.observation) !== JSON.stringify(observation) : attachment !== undefined) throw new Error('Invalid visual attachment');
   const guard = () => {
     signal.throwIfAborted();
   };
@@ -139,6 +144,7 @@ export async function streamModelTurn(request: ModelTurnRequest, signal: AbortSi
   let started: string | undefined; let terminal: ModelChatEvent | undefined;
   let round = 0, roundPhase: 'prepared' | ModelRequestPhase | undefined;
   const toolIds = new Set<string>(), nonces = new Set<string>();
+  let pendingApproval: Extract<ModelChatEvent, { kind: 'approval-wait' }> | undefined;
   const accept = async (line: string) => {
     guard();
     if (!line || terminal) throw new Error('Invalid stream framing');
@@ -148,6 +154,35 @@ export async function streamModelTurn(request: ModelTurnRequest, signal: AbortSi
     if (event.kind === 'done' && event.conversationId !== started) throw new Error('Wrong terminal identity');
     if (event.kind === 'delta') { output += event.text.length; if (output > MODEL_CLIENT_LIMITS.outputChars) throw new Error('Output budget'); }
     if (event.kind === 'tool' && ++tools > MODEL_CLIENT_LIMITS.maxTools) throw new Error('Tool budget');
+    if (event.kind === 'approval-wait') {
+      if (pendingApproval) throw new Error('Overlapping approvals'); pendingApproval = event;
+    }
+    if (event.kind === 'approval-result') {
+      if (!pendingApproval || pendingApproval.proposalId !== event.proposalId || pendingApproval.authority !== event.authority) throw new Error('Unbound approval result');
+      pendingApproval = undefined;
+    }
+    if (event.kind === 'done' && pendingApproval) throw new Error('Unfinished human approval');
+    if (event.kind === 'browser-request') {
+      if (toolIds.has(event.toolCallId) || nonces.has(event.nonce) || toolIds.size >= MODEL_CLIENT_LIMITS.maxTools) throw new Error('Browser tool budget/identity');
+      toolIds.add(event.toolCallId); nonces.add(event.nonce);
+      await abortable(Promise.resolve(publish(event)), signal); guard();
+      let result: unknown = { status: 'unavailable' };
+      if (event.action.kind === 'capture' && agent.oncapture) {
+        try {
+          attachment = await abortable(agent.oncapture(event.action.request, () => !signal.aborted), signal); guard(); observation = attachment.observation;
+          request = { ...request, visualObservation: observation };
+          result = { status: 'captured', observation };
+        } catch { guard(); }
+      } else if (event.action.kind === 'select-reference' && agent.onselectreference) {
+        const scene = canonicalModelScene(await abortable(agent.onselectreference(event.action.reference, () => !signal.aborted), signal)); guard();
+        request = { ...request, scene }; result = { status: 'selected', scene };
+      }
+      const accepted = await fetchResponse(fetcher, '/chat/browser-result', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requestId: request.requestId, toolCallId: event.toolCallId, nonce: event.nonce, result }) }, signal);
+      void accepted.body?.cancel().catch(() => {}); guard(); if (accepted.status !== 204) throw new Error('Invalid browser result response');
+      return;
+    }
+    if (event.kind === 'approval-result') request = { ...request, scene: event.scene };
     if (event.kind === 'tool-request') {
       if (!attachment || !observation || toolIds.has(event.toolCallId) || nonces.has(event.nonce) || toolIds.size >= MODEL_CLIENT_LIMITS.maxTools) throw new Error('Visual tool budget/identity');
       toolIds.add(event.toolCallId); nonces.add(event.nonce);
@@ -188,7 +223,7 @@ export async function streamModelTurn(request: ModelTurnRequest, signal: AbortSi
     }
     if (event.kind === 'done' && round && roundPhase !== 'completed') throw new Error('Unfinished inspection');
     if (event.kind === 'done' || event.kind === 'error') terminal = event;
-    else { guard(); publish(event); guard(); }
+    else { guard(); await abortable(Promise.resolve(publish(event)), signal); guard(); }
   };
   await readBody(response, signal, MODEL_CLIENT_LIMITS.streamBytes, async bytes => {
     // Bound a frame before decoding/allocating it, including adversarial no-newline streams.
@@ -262,7 +297,7 @@ export interface ModelInspectionView extends ModelRequestInspection {
 }
 export const MODEL_INSPECTION_HISTORY_BYTES = 256 * 1024;
 function messageBytes(messages: readonly ModelMessage[]): number {
-  return encoder.encode(JSON.stringify(messages.map(({ inspections: _snapshots, ...m }) => m))).length;
+  return encoder.encode(JSON.stringify(messages.map(({ inspections: _snapshots, attachments: _images, ...m }) => m))).length;
 }
 function settleInspections(message: ModelMessage, phase: 'cancelled' | 'interrupted'): ModelMessage {
   return { ...message, inspections: message.inspections?.map(s => s.phase === 'prepared' || s.phase === 'dispatched' ? { ...s, phase, source: 'client' } : s) };
@@ -282,6 +317,7 @@ function boundInspections(messages: ModelMessage[]): ModelMessage[] {
 export interface ModelMessage {
   readonly role: 'user' | 'assistant'; readonly text: string; readonly state: 'complete' | 'streaming' | 'incomplete';
   readonly tools: readonly unknown[]; readonly failureCode?: string;
+  readonly attachments?: readonly ModelVisualObservation[];
   readonly inspections?: readonly ModelInspectionView[]; readonly inspectionsDropped?: number;
 }
 export interface ModelChatView {
@@ -299,12 +335,36 @@ export class ModelChatController {
   constructor(private publish: (view: ModelChatView) => void,
     private fetcher: typeof fetch = (input, init) => globalThis.fetch(input, init),
     private deadlineMs: number = MODEL_CLIENT_LIMITS.deadlineMs, private catalogDeadlineMs: number = MODEL_CLIENT_LIMITS.catalogDeadlineMs,
-    private proposalEvents: { onproposal?: (proposal: unknown, isCurrent: () => boolean) => void; oninvalidate?: () => void; onauthorityproposal?: (kind: 'points' | 'cad') => void } = {}) {}
+    private proposalEvents: ModelAgentCallbacks & { onproposal?: (proposal: unknown, isCurrent: () => boolean) => void; oninvalidate?: () => void; onauthorityproposal?: (kind: 'points' | 'cad') => void } = {}) {}
+  private approvalWaiting = false;
+  private selecting?: ModelReferenceSelection;
+  private acceptAgentScene(scene: ModelScene) {
+    this.scene = freezeProtocolValue(canonicalModelScene(scene)); this.sceneKey = canonicalProtocolJson(this.scene);
+  }
   private set(patch: Partial<ModelChatView>) { this.view = freezeProtocolValue({ ...this.view, ...patch, continuationActive: this.conversationId !== null }); if (!this.disposed) this.publish(this.view); }
   private invalidate() { ++this.generation; this.active?.abort(); this.active = undefined; }
   bind(scene: ModelScene) {
     const key = canonicalProtocolJson(canonicalModelScene(scene));
     if (this.sceneKey === key) return;
+    if (this.active && this.scene && (this.approvalWaiting || this.selecting)) {
+      const previous = this.scene;
+      const same = (a: unknown, b: unknown) => canonicalProtocolJson(a) === canonicalProtocolJson(b);
+      const approvalChange = this.approvalWaiting && previous.project && scene.project && scene.project.projectRevision === previous.project.projectRevision + 1 &&
+        same({ ...scene, project: { ...scene.project, projectRevision: previous.project.projectRevision } }, previous);
+      const selection = this.selecting;
+      const point = selection?.kind === 'toronto-point' ? scene.toronto.at(-1) : scene.project?.points.at(-1);
+      const selectionChange = selection && point && (selection.kind === 'toronto-point' ?
+        scene.toronto.length === previous.toronto.length + 1 && same((point as { key: unknown }).key, selection.key) && same({ ...scene, toronto: scene.toronto.slice(0, -1) }, previous) :
+        scene.project && previous.project && scene.project.points.length === previous.project.points.length + 1 &&
+        (point as { entityId: string }).entityId === selection.entityId && (point as { pointIndex: number }).pointIndex === selection.pointIndex &&
+        same({ ...scene, project: { ...scene.project, points: scene.project.points.slice(0, -1) } }, previous));
+      if (approvalChange || selectionChange) { this.acceptAgentScene(scene); return; }
+    }
+    const sameSession = this.scene?.mode === scene.mode && this.scene?.project?.sessionId === scene.project?.sessionId &&
+      this.scene?.project?.frameId === scene.project?.frameId;
+    if (!this.active && sameSession) {
+      this.proposalEvents.oninvalidate?.(); this.acceptAgentScene(scene); return;
+    }
     this.invalidate(); this.scene = freezeProtocolValue(JSON.parse(key) as ModelScene); this.sceneKey = key; this.conversationId = null;
     this.contextReset('Scene context changed');
   }
@@ -367,21 +427,32 @@ export class ModelChatController {
       messageBytes(messages) + encoder.encode(text).length > MODEL_CLIENT_LIMITS.historyBytes - 65536) {
       this.set({ code: 'history-limit-new-chat-required' }); return false;
     }
-    if (attachment) {
-      this.conversationId = null;
+    const imageBytes = messages.reduce((total, message) => total + (message.attachments ?? []).reduce((sum, image) => sum + encoder.encode(image.image.dataUrl).length, 0), 0);
+    if (imageBytes + (attachment ? encoder.encode(attachment.observation.image.dataUrl).length : 0) > MODEL_CHAT_LIMITS.imageHistoryBytes) {
+      this.set({ code: 'history-limit-new-chat-required' }); return false;
     }
+    // UI attachments may be Svelte $state proxies; never freeze their live object graph.
+    const observation = attachment ? canonicalModelVisualObservation(attachment.observation) : undefined;
     this.invalidate(); const currentGeneration = this.generation, controller = this.active = new AbortController();
     const request: ModelTurnRequest = { requestId: `model-${crypto.randomUUID()}-${++this.sequence}`, conversationId: this.conversationId,
-      generation: catalog.generation, model, text, scene: this.scene, ...(attachment ? { visualObservation: attachment.observation } : {}) };
-    let next: ModelMessage[] = [...messages, { role: 'user', text, state: 'complete', tools: [] }, { role: 'assistant', text: '', state: 'streaming', tools: [] }];
+      generation: catalog.generation, model, text, scene: this.scene, ...(observation ? { visualObservation: observation } : {}) };
+    let next: ModelMessage[] = [...messages, { role: 'user', text, state: 'complete', tools: [], ...(observation ? { attachments: [observation] } : {}) }, { role: 'assistant', text: '', state: 'streaming', tools: [] }];
     this.set({ messages: [...next], phase: 'streaming', code: 'waiting-for-model' });
     const current = () => !this.disposed && currentGeneration === this.generation;
     const timer = setTimeout(() => controller.abort(), this.deadlineMs);
-    const proposalsAfterImage: unknown[] = [];
-    const torontoAuthorities = new Set<'points' | 'cad'>();
     try {
-      const id = await streamModelTurn(request, controller.signal, event => {
+      const id = await streamModelTurn(request, controller.signal, async event => {
         if (!current() || controller.signal.aborted) return;
+        if (event.kind === 'approval-wait') { this.approvalWaiting = true; this.proposalEvents.onapprovalwait?.(true); }
+        if (event.kind === 'approval-result') {
+          this.acceptAgentScene(event.scene);
+          if (this.proposalEvents.onauthorityrefresh) {
+            const refreshed = await this.proposalEvents.onauthorityrefresh();
+            if (!current() || controller.signal.aborted) return;
+            if (canonicalProtocolJson(canonicalModelScene(refreshed)) !== this.sceneKey) throw new Error('Authority refresh changed scene');
+          }
+          this.approvalWaiting = false; this.proposalEvents.onapprovalwait?.(false);
+        }
         const last = next[next.length - 1]!;
         const updated = event.kind === 'delta' ? { ...last, text: last.text + event.text } :
           event.kind === 'tool' ? { ...last, tools: [...last.tools, event.context] } :
@@ -391,24 +462,40 @@ export class ModelChatController {
         next[next.length - 1] = updated; next = boundInspections(next);
         this.set({ messages: [...next], code: event.kind === 'tool' ? 'inspecting-bound-scene' : 'receiving-model-response' });
         if (event.kind === 'tool' && request.scene.mode === 'toronto') {
-          if (event.name === 'propose_point_move' || (event.name === 'propose_point_move_to_nearest_label' && protocolRecord(event.context).status === 'pending')) torontoAuthorities.add('points');
-          if (event.name === 'propose_cad_box' || event.name === 'propose_cad_cylinder' || event.name === 'propose_utility_box') torontoAuthorities.add('cad');
+          if (event.name === 'propose_point_move' || (event.name === 'propose_point_move_to_nearest_label' && protocolRecord(event.context).status === 'pending')) this.proposalEvents.onauthorityproposal?.('points');
+          if (event.name === 'propose_cad_box' || event.name === 'propose_cad_cylinder' || event.name === 'propose_utility_box') this.proposalEvents.onauthorityproposal?.('cad');
         }
         if (event.kind === 'tool' && (event.name === 'propose_box_create' || event.name === 'propose_box_update') && request.scene.mode === 'demo') {
           const context = protocolRecord(event.context);
           protocolKeys(context, ['kind', 'proposal']);
           if (context.kind !== 'project-box-proposal' || protocolRecord(protocolRecord(context.proposal).edit).kind !==
             (event.name === 'propose_box_create' ? 'create-box' : 'update-box')) throw new ModelTurnFailure('invalid-or-unavailable-stream');
-          // Retain existing post-EOF proposal admission for image turns; approval and
-          // authority binding are independent of capture-time image observations.
-          if (attachment) proposalsAfterImage.push(context.proposal);
-          else this.proposalEvents.onproposal?.(context.proposal, () => current() && !controller.signal.aborted);
+          this.proposalEvents.onproposal?.(context.proposal, () => current() && !controller.signal.aborted);
         }
-      }, this.fetcher, attachment);
+      }, this.fetcher, attachment, {
+        oncapture: this.proposalEvents.oncapture ? async (capture, isCurrent) => {
+          const captured = await this.proposalEvents.oncapture!(capture, isCurrent);
+          if (current() && !controller.signal.aborted) {
+            const bytes = next.reduce((total, message) => total + (message.attachments ?? []).reduce((sum, image) => sum + encoder.encode(image.image.dataUrl).length, 0), 0);
+            if (bytes + encoder.encode(captured.observation.image.dataUrl).length > MODEL_CHAT_LIMITS.imageHistoryBytes) throw new ModelTurnFailure('history-limit');
+            const observation = canonicalModelVisualObservation(captured.observation);
+            const last = next[next.length - 1]!;
+            next[next.length - 1] = { ...last, attachments: [...(last.attachments ?? []), observation] };
+            this.set({ messages: [...next] });
+          }
+          return captured;
+        } : undefined,
+        onselectreference: this.proposalEvents.onselectreference ? async reference => {
+          this.selecting = reference;
+          try {
+            const scene = await this.proposalEvents.onselectreference!(reference, () => current() && !controller.signal.aborted);
+            if (current() && !controller.signal.aborted) this.acceptAgentScene(scene);
+            return scene;
+          } finally { this.selecting = undefined; }
+        } : undefined,
+      });
       if (!current() || controller.signal.aborted) return true;
-      for (const proposal of proposalsAfterImage) this.proposalEvents.onproposal?.(proposal, () => current() && !controller.signal.aborted);
-      if (current() && !controller.signal.aborted) for (const authority of torontoAuthorities) this.proposalEvents.onauthorityproposal?.(authority);
-      this.conversationId = attachment ? null : id; next[next.length - 1] = { ...next[next.length - 1]!, state: 'complete' };
+      this.conversationId = id; next[next.length - 1] = { ...next[next.length - 1]!, state: 'complete' };
       this.set({ messages: [...next], phase: 'completed', code: 'completed' });
     } catch (error) {
       if (current()) {
@@ -416,11 +503,8 @@ export class ModelChatController {
         const code = controller.signal.aborted ? 'deadline-incomplete' : error instanceof ModelTurnFailure ? error.code : 'invalid-or-unavailable-stream';
         this.conversationId = null; next[next.length - 1] = { ...settleInspections(next[next.length - 1]!, controller.signal.aborted ? 'cancelled' : 'interrupted'), state: 'incomplete', failureCode: code };
         this.set({ messages: [...next], phase: 'error', code });
-        // A later model failure does not erase already-retained server proposals. Read authority,
-        // never admit event meshes or infer publication from an incomplete conversation.
-        if (!controller.signal.aborted) for (const authority of torontoAuthorities) this.proposalEvents.onauthorityproposal?.(authority);
       }
-    } finally { clearTimeout(timer); if (current()) this.active = undefined; }
+    } finally { clearTimeout(timer); if (current()) this.active = undefined; this.approvalWaiting = false; this.selecting = undefined; this.proposalEvents.onapprovalwait?.(false); }
     return true;
   }
 }

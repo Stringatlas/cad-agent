@@ -9,8 +9,8 @@ const source = (file: string) => readFileSync(new URL(`../apps/web/src/${file}`,
 test('Toronto and synthetic capture paths admit mixed scenes and truthfully describe capture-time layers', () => {
   const toronto = source('toronto-viewer.ts'), demo = source('viewer.ts');
   for (const text of [toronto, demo]) {
-    const capture = text.slice(text.indexOf('    capture: () => {'), text.indexOf('    isCaptureCurrent:'));
-    assert.ok(capture.includes('visual.capture()'));
+    const capture = text.slice(text.indexOf('    capture: (request?: ModelCaptureRequest) => {'), text.indexOf('    isCaptureCurrent:'));
+    assert.ok(capture.includes('visual.capture(request)'), 'requested camera must reach mixed-scene capture');
     assert.ok(!capture.includes('throw new Error'));
     assert.ok(text.includes("observation: 'capture-time-rendered-scene-not-current-geometry'"));
   }

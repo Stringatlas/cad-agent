@@ -138,7 +138,7 @@ test('multi-reference preview validates every selected move and blocks parallel 
   pending.resolve(moved(p)); await a; assert.equal(states.at(-1)?.snapshot?.entries.length, 2); assert.equal(states.at(-1)?.needsRefresh, false);
 });
 
-test('transport uses only fixed routes and id-only JSON mutations; errors are never automatically retried', async () => {
+test('transport uses only fixed routes and id-only JSON mutations; mutation errors are never automatically retried', async () => {
   const original = globalThis.fetch, calls: { url: string; options?: RequestInit }[] = [];
   let error = false;
   globalThis.fetch = async (input, options) => {
@@ -150,6 +150,6 @@ test('transport uses only fixed routes and id-only JSON mutations; errors are ne
     assert.equal(calls[0].url, '/datasets/toronto3d/overrides'); assert.equal(calls[0].options?.method, 'GET'); assert.equal(calls[0].options?.body, undefined);
     const body = { sessionId: 'session1', revision: 0, proposalId: 'proposal1' };
     await overrideTransport('approve', body); assert.equal(calls[1].url, '/datasets/toronto3d/overrides/approve'); assert.deepEqual(JSON.parse(calls[1].options?.body as string), body);
-    error = true; await assert.rejects(overrideTransport('refresh'), /busy/); assert.equal(calls.length, 3);
+    error = true; await assert.rejects(overrideTransport('approve', body), /busy/); assert.equal(calls.length, 3);
   } finally { globalThis.fetch = original; }
 });

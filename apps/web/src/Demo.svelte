@@ -27,7 +27,7 @@
         cause => error = String(cause), () => error = '', { sessionId: snapshot.sessionId, frameId: snapshot.frameId });
       mounted = true;
       const current = viewer;
-      onvisualsource({ capture: () => current.capture(), isCurrent: id => current.isCaptureCurrent(id), resolvePixel: (id, x, y) => current.resolvePixel(id, x, y) });
+      onvisualsource({ capture: request => current.capture(request), isCurrent: id => current.isCaptureCurrent(id), resolvePixel: (id, x, y) => current.resolvePixel(id, x, y) });
     }
     catch (cause) { error = String(cause); console.error(cause); }
     return () => { mounted = false; onvisualsource(undefined); viewer?.dispose(); };
@@ -45,7 +45,7 @@
     <aside>
       <details data-testid="synthetic-scene-tools"><summary>Scene tools</summary>
       <div class="tools-content">
-      <details class="help"><summary>Navigation help</summary><p>Drag to orbit · Scroll to zoom · Click to select · Cmd/Ctrl-click to pin.</p><p>X red · Y green · Z blue · XY ground · meters.</p></details>
+      <details class="help"><summary>Navigation help</summary><p>Click or Tab into the scene, then hold W/S to fly forward/back and A/D to strafe. Drag to orbit · Scroll to zoom · Click to select · Cmd/Ctrl-click to pin.</p><p>X red · Y green · Z blue · XY ground · meters.</p></details>
       <h2>Entities</h2>
       {#each project.entities as entity}
         <button class:active={project.selectedEntityId === entity.id} onclick={() => select(entity.id)} aria-pressed={project.selectedEntityId === entity.id}>

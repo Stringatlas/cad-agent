@@ -23,6 +23,13 @@ export class ProjectSession {
   private savedRevision: number | null = null;
   private proposals = new Map<string, BoxProposal>();
   private history: Transaction[] = [];
+  private readonly decisionReceipts = new Map<string, 'accepted' | 'declined'>();
+  /** Observational receipts only; pending/invalidation never imply a decision. */
+  proposalDecision(id: string): 'accepted' | 'declined' | undefined { return this.decisionReceipts.get(id); }
+  private recordDecision(id: string, decision: 'accepted' | 'declined'): void {
+    this.decisionReceipts.set(id, decision);
+    if (this.decisionReceipts.size > 256) this.decisionReceipts.delete(this.decisionReceipts.keys().next().value!);
+  }
   constructor(readonly snapshotPath: string = DEFAULT_PROJECT_PATH) {
     const stored = this.readStored();
     this.project = freezeProtocolValue(stored?.project ?? canonicalPersistentProject(createDemoProject()));
@@ -84,6 +91,7 @@ export class ProjectSession {
     this.check(proposal);
     if (proposal.digest !== r.digest) throw new ProjectError('approval-mismatch', 'Decline does not match retained preview');
     this.proposals.delete(proposal.proposalId);
+    this.recordDecision(proposal.proposalId, 'declined');
     return { proposalId: proposal.proposalId, declined: true };
   }
   approve(input: unknown): ProjectCommitResult {
@@ -99,6 +107,7 @@ export class ProjectSession {
     const transaction = { id: randomUUID(), before, after: freezeProtocolValue(candidate) };
     // Publication occurs only after all preconditions, validation and postconditions succeeded.
     this.history.push(transaction); this.project = transaction.after; this.proposals.clear();
+    this.recordDecision(proposal.proposalId, 'accepted');
     return this.commitResult(transaction.id, proposal.edit.kind);
   }
   undo(input: unknown): ProjectCommitResult {
@@ -147,7 +156,7 @@ export class ProjectSession {
     if (!stored) throw new ProjectError('snapshot-missing', 'No saved project snapshot');
     const candidate = freezeProtocolValue(stored.project), newSession = randomUUID();
     this.project = candidate; this.sessionId = newSession; this.diskDigest = stored.digest; this.savedRevision = candidate.revision;
-    this.history = []; this.proposals.clear();
+    this.history = []; this.proposals.clear(); this.decisionReceipts.clear();
     return { snapshot: this.snapshot(), nextUndoTransactionId: null, persisted: true as const };
   }
   private readStored(): Stored | null {

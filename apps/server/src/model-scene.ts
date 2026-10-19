@@ -25,9 +25,10 @@ export async function bindModelScene(scene: ModelScene, authority: ProjectSessio
     const torontoEditing = scene.mode === 'toronto' ? editing : undefined;
     const pointState = torontoEditing ? await torontoEditing.points.execute('snapshot', undefined, signal) as PointOverrideSnapshot : undefined;
     const cadState = torontoEditing ? await torontoEditing.cad.execute('snapshot', undefined, signal) as TorontoCadSnapshot : undefined;
-    if (scene.toronto.length || visual && scene.mode === 'toronto' || torontoEditing) {
+    if (scene.toronto.length || scene.areaOfInterest || visual && scene.mode === 'toronto' || torontoEditing) {
       artifact = await SemanticArtifact.open(directory, signal);
       if (pointState && pointState.artifactRevision !== artifact.dataset.revision || cadState && cadState.artifactRevision !== artifact.dataset.revision) throw new ModelError('stale-scene');
+      if (scene.areaOfInterest && scene.areaOfInterest.artifactRevision !== artifact.dataset.revision) throw new ModelError('stale-scene');
       for (const point of scene.toronto) {
         if (point.artifactRevision !== artifact.dataset.revision) throw new ModelError('stale-scene');
         if (point.key.sourceRow >= artifact.sourceCounts[point.key.sourceFileId] || point.position.some((v, i) =>
@@ -65,7 +66,9 @@ export async function bindModelScene(scene: ModelScene, authority: ProjectSessio
       return { searchGeometry: 'original-prepared-dataset', pointName: point.name, request, outcome };
     };
     return {
-      context: { utilityBoxPreset: UTILITY_BOX_PRESET, mode: scene.mode, project, selectedGeometry, availableProjectBoxes, toronto: scene.toronto.map(point => ({ ...point,
+      context: { ...(scene.areaOfInterest ? { areaOfInterest: { ...scene.areaOfInterest, source: 'user-selected-xy-rectangle',
+        elevationScope: 'all-elevations', referencePlane: 'orbit-target-z-not-terrain', purpose: 'spatial-intent-not-geometry-authority-or-query-filter' } } : {}),
+        utilityBoxPreset: UTILITY_BOX_PRESET, mode: scene.mode, project, selectedGeometry, availableProjectBoxes, toronto: scene.toronto.map(point => ({ ...point,
         source: 'user-attached-toronto-record-reference', artifactValidation: 'revision-and-metadata-checked',
         recordValidation: 'unverified', mapping: 'unmapped-to-project' })),
       ...(torontoEditing ? { torontoEditing: { points: { sessionId: pointState!.sessionId, revision: pointState!.revision, artifactRevision: pointState!.artifactRevision, overrideCount: pointState!.entries.length,

@@ -1,10 +1,12 @@
 import * as THREE from 'three';
-import { VISUAL_OBSERVATION_LIMITS as LIMITS, type Vec3, type VisualBinding, type VisualCoverage, type VisualObservation, type VisualPixelResolution, type VisualPointProvenance } from '@spatial/contracts';
+import { canonicalModelCaptureRequest, VISUAL_OBSERVATION_LIMITS as LIMITS, type ModelCaptureRequest, type Vec3, type VisualBinding, type VisualCoverage, type VisualObservation, type VisualPixelResolution, type VisualPointProvenance } from '@spatial/contracts';
 
 export interface VisualCaptureOptions {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
+  /** Local-meter orbit focus; read only and never changed by capture. */
+  target?: () => Vec3;
   binding: () => VisualBinding;
   coverage: () => VisualCoverage;
   /** Displayed point layers; blocking scene meshes are included automatically. */
@@ -74,17 +76,44 @@ export function createVisualCapture(options: VisualCaptureOptions) {
     return available() && bundle.generation === generation && state().signature === bundle.signature;
   }
   return {
-    async capture(): Promise<VisualObservation> {
+    async capture(request?: ModelCaptureRequest): Promise<VisualObservation> {
       retained = undefined;
       const ticket = ++serial;
       if (!available()) throw new Error('Visual capture unavailable');
       const before = state(), viewGeneration = generation;
       const { x: width, y: height } = before.size;
       if (![width, height].every(n => Number.isSafeInteger(n) && n > 0 && n <= LIMITS.maxDimension)) throw new Error('Visual viewport exceeds capture limits');
+      const view = canonicalModelCaptureRequest(request ?? { kind: 'current' });
       const frozenCamera = camera.clone();
-      // render + PNG extraction are synchronous: the animation loop cannot replace this frame.
-      renderer.render(scene, camera);
-      const dataUrl = renderer.domElement.toDataURL('image/png');
+      if (view.kind === 'top-down') {
+        // Keep the user's orbit focus, not the dataset/world origin. Without controls,
+        // use a reasonable point ten local meters along the current look direction.
+        const focus = options.target ? new THREE.Vector3(...options.target()) :
+          camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(10).add(camera.position);
+        if (!focus.toArray().every(Number.isFinite)) throw new Error('Invalid capture focus');
+        const distance = Math.max(camera.position.distanceTo(focus), camera.near * 2, 1);
+        frozenCamera.position.copy(focus).add(new THREE.Vector3(0, 0, distance));
+        // Z remains the world's vertical. Looking along -Z needs +Y image-up
+        // rather than a parallel Z-up vector (north-up XY plan view).
+        frozenCamera.up.set(0, 1, 0); frozenCamera.lookAt(focus);
+      } else if (view.kind === 'camera') {
+        frozenCamera.position.set(...view.position);
+        frozenCamera.up.set(...(view.up ?? [0, 0, 1]));
+        const direction = new THREE.Vector3(...view.target).sub(frozenCamera.position);
+        // A vertical look with omitted up uses the same deterministic plan-view up.
+        if (direction.clone().cross(frozenCamera.up).length() < 1e-9) frozenCamera.up.set(0, 1, 0);
+        frozenCamera.lookAt(new THREE.Vector3(...view.target));
+      }
+      frozenCamera.updateMatrixWorld(true);
+      // All rendering/extraction/restoration is synchronous: neither controls nor
+      // the animation loop can observe/mutate a temporary camera or leave its frame.
+      let dataUrl: string;
+      try {
+        renderer.render(scene, frozenCamera);
+        dataUrl = renderer.domElement.toDataURL('image/png');
+      } finally {
+        if (view.kind !== 'current') renderer.render(scene, camera);
+      }
       if (!dataUrl.startsWith('data:image/png;base64,') || dataUrl.length > Math.ceil(LIMITS.maxPngBytes / 3) * 4 + 22) throw new Error('PNG unavailable or exceeds capture limit');
       const binary = atob(dataUrl.slice(22));
       if (binary.length === 0 || binary.length > LIMITS.maxPngBytes) throw new Error('PNG exceeds capture limit');

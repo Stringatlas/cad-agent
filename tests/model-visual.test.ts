@@ -80,7 +80,7 @@ test('actual PNG bytes/hash/CRC/dimensions are validated before dispatch; image 
   const historical = { ...call.visualObservation!, binding: { ...call.visualObservation!.binding, sourceId: 'older-session', sourceRevision: 999, origin: [1, 2, 3] as const } };
   assert.deepEqual(await validateModelVisual({ ...call, visualObservation: historical }, signal()), historical);
 });
-test('image pixel roundtrip is nonce-bound, origin-guarded, one-use, truthful and image turns are not retained', async t => {
+test('image pixel roundtrip is nonce-bound, origin-guarded, one-use, truthful and image turns retain conversation history', async t => {
   const f = await fixture(t); let answer: unknown;
   const e = await readEvents(await f.post(f.call), async event => {
     if (event.kind !== 'tool-request') return;
@@ -103,11 +103,20 @@ test('image pixel roundtrip is nonce-bound, origin-guarded, one-use, truthful an
   for (const inspection of inspections) if (inspection.kind === 'request-inspection') { assert.equal(inspection.inspection.omissions.includes('image-bytes'), true); assert.equal(inspection.inspection.bodyJson.includes('data:image/png'), false); assert.ok(inspection.inspection.bodyJson.includes(f.call.visualObservation!.image.sha256)); assert.ok(inspection.inspection.bodyJson.includes('resolve_visual_pixel')); }
   const context = e.find(v => v.kind === 'tool' && v.name === 'resolve_visual_pixel'); assert.ok(context?.kind === 'tool'); assert.equal((context.context as { recordValidation: string }).recordValidation, 'not-server-verified');
   const done = e.at(-1); assert.ok(done?.kind === 'done');
-  const replay = await readEvents(await f.post({ ...f.call, visualObservation: undefined, conversationId: done.conversationId })); assert.deepEqual(replay.at(-1), { kind: 'error', requestId: f.call.requestId, code: 'stale-conversation' });
+  const replay = await readEvents(await f.post({ ...f.call, text: 'Refer to the previous screenshot', visualObservation: undefined, conversationId: done.conversationId }));
+  assert.equal(replay.at(-1)?.kind, 'done');
+  const retained = JSON.stringify(f.requests.at(-1)!.input);
+  assert.ok(retained.includes(f.call.visualObservation!.image.dataUrl));
+  assert.ok(retained.includes('Ground this pixel'));
+  assert.ok(retained.includes('Refer to the previous screenshot'));
+  assert.equal(JSON.stringify(f.requests.at(-1)!.tools).includes('resolve_visual_pixel'), false);
+  const withAnotherImage = await readEvents(await f.post({ ...f.call, text: 'Another screenshot', conversationId: done.conversationId }));
+  assert.equal(withAnotherImage.at(-1)?.kind, 'done');
+  assert.equal(JSON.stringify(f.requests.at(-1)!.input).split(f.call.visualObservation!.image.dataUrl).length - 1, 2);
 });
-test('no attached image advertises no pixel tool; forged catalog model and image continuation reject explicitly', async t => {
+test('no attached image advertises no pixel tool; forged catalog model and unknown conversation handles reject explicitly', async t => {
   const f = await fixture(t);
-  for (const [change, code] of [[{ model: 'forged-not-in-catalog' }, 'model-unavailable'], [{ conversationId: 'previous-conversation' }, 'image-new-conversation-required']] as const) {
+  for (const [change, code] of [[{ model: 'forged-not-in-catalog' }, 'model-unavailable'], [{ conversationId: 'previous-conversation' }, 'stale-conversation']] as const) {
     const e = await readEvents(await f.post({ ...f.call, ...change })); assert.deepEqual(e.at(-1), { kind: 'error', requestId: f.call.requestId, code });
   }
   assert.equal(f.requests.length, 0);
@@ -147,7 +156,7 @@ test('browser RPC has a bounded timeout and late result is rejected', async t =>
   t.mock.timers.tick(MODEL_VISUAL_LIMITS.toolDeadlineMs + 1); await assert.rejects(pending); assert.equal(broker.waiting, false);
   assert.throws(() => broker.accept({ ...request, result: { status: 'no-hit', observationId: 'o', x: 0, y: 0, reason: 'late' } }));
 });
-test('large screenshots get a dedicated ephemeral budget without increasing text/history limits', async t => {
+test('large screenshots get a dedicated retained image budget without increasing text/history limits', async t => {
   const f = await fixture(t); const bytes = png(256, 256, true), v = f.call.visualObservation!;
   assert.ok(bytes.length > 256 * 1024);
   const call = { ...f.call, visualObservation: { ...v, viewport: { ...v.viewport, width: 256, height: 256 }, image: { ...v.image, dataUrl: `data:image/png;base64,${bytes.toString('base64')}`, sha256: createHash('sha256').update(bytes).digest('hex'), byteLength: bytes.length } } };

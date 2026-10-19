@@ -19,6 +19,13 @@ export class TorontoCadSession {
   private active = false;
   private closed = false;
   private invalid = false;
+  private readonly decisions = new Map<string, 'accepted' | 'declined'>();
+  /** Observational receipts only; pending/invalidation never imply a decision. */
+  proposalDecision(id: string): 'accepted' | 'declined' | undefined { return this.decisions.get(id); }
+  private recordDecision(id: string, decision: 'accepted' | 'declined'): void {
+    this.decisions.set(id, decision);
+    if (this.decisions.size > 256) this.decisions.delete(this.decisions.keys().next().value!);
+  }
   constructor(private readonly directory: string) {}
   private ready(signal?: AbortSignal) { signal?.throwIfAborted(); if (this.closed || this.invalid) throw new TorontoCadError('unavailable'); }
   private binding() { return { sessionId: this.sessionId, revision: this.revision, artifactRevision: this.artifact!.dataset.revision, datasetId: 'toronto3d' as const, frameId: 'toronto3d-local-v1' as const, units: 'm' as const }; }
@@ -93,6 +100,7 @@ export class TorontoCadSession {
         if (!held) throw new TorontoCadError('unknown-proposal');
         if (operation === 'decline') {
           await this.discard([held], signal); await this.artifact.check(signal); this.ready(signal); this.proposals.delete(held.proposalId); this.approvalChecks.delete(held.proposalId);
+          this.recordDecision(held.proposalId, 'declined');
         } else {
           if (this.bodies.size >= TORONTO_CAD_LIMITS.bodies) throw new TorontoCadError('resource-limit');
           await this.approvalChecks.get(held.proposalId)?.(signal);
@@ -105,6 +113,7 @@ export class TorontoCadSession {
           await this.approvalChecks.get(held.proposalId)?.(signal); this.ready(signal);
           const { proposalId: _id, sessionId: _s, revision: _r, artifactRevision: _a, datasetId: _d, frameId: _f, units: _u, ...body } = held;
           this.bodies.set(held.bodyId, body); this.history.push({ transactionId: randomUUID(), bodyId: held.bodyId }); this.proposals.clear(); this.approvalChecks.clear(); this.revision++;
+          this.recordDecision(held.proposalId, 'accepted');
         }
       }
       return this.snapshot();
@@ -116,5 +125,5 @@ export class TorontoCadSession {
       this.invalid = true; throw new TorontoCadError('unavailable');
     } finally { this.active = false; if (this.closed) { await this.artifact?.close(); this.artifact = undefined; } }
   }
-  async close() { this.closed = true; await this.kernel.close(); if (!this.active) { await this.artifact?.close(); this.artifact = undefined; } }
+  async close() { this.closed = true; this.decisions.clear(); await this.kernel.close(); if (!this.active) { await this.artifact?.close(); this.artifact = undefined; } }
 }

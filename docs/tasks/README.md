@@ -4,10 +4,14 @@ Use [TEMPLATE.md](TEMPLATE.md) for bounded work with testable acceptance criteri
 
 ## Index
 
-Latest: [046 — Bounded high-quality point rendering](046-rendering-optimization.md) — default3M native ceiling, binary streaming, dense GPU batches, circular splats and demand rendering.807 tests/typecheck/build and13 actual-cloud browser checks pass; fresh-session review pending.
+Latest: [050 — Agent inspection and approval loop](050-agent-inspection-approval-loop.md) — Requested captures/reference selection, human-decision pause/resume and scene-native review.896 serial tests/typecheck/build and synthetic/Toronto fixture browser loops pass; fresh review and graph coverage pending.
 
 | Task | Status |
 | --- | --- |
+| [050 — Agent inspection and approval loop](050-agent-inspection-approval-loop.md) | Implemented; agent captures/reference selection, exact human-decision continuation and bottom-right review.896 serial tests/typecheck/build and fixture browser loops pass; fresh-session review/graph coverage pending. |
+| [049 — Viewer color modes](049-viewer-color-modes.md) | Implemented; RGB/type toggle, compact key and label-aware manual/adaptive detail.852 tests/typecheck/build pass; browser blocked, fresh-session review pending. |
+| [048 — AI area of interest](048-area-of-interest.md) | Implemented; rotated XY selection, automatic bounded JPEG, artifact-bound model context and Clear.164 targeted tests/typecheck/build/browser fixture checks pass; fresh-session review pending. |
+| [047 — WASD camera flight](047-camera-flight-controls.md) | Implemented; focused W/S flight and A/D strafe in both viewers, time-based motion and safe keyboard lifecycle.833 serial tests/typecheck/build/browser checks pass; fresh-session review pending. |
 | [046 — Bounded high-quality point rendering](046-rendering-optimization.md) | Implemented and browser-tuned;1–3M points/2–6px comparisons,23 draw calls at3M, idle draw suppression, exact picking/capture/error/mobile checks.807 tests/typecheck/build pass; fresh-session review pending. |
 | [045 — Historical scene screenshots](045-historical-scene-screenshots.md) | Implemented; capture-time observations independent of live pixel grounding/current tool authority. Browser/fresh review pending. |
 | [044 — Bounded utility-box placement](044-utility-box-placement.md) | Implemented; exact original-source body/access counts, grounded base and model/native approval integration. Actual78M-point occupancy oracle passes; browser/fresh review pending. |

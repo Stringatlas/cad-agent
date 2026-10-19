@@ -21,6 +21,13 @@ export class PointOverrideSession {
   private artifact?: SemanticArtifact;
   private active = false;
   private closed = false;
+  private readonly decisions = new Map<string, 'accepted' | 'declined'>();
+  /** Observational receipts only; pending/invalidation never imply a decision. */
+  proposalDecision(id: string): 'accepted' | 'declined' | undefined { return this.decisions.get(id); }
+  private recordDecision(id: string, decision: 'accepted' | 'declined'): void {
+    this.decisions.set(id, decision);
+    if (this.decisions.size > 256) this.decisions.delete(this.decisions.keys().next().value!);
+  }
   constructor(private readonly directory: string) {}
 
   private binding(value: { sessionId: string; revision: number }) {
@@ -62,7 +69,8 @@ export class PointOverrideSession {
       if (operation === 'decline') {
         const request = canonicalPointMoveApprovalRequest(value); this.binding(request);
         if (!this.proposals.has(request.proposalId)) throw new PointOverrideError('unknown-proposal');
-        this.ready(signal); this.proposals.delete(request.proposalId); return this.snapshot(artifact);
+        this.ready(signal); this.proposals.delete(request.proposalId);
+        this.recordDecision(request.proposalId, 'declined'); return this.snapshot(artifact);
       }
       if (this.revision >= Number.MAX_SAFE_INTEGER) throw new PointOverrideError('resource-limit');
       if (operation === 'propose') {
@@ -122,8 +130,10 @@ export class PointOverrideSession {
       }
       await artifact.check(signal); this.ready(signal);
       this.entries = next; this.revision++; this.proposals = remaining;
-      if (operation === 'approve') this.history.push({ transactionId: randomUUID(), moves: detached(held.moves) });
-      else this.history.pop();
+      if (operation === 'approve') {
+        this.history.push({ transactionId: randomUUID(), moves: detached(held.moves) });
+        this.recordDecision((request as ReturnType<typeof canonicalPointMoveApprovalRequest>).proposalId, 'accepted');
+      } else this.history.pop();
       return this.snapshot(artifact);
     } catch (error) {
       if (error instanceof PointOverrideError) throw error;
@@ -136,5 +146,5 @@ export class PointOverrideSession {
     }
   }
   private ready(signal?: AbortSignal) { signal?.throwIfAborted(); if (this.closed) throw new PointOverrideError('unavailable'); }
-  async close() { this.closed = true; if (!this.active) { await this.artifact?.close(); this.artifact = undefined; } }
+  async close() { this.closed = true; this.decisions.clear(); if (!this.active) { await this.artifact?.close(); this.artifact = undefined; } }
 }

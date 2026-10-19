@@ -3,7 +3,13 @@
     "allowRead": [
       "/private/var/folders/8p/bsh3sqfj7jz3845t18zr_51c0000gn/T/pi-browser-screenshot-pi-nnpmhna1-a3d9c568-e60d-4f26-928e-b43a9d055912.jpeg",
       "/private/var/folders/8p/bsh3sqfj7jz3845t18zr_51c0000gn/T/pi-browser-screenshot-pi-nnpmhna1-e47f63de-ac5f-4f53-8c69-1709eae63925.jpeg",
-      "/private/var/folders/8p/bsh3sqfj7jz3845t18zr_51c0000gn"
+      "/private/var/folders/8p/bsh3sqfj7jz3845t18zr_51c0000gn/",
+      "/private/var/folders/"
+    ],
+    "allowWrite": [
+      "/private/var/folders/8p/bsh3sqfj7jz3845t18zr_51c0000gn/T/task047-browser.cjs",
+      "/private/var/folders/8p/bsh3sqfj7jz3845t18zr_51c0000gn/T/task047-browser-extra.cjs",
+      "/private/var/folders/8p/bsh3sqfj7jz3845t18zr_51c0000gn/T/task048-handoff.md"
     ]
   }
 }

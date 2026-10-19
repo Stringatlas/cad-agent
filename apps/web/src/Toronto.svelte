@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount, untrack } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
+  import ApprovalReview, { type ApprovalReviewItem } from './ApprovalReview.svelte';
   import TorontoCad from './TorontoCad.svelte';
   import PointEdits from './PointEdits.svelte';
   import { TorontoCadController, type TorontoCadView } from './toronto-cad-client';
@@ -7,19 +8,22 @@
   import { createCropChannel } from './crop-client';
   import { cropFeedback, describeCropSelection, nextCropPhase, type CropPhase } from './crop-feedback';
   import { createTorontoViewer } from './toronto-viewer';
+  import { POINT_TYPE_KEY, UNKNOWN_POINT_COLOR, type PointColorMode } from './point-colors';
+  let colorMode = $state<PointColorMode>('rgb');
   import VisualObservationPanel from './VisualObservationPanel.svelte';
   import type { VisualModelSource } from './visual-model-source';
+  import type { AreaOfInterestInput } from './area-of-interest';
+  import { compressScreenshot } from './screenshot-crop';
   import { createObservationChannel } from './observation-client';
   import { createDraftPointGate, type TorontoDraftPoint, type PointName } from './draft-context';
   import type { PoleSelection } from './pole-picking';
   import { effectivePosition } from './point-override-client';
   import { representativeStreetChunk } from './street-chunk';
-  import { fetchPreprocessing, type PreprocessingSummary } from './preprocessing-overlays';
-  import PreprocessingLegend from './PreprocessingLegend.svelte';
   import { observedPointLabel } from './point-presentation';
   import { DEFAULT_ADAPTIVE_SETTINGS, type AdaptiveStats } from './adaptive-display';
 
-  let { points = [], pointOverrides, pointPreview, pointRefresh = 0, onpointstate = () => {}, cadRefresh = 0, modelStreaming = false, oncadblocked = () => {}, onrevision = () => {}, allocatePointName, onpoint, onpoints = () => {}, onvisualsource = () => {} }: {
+  let { onarea = () => {}, points = [], pointOverrides, pointPreview, pointRefresh = 0, onpointstate = () => {}, cadRefresh = 0, modelStreaming = false, oncadblocked = () => {}, onrevision = () => {}, allocatePointName, onpoint, onpoints = () => {}, onvisualsource = () => {} }: {
+    onarea?: (input?: AreaOfInterestInput) => void;
     cadRefresh?: number; modelStreaming?: boolean; oncadblocked?: (blocked: boolean) => void;
     pointRefresh?: number; onpointstate?: (snapshot?: PointOverrideSnapshot, proposal?: PointMoveProposal, blocked?: boolean) => void;
     pointOverrides?: PointOverrideSnapshot; pointPreview?: PointMoveProposal; onrevision?: (revision: string) => void;
@@ -30,10 +34,31 @@
   const draftGate = createDraftPointGate();
   let cadView = $state<TorontoCadView>({ busy: false, needsRefresh: true, status: 'Waiting for Toronto artifact…' });
   const cadController = new TorontoCadController(value => { cadView = value; oncadblocked(value.busy || value.needsRefresh); });
-  let cadArtifact: string | undefined;
+  let cadArtifact = $state<string>();
   let cadToolsOpen = $state(false);
   let pointToolsHost = $state<HTMLElement>();
-  $effect(() => { if (cadView.snapshot?.proposals.length) cadToolsOpen = true; });
+  let pointEditor: PointEdits | undefined;
+  let pointReviewItems = $state<readonly ApprovalReviewItem[]>([]);
+  const cadReviewItems = $derived<ApprovalReviewItem[]>((cadView.snapshot?.proposals ?? []).map(proposal => ({
+    id: proposal.proposalId,
+    title: proposal.operation.kind === 'box' ? 'Create box' : 'Create cylinder',
+    summary: proposal.operation.kind === 'box' ? `Size ${proposal.operation.dimensions.join(' × ')} m` : `Radius ${proposal.operation.radius} m · height ${proposal.operation.height} m`,
+    details: `Toronto local meters · Z-up · revision ${proposal.revision}\nCenter [${proposal.operation.center.join(', ')}] m\nOpenCascade valid single solid\nMeasured volume ${proposal.validation.volume} m³\nBounds [${proposal.validation.bounds.min.join(', ')}] → [${proposal.validation.bounds.max.join(', ')}] m\nProposal ${proposal.proposalId}`,
+    disabled: cadView.busy || cadView.needsRefresh,
+    testId: 'toronto-cad-proposal', acceptTestId: 'toronto-cad-accept', declineTestId: 'toronto-cad-decline',
+    onaccept: () => cadController.approve(proposal.proposalId),
+    ondecline: () => cadController.decline(proposal.proposalId),
+  })));
+  const reviewItems = $derived([...pointReviewItems, ...cadReviewItems]);
+  export async function refreshAgentAuthorities(): Promise<void> {
+    await tick();
+    const deadline = Date.now() + 35_000;
+    while (cadView.busy && alive && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+    if (!alive || !cadArtifact || !pointEditor || cadView.busy) throw new Error('Toronto authority unavailable or busy. Retry Refresh.');
+    await Promise.all([cadController.refresh(), pointEditor.refreshAuthority()]);
+    await tick();
+    if (!alive || cadView.needsRefresh) throw new Error(cadView.status);
+  }
   $effect(() => { const token = cadRefresh; untrack(() => { if (token && cadArtifact && !cadView.needsRefresh) void cadController.refresh(); }); });
   $effect(() => { if (mounted) viewer?.setCad(cadView.snapshot ? $state.snapshot(cadView.snapshot) : undefined); });
   let mounted = $state(false);
@@ -98,31 +123,6 @@
   });
   let cropRequest = 0, boxInitialized = false;
   let streetRevision: string | undefined;
-  let overlaysVisible = $state(false), overlayLoading = $state(false);
-  let overlaySummary = $state<PreprocessingSummary>();
-  let overlayStatus = $state('');
-  let overlayController: AbortController | undefined;
-  function hidePreprocessing() {
-    overlayController?.abort(); overlayController = undefined;
-    overlaysVisible = false; overlayLoading = false; overlaySummary = undefined; viewer?.setPreprocessing();
-    overlayStatus = '';
-  }
-  async function showPreprocessing() {
-    if (!display || viewerError) return;
-    hidePreprocessing(); overlaysVisible = true; overlayLoading = true;
-    overlayStatus = 'Loading layers…';
-    const revision = display.dataset.revision;
-    const controller = new AbortController(); overlayController = controller;
-    try {
-      const summary = await fetchPreprocessing(revision, controller.signal, currentBox());
-      if (!alive || controller.signal.aborted || display?.dataset.revision !== revision) return;
-      viewer?.setPreprocessing(summary); overlaySummary = summary;
-      overlayStatus = summary.status === 'ready' ? ''
-        : summary.status === 'empty' ? 'No layers in this area.' : 'Layers unavailable. Prepare scene data, then retry.';
-    } catch {
-      if (alive && !controller.signal.aborted) overlayStatus = 'Couldn’t load layers. Try again.';
-    } finally { if (overlayController === controller) overlayLoading = false; }
-  }
   function focusStreet() {
     if (!display) return;
     const box = representativeStreetChunk(display); if (!box) return;
@@ -138,12 +138,12 @@
       if (!display || event.dataset.revision !== display.dataset.revision) throw new Error('Artifact changed; reload display before selecting detail');
       cropRevision = event.dataset.revision;
     } else if (event.type === 'batch') {
-      viewer?.appendCrop(event.positions, event.colors, event.sourceIds, cropRevision); crop = event.stats;
+      viewer?.appendCrop(event.positions, event.colors, event.sourceIds, cropRevision, event.labels); crop = event.stats;
       await new Promise<void>(resolve => setTimeout(resolve, 0));
     } else if (event.type === 'end') { crop = event.stats; }
   });
   const displayChannel = createObservationChannel('display', sample => {
-    if (draftGate.bind(sample.dataset.revision)) { onpoints([]); clearCrop(); hidePreprocessing(); }
+    if (draftGate.bind(sample.dataset.revision)) { onpoints([]); clearCrop(); clearArea(); }
     viewer?.update(sample); display = sample; onrevision(sample.dataset.revision);
     if (cadArtifact !== sample.dataset.revision) { cadArtifact = sample.dataset.revision; cadController.bind(cadArtifact); void cadController.refresh(); }
     viewer?.setPointOverrides(sceneSnapshot ? $state.snapshot(sceneSnapshot) : undefined); viewer?.setPointMovePreview($state.snapshot(sceneProposals));
@@ -183,10 +183,34 @@
   }
   async function loadCrop() { changeBox(); try { await loadSelection(currentBox()); } catch (error) { cropPhase = nextCropPhase(cropPhase, 'fail'); cropStatus = String(error); } }
   function retryCrop() { if (projected) void loadSelection(projected); else void loadCrop(); }
-  function selectWindow(selection: CropSelection) {
-    if (!feedback.canLoad) return;
-    projected = selection; viewer?.setBox();
-    void loadSelection(selection);
+  let areaInput = $state<AreaOfInterestInput>();
+  let areaError = $state('');
+  let areaTicket = 0;
+  function clearArea() {
+    areaTicket++; areaInput = undefined; areaError = ''; viewer?.setArea(); onarea(undefined);
+  }
+  async function selectArea(corners?: readonly [Vec3, Vec3, Vec3, Vec3], error?: string) {
+    if (error) { areaError = error; return; }
+    if (!corners || !display || !viewer) return;
+    clearArea(); const ticket = areaTicket, source = viewer;
+    const current = () => alive && ticket === areaTicket;
+    const area = { datasetId: 'toronto3d' as const, artifactRevision: display.dataset.revision,
+      frameId: 'toronto3d-local-v1' as const, units: 'm' as const, localOrigin: [627285, 4841948, 0] as const, corners };
+    viewer.setBox(); viewer.setArea(corners);
+    areaInput = { area, clear: clearArea, pending: true }; onarea(areaInput);
+    try {
+      const capture = await source.capture();
+      if (!current()) return;
+      const image = await compressScreenshot(capture, { x: 0, y: 0, width: capture.viewport.width, height: capture.viewport.height }, current);
+      if (!current()) return;
+      areaInput = { area, clear: clearArea, pending: false, attachment: { observation: image,
+        isCurrent: () => source.isCaptureCurrent(capture.observationId), resolvePixel: (id, x, y) => source.resolvePixel(id, x, y) } };
+      onarea(areaInput);
+    } catch (error) {
+      if (!current()) return;
+      areaError = `Snapshot unavailable: ${error instanceof Error ? error.message : 'Capture failed'}. Select again or Clear.`;
+      areaInput = { area, clear: clearArea, pending: false, error: areaError }; onarea(areaInput);
+    }
   }
   function viewerFailure(message: string) {
     cropRequest++; cropChannel.cancel(); cropPhase = nextCropPhase(cropPhase, 'fail');
@@ -226,14 +250,14 @@
   }
   onMount(() => {
     try {
-      viewer = createTorontoViewer(host, placeBox, selectWindow, viewerFailure, pinPoint, stats => { adaptiveStats = stats; });
+      viewer = createTorontoViewer(host, placeBox, undefined, viewerFailure, pinPoint, stats => { adaptiveStats = stats; }, (corners, error) => { void selectArea(corners, error); }, () => { boxInitialized = true; });
       tuneDisplay(); mounted = true;
       const current = viewer;
-      onvisualsource({ capture: () => current.capture(), isCurrent: id => current.isCaptureCurrent(id), resolvePixel: (id, x, y) => current.resolvePixel(id, x, y) });
+      onvisualsource({ capture: request => current.capture(request), isCurrent: id => current.isCaptureCurrent(id), resolvePixel: (id, x, y) => current.resolvePixel(id, x, y) });
       void loadDisplay(); void loadHarness();
     }
     catch (error) { viewerError = String(error); }
-    return () => { alive = false; mounted = false; overlayController?.abort(); onvisualsource(undefined); draftGate.dispose(); cadController.dispose(); onpoints([]); displayChannel.dispose(); harnessChannel.dispose(); cropChannel.dispose(); viewer?.dispose(); };
+    return () => { alive = false; mounted = false; clearArea(); onvisualsource(undefined); draftGate.dispose(); cadController.dispose(); onpoints([]); displayChannel.dispose(); harnessChannel.dispose(); cropChannel.dispose(); viewer?.dispose(); };
   });
 </script>
 
@@ -241,17 +265,35 @@
   <div class="workspace">
     <section class="scene-panel">
       <div class="toolbar"><span>Toronto3D</span><button data-testid="focus-street" disabled={!display || cropPhase === 'loading'} onclick={focusStreet}>Street chunk</button>
-        <button data-testid="toggle-preprocessing" aria-label={overlaysVisible ? 'Hide derived preprocessing overlays' : 'Show derived preprocessing overlays'} aria-pressed={overlaysVisible} disabled={!display || !!viewerError} onclick={() => overlaysVisible ? hidePreprocessing() : void showPreprocessing()} title="Show or hide scene layers">
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/>{#if !overlaysVisible}<path d="m3 3 18 18" stroke="currentColor" stroke-width="1.6"/>{/if}</svg>
-        </button>
+        <select class="color-mode" data-testid="point-color-mode" aria-label="Point colors" bind:value={colorMode} disabled={!display || !!viewerError} onchange={event => { colorMode = event.currentTarget.value as PointColorMode; viewer?.setColorMode(colorMode); }}>
+          <option value="rgb">Natural RGB</option><option value="type">Point types</option>
+        </select>
+        {#if colorMode === 'type'}
+          <details class="color-key" data-testid="point-type-key">
+            <summary>Key</summary>
+            <ul aria-label="Point type color key">
+              {#each [...POINT_TYPE_KEY, { label: -1, name: 'Unknown', color: UNKNOWN_POINT_COLOR }] as entry}
+                <li><span style:background={entry.color} aria-hidden="true"></span>{entry.name}</li>
+              {/each}
+            </ul>
+          </details>
+        {/if}
       </div>
-      {#if overlaysVisible}<div class="preprocessing-feedback"><PreprocessingLegend summary={overlaySummary} loading={overlayLoading} status={overlayStatus} refresh={showPreprocessing} /></div>{/if}
+      {#if areaInput}<div class="area-selection" data-testid="area-of-interest" role="status"><span>Area of interest · All heights{areaInput.pending ? ' · Capturing…' : ''}</span><button type="button" data-testid="clear-area" onclick={clearArea}>Clear</button></div>{/if}
+      {#if areaError}<p class="area-error" role="alert">{areaError}</p>{/if}
       <div class="viewport" data-testid="toronto-viewer" bind:this={host}></div>
       {#if viewerError}<p role="alert">Viewer unavailable: {viewerError}</p>{/if}
       {#if adaptiveEnabled && adaptiveStats.error && !viewerError}<div class="scene-feedback" role="status"><p class="crop-summary">Detail unavailable. <button data-testid="quick-retry-display" onclick={() => viewer?.retryAdaptive()}>Retry</button></p></div>{/if}
       <div class="point-confirmation" data-testid="scene-point-confirmation">
-        <PointEdits {points} toolsHost={pointToolsHost} artifactRevision={display?.dataset.revision} refreshToken={pointRefresh} streaming={modelStreaming} onselect={selection => pinPoint(selection)} onstate={(snapshot, proposal, blocked, proposals) => { retainedSnapshot = snapshot; retainedProposals = proposals ?? []; onpointstate(snapshot, proposal, blocked); }} />
+        <PointEdits {points} toolsHost={pointToolsHost} artifactRevision={display?.dataset.revision} refreshToken={pointRefresh} streaming={modelStreaming} bind:this={pointEditor} onreview={items => pointReviewItems = items} onselect={selection => pinPoint(selection)} onstate={(snapshot, proposal, blocked, proposals) => { retainedSnapshot = snapshot; retainedProposals = proposals ?? []; onpointstate(snapshot, proposal, blocked); }} />
+        {#if cadArtifact && (cadView.needsRefresh || /^(Error|TypeError|RangeError|CadError):/.test(cadView.status))}
+          <section class="cad-recovery" aria-label="Toronto CAD recovery">
+            <p role="alert">{cadView.status}</p>
+            <button data-testid="toronto-cad-recover" disabled={cadView.busy} onclick={() => void cadController.refresh()}>Refresh CAD authority</button>
+          </section>
+        {/if}
       </div>
+      <ApprovalReview items={reviewItems} />
       <div class="scene-feedback" hidden={cropPhase === 'idle' || cropPhase === 'complete'}>
         <p class="crop-summary" data-testid="crop-summary" aria-live="polite">{cropStatus}</p>
         {#if cropPhase === 'loading'}<div class="inline-crop-actions"><button data-testid="quick-cancel-crop" onclick={cancelCrop}>Cancel detail loading</button><span>{feedback.count}</span></div>
@@ -262,9 +304,9 @@
       <details class="technical" data-testid="toronto-technical" bind:open={cadToolsOpen}><summary>Scene tools</summary>
       <div class="tools-content">
       <div bind:this={pointToolsHost}></div>
-      <details class="tool-section" open data-testid="toronto-cad-tools"><summary>CAD solids &amp; pending changes</summary><TorontoCad view={cadView} controller={cadController} streaming={modelStreaming} /></details>
+      <details class="tool-section" open data-testid="toronto-cad-tools"><summary>CAD tools</summary><TorontoCad view={cadView} controller={cadController} streaming={modelStreaming} /></details>
       <details class="tool-section"><summary>Navigation &amp; points</summary>
-        <p class="note">Drag to orbit · Scroll to zoom · Shift-drag for full-resolution detail. Cmd/Ctrl-click to pin a numbered point; remove individual points in Scene references.</p>
+        <p class="note">Click or Tab into the scene, then hold W/S to fly forward/back and A/D to strafe. Drag to orbit · Scroll to zoom · Shift-drag to select an AI area of interest and snapshot. Cmd/Ctrl-click to pin a numbered point; remove individual points in Scene references.</p>
         <p class="note">Toronto local frame · meters · Z-up.</p>
         <button onclick={() => viewer?.frameDataset()}>Frame dataset</button>
         <button data-testid="clear-toronto-pins" disabled={!points.length} onclick={() => onpoints([])}>Clear points</button>
@@ -286,7 +328,7 @@
       <button onclick={loadDisplay}>Reload display</button>
       </details><details class="tool-section"><summary>Full-resolution selection &amp; crop</summary>
       <h2>Full-resolution display selection</h2>
-      <p class="note">Shift-click-drag a screen window to load every point through its camera volume automatically. Depth: camera near/far clipped to dataset extent, not just visible surfaces. Plain drag still orbits. Tiny Shift-click places the yellow axis-aligned box instead. Harness input is unchanged.</p>
+      <p class="note">Shift-drag selects an XY area of interest for chat and automatically attaches a scene snapshot. The rectangle follows the view orientation at the orbit target’s elevation, not terrain; all elevations are in scope. Send shares it with the model. Clear removes both. Tiny Shift-click places the box below. Full-resolution loading is manual.</p>
       <p data-testid="selection-info" class="note">{selectionInfo}</p>
       {#if projected}<p data-testid="projected-selection" class="note">Orbit does not change this selection. Edit box fields to return to box selection.</p><button data-testid="reload-window" disabled={cropPhase === 'loading' || !!viewerError} onclick={() => { if (projected) void loadSelection(projected); }}>Reload projected window</button>{/if}
       <div class="box-fields">
@@ -335,11 +377,20 @@
   :global(canvas) { display: block; touch-action: none; }
   .toolbar { position: absolute; z-index: 1; top: 16px; left: 16px; display: flex; align-items: center; gap: 10px; padding: 5px 10px; border: 1px solid #ffffff12; border-radius: 12px; background: #202124ed; font-size: 12px; }
   .toolbar > span { font-weight: 550; }
-  .toolbar button[aria-pressed="true"] { color: #d2bfff; background: #bca2ff22; }
-  .preprocessing-feedback { position: absolute; z-index: 1; top: 68px; left: 16px; max-width: min(360px, calc(100% - 32px)); }
-  .point-confirmation { position: absolute; right: 16px; bottom: 16px; z-index: 12; width: min(340px, calc(100% - 32px)); max-height: min(60%, 560px); overflow-y: auto; overscroll-behavior: contain; }
+  .toolbar .color-mode { width: auto; margin: 0; padding: 7px 5px; }
+  .color-key summary { padding: 8px 0; }
+  .color-key ul { position: absolute; top: calc(100% + 8px); left: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 9px 14px; list-style: none; margin: 0; padding: 12px; border: 1px solid #ffffff24; border-radius: 10px; background: #202124f5; width: 240px; box-shadow: 0 8px 24px #0004; }
+  .color-key li { display: flex; align-items: center; gap: 7px; font-size: 11px; }
+  .color-key li span { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+  .point-confirmation { position: absolute; right: 16px; top: 72px; z-index: 12; width: min(340px, calc(100% - 32px)); max-height: 25%; overflow-y: auto; overscroll-behavior: contain; }
+  .cad-recovery { margin-top: 8px; padding: 12px; border: 1px solid #ffffff20; border-radius: 14px; background: #202124f5; }
+  .cad-recovery [role="alert"] { position: static; padding: 0; margin: 0 0 8px; border: 0; background: none; max-height: none; color: #ffd187; }
+  .cad-recovery button { margin: 0; }
   .toolbar button { background: transparent; border-color: transparent; color: #a8caff; padding: 6px; }
   .scene-feedback { position: absolute; z-index: 1; left: 16px; bottom: 16px; max-width: min(520px, calc(100% - 32px)); max-height: 25%; overflow-y: auto; border: 1px solid #ffffff12; border-radius: 10px; background: #202124ed; }
+  .area-selection { position: absolute; z-index: 2; top: 72px; left: 16px; background: #202124ed; border: 1px solid #8be6d444; border-radius: 10px; display: flex; align-items: center; gap: 14px; padding: 7px 12px; font-size: 12px; color: #8be6d4; }
+  .area-selection button { margin-left: auto; }
+  .scene-panel .area-error { position: absolute; z-index: 2; left: 16px; top: 140px; max-width: calc(100% - 32px); border-radius: 8px; background: #202124ed; font-size: 12px; padding: 0 12px; color: #ffd1a3; }
   .crop-summary { font-size: 11px; color: #b9bac1; padding: 9px 12px; margin: 0; overflow-wrap: anywhere; }
   .inline-crop-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 0 12px 8px; font-size: 11px; color: #b9bac1; }
   aside { position: absolute; z-index: 2; top: 16px; right: 16px; max-width: calc(100% - 32px); }
@@ -364,6 +415,6 @@
   dt, .note { font-size: 11px; color: #a8a9b0; line-height: 1.5; } dd { margin: 0 0 8px; font-size: 11px; overflow-wrap: anywhere; } p { font-size: 12px; overflow-wrap: anywhere; }
   a { color: #a8caff; }
   [role="alert"] { position: absolute; z-index: 1; left: 16px; right: 16px; top: 64px; max-height: 25%; overflow-y: auto; margin: 0; color: #ffb2aa; background: #202124f5; border: 1px solid #ffb2aa44; border-radius: 10px; padding: 10px 14px; overflow-wrap: anywhere; }
-  @media (max-width: 600px) { .toolbar { top: 12px; left: 12px; gap: 4px; padding: 5px 8px; } .toolbar button { font-size: 11px; } aside { top: 12px; right: 12px; max-width: calc(100% - 24px); } .scene-feedback { left: 12px; bottom: 12px; max-width: calc(100% - 24px); } }
+  @media (max-width: 600px) { .toolbar > span { display: none; } .toolbar { top: 12px; left: 12px; gap: 4px; padding: 5px 8px; flex-wrap: wrap; max-width: calc(100% - 150px); } .toolbar .color-mode { font-size: 11px; } .area-selection { top: 120px; left: 12px; right: 12px; } .scene-panel .area-error { top: 180px; } .toolbar button { font-size: 11px; } aside { top: 12px; right: 12px; max-width: calc(100% - 24px); } .scene-feedback { left: 12px; bottom: 12px; max-width: calc(100% - 24px); } }
 
 </style>

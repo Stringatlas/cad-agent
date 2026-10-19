@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import type { ProjectState, ScenePointReference, BoxProposal } from '@spatial/contracts';
+import type { ProjectState, ScenePointReference, BoxProposal, ModelCaptureRequest } from '@spatial/contracts';
 import { createEntityObject, highlight, resolvePickedEntityId } from './entities';
 import { createVisualCapture } from './visual-capture';
+import { createViewportSizer } from './viewport-size';
 import { updateStableOrbitControls } from './orbit-stability';
+import { createCameraFlight } from './camera-flight';
 import { createBoxGhost } from './proposal-ghosts';
 
 export function createViewer(host: HTMLElement, initial: ProjectState, onSelect: (id: string | null) => void,
@@ -46,7 +48,7 @@ export function createViewer(host: HTMLElement, initial: ProjectState, onSelect:
   }
   const raycaster = new THREE.Raycaster();
   raycaster.params.Points.threshold = 0.12;
-  const visual = createVisualCapture({ renderer, scene, camera,
+  const visual = createVisualCapture({ renderer, scene, camera, target: () => controls.target.toArray() as [number, number, number],
     binding: () => ({ sourceId: binding?.sessionId ?? 'synthetic-preview', sourceRevision: state.revision,
       frameId: binding?.frameId ?? 'synthetic-local', units: 'm', origin: state.coordinates.localOrigin }),
     coverage: () => ({ kind: 'synthetic-project-display', complete: true,
@@ -61,10 +63,13 @@ export function createViewer(host: HTMLElement, initial: ProjectState, onSelect:
       return position ? { entityId: id!, pointIndex: index, position, geometryRevision: state.revision,
         sessionId: binding?.sessionId ?? 'synthetic-preview', frameId: binding?.frameId ?? 'synthetic-local', units: 'm' } : undefined;
     },
-    available: () => !disposed && !contextLost && !renderUnavailable && host.dataset.ready === 'true',
+    available: () => !disposed && !contextLost && !renderUnavailable && host.dataset.ready === 'true' && viewport.sync(),
   });
+  const viewport = createViewportSizer(host, renderer, camera, () => visual.invalidate());
   const viewChanged = () => visual.invalidate();
   controls.addEventListener('change', viewChanged);
+  const flight = createCameraFlight(renderer.domElement, camera, controls, 15, () => visual.invalidate(),
+    () => !disposed && !contextLost && !renderUnavailable);
   let down: [number, number] | null = null;
   const pointerDown = (event: PointerEvent) => { down = [event.clientX, event.clientY]; };
   const pointerUp = (event: PointerEvent) => {
@@ -85,19 +90,13 @@ export function createViewer(host: HTMLElement, initial: ProjectState, onSelect:
   };
   renderer.domElement.addEventListener('pointerdown', pointerDown);
   renderer.domElement.addEventListener('pointerup', pointerUp);
-  const resize = new ResizeObserver(() => {
-    const { width, height } = host.getBoundingClientRect();
-    if (width <= 0 || height <= 0) return;
-    visual.invalidate();
-    renderer.setSize(width, height);
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
-  });
+  const resize = new ResizeObserver(() => { viewport.sync(); });
+  viewport.sync(); // The first render/capture must not wait for observer delivery.
   resize.observe(host);
   let frame = 0, contextLost = false, disposed = false, renderUnavailable = false;
   host.dataset.ready = 'false';
   function reportRenderError(cause: unknown) {
-    visual.invalidate();
+    flight.reset(); visual.invalidate();
     cancelAnimationFrame(frame); renderUnavailable = true; host.dataset.ready = 'false';
     host.dataset.renderError = String(cause); onRenderError?.(cause);
   }
@@ -117,6 +116,7 @@ export function createViewer(host: HTMLElement, initial: ProjectState, onSelect:
     if (disposed || contextLost) return;
     frame = requestAnimationFrame(animate);
     updateStableOrbitControls(camera, controls);
+    flight.update();
     try {
       renderer.render(scene, camera); host.dataset.ready = 'true';
       if (renderUnavailable) { renderUnavailable = false; delete host.dataset.renderError; onRenderRecovered?.(); }
@@ -128,6 +128,8 @@ export function createViewer(host: HTMLElement, initial: ProjectState, onSelect:
         const point = new THREE.Vector3(...(entity.kind === 'box' ? entity.center : entity.points[0]!)).project(camera);
         return { id: entity.id, x: (point.x + 1) * host.clientWidth / 2, y: (1 - point.y) * host.clientHeight / 2 };
       });
+      host.dataset.camera = JSON.stringify(camera.position.toArray());
+      host.dataset.cameraTarget = JSON.stringify(controls.target.toArray());
       host.dataset.targets = JSON.stringify(targets);
       host.dataset.pointTargets = JSON.stringify(state.entities.flatMap(entity => entity.kind === 'point-cloud' ? entity.points.slice(0, 8).map((position, pointIndex) => {
         const point = new THREE.Vector3(...position).project(camera);
@@ -143,12 +145,14 @@ export function createViewer(host: HTMLElement, initial: ProjectState, onSelect:
   }
   animate();
   return {
-    capture: () => {
-      // Finish residual damping before freezing the view; it otherwise moves after the click.
-      const damping = controls.enableDamping;
-      controls.enableDamping = false; controls.update(); controls.enableDamping = damping;
-      // Never ground pending ghost pixels as committed/project geometry.
-      return visual.capture();
+    capture: (request?: ModelCaptureRequest) => {
+      // Preserve the existing manual screenshot/crop stabilization. Model requests
+      // never update controls or navigate the user's live viewport.
+      if (!request) {
+        const damping = controls.enableDamping;
+        controls.enableDamping = false; controls.update(); controls.enableDamping = damping;
+      }
+      return visual.capture(request);
     },
     isCaptureCurrent: (id: string) => visual.isCurrent(id),
     resolvePixel: (id: string, x: number, y: number) => visual.resolvePixel(id, x, y),
@@ -177,7 +181,7 @@ export function createViewer(host: HTMLElement, initial: ProjectState, onSelect:
       for (const candidate of [...(proposal ? [proposal] : []), ...modelProposals]) overlays.add(...createBoxGhost(candidate));
     },
     dispose() {
-      visual.dispose(); controls.removeEventListener('change', viewChanged);
+      flight.dispose(); visual.dispose(); controls.removeEventListener('change', viewChanged);
       disposed = true; host.dataset.ready = 'false';
       cancelAnimationFrame(frame); clearOverlays();
       resize.disconnect();

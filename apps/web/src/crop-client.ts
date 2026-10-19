@@ -11,7 +11,7 @@ export const fetchCrop: CropLoader = async (selection, signal, publish) => {
   if (!response.body) throw new Error('Missing full-resolution stream');
   const reader = response.body.getReader(), decoder = new TextDecoder();
   let buffer = '', started = false, ended = false, sequence = 0, count = 0;
-  let previous: CropStats | undefined, provenance: boolean | undefined;
+  let previous: CropStats | undefined, provenance: boolean | undefined, semanticLabels: boolean | undefined;
   const statsValid = (stats: CropStats) => stats && ['count', 'bytesRead', 'scannedPoints', 'hierarchyRecords', 'hierarchyChunks', 'payloadNodes', 'maxDepth'].every(key => {
     const k = key as keyof CropStats;
     return Number.isSafeInteger(stats[k]) && stats[k] >= 0 && (!previous || stats[k] >= previous[k]);
@@ -36,6 +36,10 @@ export const fetchCrop: CropLoader = async (selection, signal, publish) => {
       if (provenance === undefined) provenance = hasSourceIds;
       if (hasSourceIds !== provenance || (hasSourceIds && (!Array.isArray(event.sourceIds) || event.sourceIds.length !== event.positions.length / 3 * 2 ||
           !event.sourceIds.every((n, i) => Number.isSafeInteger(n) && n >= (i % 2 ? 0 : 1) && n <= (i % 2 ? 0xffffffff : 4))))) throw new Error('Invalid/missing full-resolution provenance');
+      const hasLabels = event.labels !== undefined;
+      if (semanticLabels === undefined) semanticLabels = hasLabels;
+      if (hasLabels !== semanticLabels || (hasLabels && (!Array.isArray(event.labels) || event.labels.length !== event.positions.length / 3 ||
+          !event.labels.every(n => Number.isInteger(n) && n >= 0 && n <= 8)))) throw new Error('Invalid/missing full-resolution labels');
       for (let i = 0; i < event.positions.length; i += 3) if (!containsCropPoint(selection, event.positions.slice(i, i + 3))) throw new Error('Point outside selected volume');
       count += event.positions.length / 3;
       if (!statsValid(event.stats)) throw new Error('Invalid full-resolution progress');

@@ -1,6 +1,7 @@
 import { canonicalPoleRequest, canonicalPointMoveProposalRequest, POINT_OVERRIDE_LIMITS, type NearestPoleRequest, type NearestPoleToolOutcome, type PointKey, type PointMoveProposal, type PointOverrideSnapshot, type Vec3 } from '@spatial/contracts';
 import type { TorontoDraftPoint } from './draft-context';
 import { validatePoleResult } from './pole-client';
+import { torontoReadonlyFetch } from './toronto-readonly-fetch';
 
 export const pointKey = (key: PointKey) => `${key.sourceFileId}:${key.sourceRow}`;
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -74,7 +75,7 @@ export const overrideTransport: OverrideTransport = async (action, body, signal)
   const abort = () => controller.abort(); signal?.addEventListener('abort', abort, { once: true });
   if (signal?.aborted) controller.abort();
   try {
-    const response = await fetch(`/datasets/toronto3d/overrides${action === 'refresh' ? '' : `/${action}`}`, { method: action === 'refresh' || action === 'pending' ? 'GET' : 'POST', headers: body ? { 'Content-Type': 'application/json' } : {}, ...(body ? { body: JSON.stringify(body) } : {}), signal: controller.signal });
+    const response = await torontoReadonlyFetch(`/datasets/toronto3d/overrides${action === 'refresh' ? '' : `/${action}`}`, { method: action === 'refresh' || action === 'pending' ? 'GET' : 'POST', headers: body ? { 'Content-Type': 'application/json' } : {}, ...(body ? { body: JSON.stringify(body) } : {}), signal: controller.signal });
     if (!response.headers.get('content-type')?.startsWith('application/json')) throw new Error('Invalid override response');
     const text = await response.text(); if (text.length > 4_000_000) throw new Error('Oversized override response');
     const reply = JSON.parse(text);

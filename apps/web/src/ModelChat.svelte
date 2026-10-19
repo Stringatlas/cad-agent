@@ -1,20 +1,25 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
-  import { MODEL_VISUAL_LIMITS, modelVisualImageSize, type ModelScene, type ModelVisualObservation, type VisualObservation } from '@spatial/contracts';
+  import { MODEL_VISUAL_LIMITS, modelVisualImageSize, type ModelCaptureRequest, type ModelReferenceSelection, type ModelScene, type ModelVisualObservation, type VisualObservation } from '@spatial/contracts';
   import ScreenshotCrop from './ScreenshotCrop.svelte';
+  import { compressScreenshot } from './screenshot-crop';
   import { placementWitnesses } from './utility-box-evidence';
   import { semanticName } from './point-presentation';
   import SafeMarkdown from './SafeMarkdown.svelte';
   import { ModelChatController, MODEL_CLIENT_LIMITS, modelFailureDescription, type ModelChatView, type VisualModelAttachment } from './model-chat-client';
+  import type { AreaOfInterestInput } from './area-of-interest';
   import type { VisualModelSource } from './visual-model-source';
   import type { TorontoDraftPoint } from './draft-context';
   import { canonicalPoleRequest } from '@spatial/contracts';
   import { validatePoleResult } from './pole-client';
-  let { scene, visualSource, points = [], onverifiedresult = () => {}, onauthorityproposal = () => {}, onproposal = () => {}, oninvalidateproposals = () => {}, onstreamingchange = () => {}, proposalsBlocked = false }: {
+  let { areaInput, scene, visualSource, points = [], onverifiedresult = () => {}, onauthorityproposal = () => {}, onproposal = () => {}, oninvalidateproposals = () => {}, onstreamingchange = () => {}, onselectreference, onauthorityrefresh, proposalsBlocked = false }: {
+    areaInput?: AreaOfInterestInput;
     scene: ModelScene; visualSource?: VisualModelSource; points?: readonly TorontoDraftPoint[]; onverifiedresult?: (context: unknown) => void;
     onauthorityproposal?: (kind: 'points' | 'cad') => void;
     onproposal?: (proposal: unknown, isCurrent: () => boolean) => void; oninvalidateproposals?: () => void;
     onstreamingchange?: (streaming: boolean) => void; proposalsBlocked?: boolean;
+    onselectreference?: (reference: ModelReferenceSelection, isCurrent: () => boolean) => Promise<ModelScene>;
+    onauthorityrefresh?: () => Promise<ModelScene>;
   } = $props();
   function selectableNearest(context: unknown) {
     try {
@@ -63,7 +68,7 @@
   }
   async function send() {
     if (!canSend) return;
-    const current = attachment, submitted = draft, revision = draftRevision;
+    const current = effectiveAttachment, submitted = draft, revision = draftRevision;
     const sent = await controller.send(submitted, current);
     if (sent && view.phase === 'completed') {
       // A newer edit (even back to the same text) belongs to the next message.
@@ -75,14 +80,29 @@
   let draftRevision = 0;
   let view = $state<ModelChatView>({ catalogPhase: 'idle', model: '', phase: 'idle', code: 'refresh-models', messages: [] });
   const catalogModelSelected = $derived(view.catalogPhase === 'ready' && view.catalog?.ready && !!view.catalog.models.some(model => model.id === view.model));
+  let approvalWaiting = $state(false);
+  async function captureForAgent(request: ModelCaptureRequest, isCurrent: () => boolean): Promise<VisualModelAttachment> {
+    const source = visualSource;
+    if (!source || !isCurrent()) throw new Error('Scene capture unavailable.');
+    const observation = await source.capture(request);
+    const image = await compressScreenshot(observation, { x: 0, y: 0, width: observation.viewport.width, height: observation.viewport.height }, () => alive && isCurrent());
+    return { observation: image, isCurrent: () => source.isCurrent(observation.observationId), resolvePixel: (id, x, y) => source.resolvePixel(id, x, y) };
+  }
   const controller = new ModelChatController(value => { view = value; onstreamingchange(value.phase === 'streaming'); }, undefined, undefined, undefined,
-    { onproposal: (proposal, current) => onproposal(proposal, current), oninvalidate: () => oninvalidateproposals(), onauthorityproposal: kind => onauthorityproposal(kind) });
+    { onproposal: (proposal, current) => onproposal(proposal, current), oninvalidate: () => oninvalidateproposals(), onauthorityproposal: kind => onauthorityproposal(kind),
+      oncapture: captureForAgent,
+      onselectreference: (reference, current) => { if (!onselectreference) throw new Error('Reference selection unavailable.'); return onselectreference(reference, current); },
+      onauthorityrefresh: () => { if (!onauthorityrefresh) throw new Error('Authority refresh unavailable.'); return onauthorityrefresh(); },
+      onapprovalwait: waiting => approvalWaiting = waiting });
   $effect(() => controller.bind(scene));
   // Mode switches clear local image input. Geometry/view changes do not rewrite past pixels.
   // controller.bind independently owns current scene/tool binding and response invalidation.
   const captureMode = $derived(scene.mode);
   $effect(() => { captureMode; untrack(() => removeAttachment()); });
-  const canSend = $derived(!proposalsBlocked && view.catalogPhase === 'ready' && view.catalog?.ready && !!view.model && view.phase !== 'streaming' && !!draft.trim() && !captureBusy && !cropOpen);
+  const effectiveAttachment = $derived(areaInput?.attachment ?? attachment);
+  const areaIdentity = $derived(areaInput?.area);
+  $effect(() => { areaIdentity; untrack(() => removeAttachment()); });
+  const canSend = $derived(!areaInput?.pending && !areaInput?.error && !proposalsBlocked && view.catalogPhase === 'ready' && view.catalog?.ready && !!view.model && view.phase !== 'streaming' && !!draft.trim() && !captureBusy && !cropOpen);
   onMount(() => {
     // Discovery is read-only. Focus alone never erases a conversation or retries inference.
     const revalidate = () => { void controller.refreshModels(); };
@@ -127,7 +147,6 @@
     {:else}{view.catalog.mode === 'chatgpt' ? 'ChatGPT plan' : 'API key'} · {view.model ? 'Models available' : 'Select a model to enable Send.'}{/if}
   </p>
   <details class="bound-scene"><summary>Context &amp; session · {scene.mode}</summary>
-    <p>Only active-scene references are sent. Toronto coordinates remain unmapped; attachment provenance is not CAD verification.</p>
     <pre data-testid="model-scene-context">{JSON.stringify(scene, null, 2)}</pre>
     <p class="continuation" data-testid="model-continuation">{view.continuationActive ? 'Active server continuation · retained server history can be replayed on the next send.' : 'No active server continuation · retained messages are display-only; the next send starts a new server conversation.'}</p>
   </details>
@@ -137,7 +156,11 @@
     <div class="history" aria-live="polite" data-testid="model-history">
       {#each view.messages as message, index (index)}
         <article class:assistant={message.role === 'assistant'} class:user={message.role === 'user'} data-testid={`model-message-${index}`} data-role={message.role} data-state={message.state}>
-          <strong class="message-author">{message.role === 'user' ? 'You' : 'Assistant'}{message.role === 'assistant' && message.state !== 'complete' ? ` · ${message.state}` : ''}</strong>
+          {#each message.attachments ?? [] as image}
+            <a class="message-image" href={image.image.dataUrl} target="_blank" rel="noreferrer" aria-label="Open attached scene screenshot">
+              <img src={image.image.dataUrl} alt={message.role === 'user' ? 'Attached scene screenshot' : 'Scene screenshot captured by the assistant'} loading="lazy" data-testid="model-message-image" />
+            </a>
+          {/each}
           {#if message.role === 'assistant'}
             <div class="message-body"><SafeMarkdown text={message.text || (message.state === 'streaming' ? 'Waiting for response…' : 'No completed answer.')} /></div>
           {:else}
@@ -146,15 +169,11 @@
           {#if message.role === 'assistant'}
             <details class="request-inspector" data-testid="model-request-inspector">
               <summary>Actual model requests · {message.inspections?.length ?? 0} retained rounds</summary>
-              <p>Safe view of the effective request body, not a provider-internal prompt. Product instructions use the actual <code>instructions</code> field; input roles are shown as sent, with no invented system message.</p>
-              <p>Credentials and authentication headers are excluded. Opaque reasoning is not shown. Memory only; New chat or reload clears this view. Snapshots may be truncated or evicted at bounded limits.</p>
               {#if message.inspectionsDropped}<p data-testid="model-inspection-evicted">{message.inspectionsDropped} older request snapshots evicted from memory.</p>{/if}
               {#if !message.inspections?.length}<p>No retained request snapshot. Preparation may not have reached the provider adapter.</p>{/if}
               {#each message.inspections ?? [] as inspection (inspection.round)}
                 <details class="request-round" data-testid="model-request-round" data-phase={inspection.phase}>
                   <summary>Round {inspection.round} · {inspection.phase} · {inspection.mode === 'chatgpt' ? 'ChatGPT plan' : 'API key'}</summary>
-                  <p>{inspection.continuation ? 'This request uses an existing server conversation.' : 'This turn started a new server conversation.'} Later rounds include visible tool history. Inspect input below for the actual replay.</p>
-                  <p>{inspection.source === 'client' ? 'Local monitoring ended; provider completion or cancellation is not confirmed.' : inspection.phase === 'completed' ? 'Server validated this provider response and EOF. This alone does not establish completion of the whole chat turn.' : inspection.phase === 'dispatched' ? 'Dispatch was invoked; provider receipt or successful inference is not established.' : inspection.phase === 'prepared' ? 'Prepared on server; dispatch is not yet confirmed.' : 'Server reported this round ended without a completed response.'}</p>
                   <p data-testid="model-request-omissions">Omissions: {inspection.omissions.join(', ')}</p>
                   <pre data-testid="model-request-body">{JSON.stringify(JSON.parse(inspection.bodyJson), null, 2)}</pre>
                 </details>
@@ -176,7 +195,6 @@
               <strong>{failure.title}</strong>
               <p>{failure.detail}</p>
               <p class="recovery"><b>Next step:</b> {failure.recovery}</p>
-              <p class="incomplete">Incomplete — not a completed answer or committed history. The next send starts a new server conversation.</p>
             </div>
           {/if}
         </article>
@@ -187,14 +205,16 @@
   {/if}
   </div>
   <form class="composer" data-testid="local-draft-form" onsubmit={event => { event.preventDefault(); void send(); }}>
-    {#if attachment}
-      {@const size = modelVisualImageSize(attachment.observation)}
+    {#if effectiveAttachment}
+      {@const size = modelVisualImageSize(effectiveAttachment.observation)}
       <div class="screenshot-attachment" aria-label="Attached scene screenshot">
-        <img data-testid="model-image-preview" src={attachment.observation.image.dataUrl} alt="Scene crop attached to the next send" />
-        <span data-testid="model-image-status" role="status">{size.width} × {size.height} JPEG · {Math.ceil(attachment.observation.image.byteLength / 1024)} KB</span>
-        <button type="button" title="Remove screenshot" aria-label="Remove screenshot" data-testid="model-remove-screenshot" disabled={view.phase === 'streaming'} onclick={removeAttachment}>×</button>
+        <img data-testid="model-image-preview" src={effectiveAttachment.observation.image.dataUrl} alt="Scene crop attached to the next send" />
+        <span data-testid="model-image-status" role="status">{size.width} × {size.height} JPEG · {Math.ceil(effectiveAttachment.observation.image.byteLength / 1024)} KB{areaInput ? ' · Area of interest' : ''}</span>
+        <button type="button" title={areaInput ? 'Clear area of interest and snapshot' : 'Remove screenshot'} aria-label={areaInput ? 'Clear area of interest and snapshot' : 'Remove screenshot'} data-testid="model-remove-screenshot" disabled={view.phase === 'streaming'} onclick={() => areaInput ? areaInput.clear() : removeAttachment()}>×</button>
       </div>
     {/if}
+    {#if areaInput?.pending}<p role="status">Capturing area of interest…</p>{/if}
+    {#if areaInput?.error}<p role="alert">{areaInput.error}</p>{/if}
     {#if captureError && !cropOpen}<p role="alert" data-testid="model-image-error">{captureError}</p>{/if}
     <label class="draft-label" for="local-draft">Message</label>
     <textarea id="local-draft" data-testid="local-draft" bind:value={draft} rows="2" maxlength={MODEL_CLIENT_LIMITS.textChars} placeholder="Ask about the scene…" oninput={() => draftRevision++} onkeydown={event => {
@@ -204,7 +224,7 @@
       }
     }}></textarea>
     <div class="composer-footer">
-      <button bind:this={cameraButton} class="camera" type="button" title={visualSource ? 'Crop and attach scene screenshot' : 'Screenshot capture unavailable in this scene'} aria-label="Attach scene screenshot" data-testid="model-attach-screenshot" disabled={!visualSource || !catalogModelSelected || cropOpen || view.phase === 'streaming'} onclick={() => void attachScreenshot()}>
+      <button bind:this={cameraButton} class="camera" type="button" title={visualSource ? 'Crop and attach scene screenshot' : 'Screenshot capture unavailable in this scene'} aria-label="Attach scene screenshot" data-testid="model-attach-screenshot" disabled={!!areaInput || !visualSource || !catalogModelSelected || cropOpen || view.phase === 'streaming'} onclick={() => void attachScreenshot()}>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 6h4l2-3h4l2 3h4a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Z"/><circle cx="12" cy="12" r="4"/></svg>
       </button>
       <button class="cancel" type="button" data-testid="model-cancel" disabled={view.phase !== 'streaming' && view.catalogPhase !== 'loading'} onclick={() => controller.cancel()}>Cancel</button>
@@ -212,7 +232,7 @@
     </div>
   </form>
   <div class="progress" role="status" data-testid="local-draft-status" data-state={view.phase}>
-    {#if view.phase === 'streaming'}<p>Responding…</p>{/if}
+    {#if view.phase === 'streaming'}<p>{approvalWaiting ? 'Waiting for your review…' : 'Responding…'}</p>{/if}
     {#if view.code === 'history-limit-new-chat-required'}<p>Conversation limit reached. Start a new chat to continue.</p>{/if}
   </div>
   {#if proposalsBlocked && view.phase !== 'streaming'}<p role="status">Sending is blocked while an authority request is pending or Refresh is required. Refresh the active point/CAD authority before proposing more changes.</p>{/if}
@@ -240,9 +260,10 @@
   article { box-sizing: border-box; min-width: 0; max-width: 94%; padding: 12px; border-radius: 14px 14px 14px 4px; background: #28292e; border: 1px solid #ffffff0b; }
   article.assistant { align-self: flex-start; }
   article.user { align-self: flex-end; max-width: 86%; background: #253c61; border-color: #6197e424; border-radius: 14px 14px 4px 14px; }
-  .message-author { display: block; font-size: 10px; font-weight: 550; color: #b1b1bc; }
-  .message-body { margin-top: 6px; }
-  .message-text { white-space: pre-wrap; font-size: 13px; line-height: 1.6; color: #ededf2; margin: 6px 0 0; }
+  .message-image { display: block; margin-bottom: 8px; }
+  .message-image img { display: block; max-width: 100%; max-height: 240px; object-fit: contain; border-radius: 8px; }
+  .message-body { margin: 0; }
+  .message-text { white-space: pre-wrap; font-size: 13px; line-height: 1.6; color: #ededf2; margin: 0; }
   .conversation-empty { margin: 28px 8px; color: #d9d9e2; }
   .conversation-empty h3 { font-size: 16px; font-weight: 550; margin-bottom: 8px; }
   .conversation-empty p { font-size: 12px; }
@@ -250,7 +271,6 @@
   .message-failure strong { color: #f2d5a6; font-size: 11px; }
   .message-failure p { color: #d9c4a6; margin: 8px 0 0; }
   .message-failure .recovery { color: #f1e0c9; }
-  .message-failure .incomplete { font-size: 10px; }
   .tool-context { font-size: 10px; color: #a3a3b0; margin-top: 8px; }
   .request-inspector { margin-top: 10px; padding: 8px 0; border-top: 1px solid #ffffff12; font-size: 10px; color: #a3a3b0; }
   .request-round { margin-top: 10px; padding-top: 8px; border-top: 1px solid #ffffff14; }

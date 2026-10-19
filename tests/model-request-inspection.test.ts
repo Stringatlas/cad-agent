@@ -101,7 +101,7 @@ test('provider completion without EOF stays dispatched and cancellation never re
 });
 test('inspection contract rejects unsafe sizes, shapes, unknown markers and coerced lifecycle discriminants', () => {
   const inspection = inspectModelRequest({ model: 'm', input: [], tools: [] }, 'api-key', 1, false);
-  for (const patch of [{ round: 0 }, { round: 4 }, { mode: ['api-key'] }, { continuation: 'yes' }, { bodyJson: '"not-object"' }, { bodyJson: '{' },
+  for (const patch of [{ round: 0 }, { round: L.rounds + 1 }, { mode: ['api-key'] }, { continuation: 'yes' }, { bodyJson: '"not-object"' }, { bodyJson: '{' },
     { bodyJson: JSON.stringify({ text: '🌍'.repeat(L.snapshotBytes) }) }, { omissions: [] }, { omissions: ['credentials-and-headers', 'secret'] }, { bearer: secret }])
     assert.throws(() => canonicalModelChatEvent({ kind: 'request-inspection', requestId: 'r', inspection: { ...inspection, ...patch } }));
   for (const phase of [['failed'], {}, 'prepared', 'unknown']) assert.throws(() => canonicalModelChatEvent({ kind: 'request-phase', requestId: 'r', round: 1, phase }));

@@ -283,3 +283,68 @@ test('client rejects tampered, partial and mismatched provenance or invalid star
     await run(result.events);
   } finally { globalThis.fetch = original; await f.clean(); }
 });
+
+
+test('crop propagates source scalar labels with selected points and empty batches, binding hashes', async () => {
+  const f = await fixture();
+  try {
+    for (let i = 0; i < 7; i++) f.payload.writeFloatLE(i === 5 ? 8 : i, i * 28 + 24);
+    await writeFile(join(f.root, 'octree/octree.bin'), f.payload);
+    const result = await collect(f.adapter.crop(box));
+    assert.deepEqual(result.events.flatMap(event => event.type === 'batch' ? event.labels! : []), [1, 2, 3, 4, 8]);
+    assert.ok(result.events.every(event => event.type !== 'batch' || event.labels?.length === event.positions.length / 3));
+    const empty = await collect(f.adapter.crop({ min: [4.01, 4.01, 124.01], max: [4.02, 4.02, 124.02] }));
+    assert.ok(empty.events.some(event => event.type === 'batch'));
+    assert.ok(empty.events.every(event => event.type !== 'batch' || Array.isArray(event.labels) && event.labels.length === 0));
+    f.payload.writeFloatLE(0, 28 + 24); await writeFile(join(f.root, 'octree/octree.bin'), f.payload);
+    assert.notEqual((await collect(f.adapter.crop(box))).sampleHash, result.sampleHash);
+  } finally { await f.clean(); }
+});
+
+test('crop validates scalar labels before selection, rejects mixed decoders, and keeps batch alignment', async () => {
+  const f = await fixture();
+  try {
+    const count = CROP_BATCH_POINTS + 1, size = count * 28;
+    const input = { dataset: await f.adapter.info(), rootBox, scale: [0.001, 0.001, 0.001] as const, stride: 28,
+      first: record(1, 0, count, 0, size), hierarchySize: 22, payloadSize: size,
+      readHierarchy: async () => { throw new Error('Unexpected read'); },
+      readPayload: async (_offset: number, bytes: number) => Buffer.alloc(bytes),
+      decode: (_bytes: Buffer, index: number) => ({ positions: [3, 3, 123], colors: [255, 0, 0], label: index % 9 }) };
+    const streamed = await collect(readFullResolutionCrop(input, box));
+    const batches = streamed.events.filter(event => event.type === 'batch');
+    assert.deepEqual(batches.map(event => event.labels?.length), [CROP_BATCH_POINTS, 1]);
+    assert.deepEqual(batches[1].labels, [CROP_BATCH_POINTS % 9]);
+    for (const label of [-1, 9, 1.5, NaN, Infinity, null, '1']) {
+      await assert.rejects(collect(readFullResolutionCrop({ ...input,
+        decode: () => ({ positions: [9, 9, 129], colors: [255, 0, 0], label: label as number }) }, box)), /labels/);
+    }
+    for (const missingFirst of [true, false]) await assert.rejects(collect(readFullResolutionCrop({ ...input,
+      decode: (_bytes, index) => ({ positions: [3, 3, 123], colors: [255, 0, 0],
+        ...(Boolean(index) === missingFirst ? { label: 2 } : {}) }) }, box)), /labels/);
+    await assert.rejects(collect(readFullResolutionCrop({ ...input,
+      decode: (_bytes, index) => ({ positions: [3, 3, 123], colors: [255, 0, 0],
+        ...(index < CROP_BATCH_POINTS ? { label: 2 } : {}) }) }, box)), /labels/);
+  } finally { await f.clean(); }
+});
+
+test('client validates optional semantic label length/range and consistent presence; accepts legacy labels absent', async () => {
+  const f = await fixture(), original = globalThis.fetch, signal = new AbortController().signal;
+  try {
+    const result = await collect(f.adapter.crop(box));
+    const run = async (events: unknown[]) => {
+      globalThis.fetch = async () => new Response(events.map(event => JSON.stringify(event) + '\n').join(''));
+      const published: CropEvent[] = [];
+      await fetchCrop(box, signal, event => { published.push(event); });
+      return published;
+    };
+    const modified = (change: (events: any[]) => void) => { const events = structuredClone(result.events); change(events); return events; };
+    const batchAt = result.events.findIndex(event => event.type === 'batch');
+    for (const labels of [null, {}, [], [0, 1], [-1], [9], [0.5], ['1'], [null]]) {
+      await assert.rejects(run(modified(events => { events[batchAt].labels = labels; })), /labels/);
+    }
+    for (const at of [batchAt, batchAt + 1]) await assert.rejects(run(modified(events => { delete events[at].labels; })), /labels/);
+    assert.deepEqual(await run(result.events), result.events);
+    const legacy = modified(events => { for (const event of events) if (event.type === 'batch') delete event.labels; });
+    assert.deepEqual(await run(legacy), legacy);
+  } finally { globalThis.fetch = original; await f.clean(); }
+});

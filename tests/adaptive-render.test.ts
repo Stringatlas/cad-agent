@@ -5,6 +5,7 @@ import type { DatasetInfo, PointOverrideSnapshot } from '@spatial/contracts';
 import { createAdaptiveRender } from '../apps/web/src/adaptive-render';
 import type { AdaptivePayload } from '../apps/web/src/adaptive-display';
 import { createPointOverrideRender } from '../apps/web/src/point-override-render';
+import { pointTypeColor } from '../apps/web/src/point-colors';
 
 const dataset: DatasetInfo = { id: 'toronto3d', revision: 'a'.repeat(64), coordinates: { units: 'm', upAxis: 'Z', handedness: 'right', localOrigin: [627285, 4841948, 0] }, bounds: { min: [0, 0, 0], max: [100, 100, 100] }, totalPoints: 78_000_000 };
 function payload(name: string, count: number, base = 0): AdaptivePayload {
@@ -19,6 +20,85 @@ const name = (index: number) => `r${index.toString(8)}`;
 function projected(render: ReturnType<typeof createAdaptiveRender>) {
   return render.objects.flatMap(object => Array.from({ length: object.geometry.drawRange.count }, (_, index) => render.resolve(object, index)!));
 }
+
+test('color modes roundtrip original RGB bytes in place without changing positions or picks', () => {
+  const material = new THREE.PointsMaterial({ vertexColors: true });
+  let registrations = 0, removals = 0;
+  const render = createAdaptiveRender(material, { pointBudget: 256,
+    register() { registrations++; }, unregister() { removals++; },
+  });
+  const input = payload('r', 256);
+  for (let i = 0; i < input.count; i++) (input.colors as Uint8Array).set([i, 255 - i, i % 128], i * 3);
+  try {
+    render.add(input);
+    const object = render.objects[0], geometry = object.geometry;
+    const position = geometry.getAttribute('position') as THREE.BufferAttribute;
+    const color = geometry.getAttribute('color') as THREE.BufferAttribute;
+    const positions = position.array, colors = color.array;
+    const rgb = Uint8Array.from(colors), beforePositions = Float32Array.from(positions);
+    const picks = projected(render), version = position.version;
+    const box = geometry.boundingBox, sphere = geometry.boundingSphere;
+    // Transport arrays are disposable: toggles must consult the owned originals.
+    (input.colors as Uint8Array).fill(0); (input.labels as Uint8Array).fill(8);
+    (input.positions as Float64Array).fill(999);
+    render.setColorMode('rgb');
+    assert.equal(color.version, 1);
+    for (let round = 0; round < 2; round++) {
+      render.setColorMode('type');
+      for (let i = 0; i < input.count; i++) {
+        assert.deepEqual(Array.from(colors.slice(i * 3, i * 3 + 3)), pointTypeColor(i % 9).map(value => Math.round(255 * value)));
+      }
+      const colorVersion: number = color.version;
+      render.setColorMode('type'); assert.equal(color.version, colorVersion);
+      render.setColorMode('rgb'); assert.deepEqual(colors, rgb);
+    }
+    assert.equal(geometry.getAttribute('color'), color); assert.equal(color.array, colors);
+    assert.ok(colors instanceof Uint8Array); assert.equal(color.normalized, true);
+    assert.equal(geometry.getAttribute('position'), position); assert.equal(position.array, positions);
+    assert.deepEqual(positions, beforePositions); assert.equal(position.version, version);
+    assert.equal(geometry.boundingBox, box); assert.equal(geometry.boundingSphere, sphere);
+    assert.deepEqual(projected(render), picks);
+    assert.equal(registrations, 1); assert.equal(removals, 0);
+  } finally { render.dispose(); material.dispose(); }
+});
+
+test('type mode applies to arrivals, split spans and eviction repacking, then restores source RGB', () => {
+  const material = new THREE.PointsMaterial({ vertexColors: true });
+  const render = createAdaptiveRender(material, { capacity: 65_536 });
+  function assertTypeColors() {
+    for (const object of render.objects) {
+      const colors = object.geometry.getAttribute('color');
+      for (let i = 0; i < object.geometry.drawRange.count; i++) {
+        const point = render.resolve(object, i)!;
+        const expected = pointTypeColor(point.semanticLabel);
+        for (let axis = 0; axis < 3; axis++) assert.equal(colors.array[i * 3 + axis], Math.round(255 * expected[axis]));
+      }
+    }
+  }
+  try {
+    render.setColorMode('type');
+    for (let i = 0; i < 3; i++) render.add(payload(name(i), 40_000, i * 40_000));
+    assert.equal(render.chunks, 2); assertTypeColors();
+    render.remove('r0');
+    assert.equal(render.count, 80_000); assert.equal(render.chunks, 2); assertTypeColors();
+    assert.deepEqual(new Set(projected(render).map(point => point.key.sourceRow)), new Set(Array.from({ length: 80_000 }, (_, i) => i + 40_000)));
+    render.add(payload('r3', 60_000, 120_000));
+    assert.equal(render.chunks, 3); assertTypeColors();
+    render.remove('r2');
+    assert.equal(render.chunks, 2); assertTypeColors();
+    const picks = projected(render);
+    render.setColorMode('rgb');
+    for (const object of render.objects) {
+      const colors = object.geometry.getAttribute('color');
+      for (let i = 0; i < object.geometry.drawRange.count; i++) {
+        assert.equal(colors.array[i * 3], 55); assert.equal(colors.array[i * 3 + 1], 255); assert.equal(colors.array[i * 3 + 2], 0);
+      }
+    }
+    assert.deepEqual(projected(render), picks);
+    render.setColorMode('type'); render.clear();
+    render.add(payload('r4', 10, 200_000)); assertTypeColors();
+  } finally { render.dispose(); material.dispose(); }
+});
 
 test('1000 native nodes use bounded dense GPU batches with compact linear colors and exact picks', () => {
   const material = new THREE.PointsMaterial({ vertexColors: true });
@@ -148,6 +228,25 @@ test('batch edits reconstruct originals before applying committed overrides; no 
     render.add(payload('r0', 100, 0)); render.add(payload('r1', 65_536, 100)); render.add(payload('r2', 30, 70_000));
     overrides.setPointOverrides(snapshot);
     assert.equal(render.objects[0].geometry.getAttribute('position').getX(100), 90);
+    function toggleWithoutPositionChanges() {
+      const objects = [...render.objects], picks = projected(render);
+      const positions = objects.map(object => Float32Array.from(object.geometry.getAttribute('position').array));
+      const positionAttributes = objects.map(object => object.geometry.getAttribute('position'));
+      const versions = positionAttributes.map(attribute => (attribute as THREE.BufferAttribute).version);
+      const registerCount = registrations.length, removalCount = removals.length;
+      for (const mode of ['type', 'rgb'] as const) {
+        render.setColorMode(mode);
+        assert.deepEqual(render.objects, objects);
+        for (let i = 0; i < objects.length; i++) {
+          const attribute = objects[i].geometry.getAttribute('position') as THREE.BufferAttribute;
+          assert.equal(attribute, positionAttributes[i]); assert.equal(attribute.version, versions[i]);
+          assert.deepEqual(attribute.array, positions[i]);
+        }
+        assert.deepEqual(projected(render), picks);
+        assert.equal(registrations.length, registerCount); assert.equal(removals.length, removalCount);
+      }
+    }
+    toggleWithoutPositionChanges();
     // Node removal shifts the edited record, but never shifts its GPU override into another source.
     render.remove('r0');
     const all = projected(render), keyAt = all.findIndex(point => point.key.sourceRow === 100);
@@ -162,6 +261,7 @@ test('batch edits reconstruct originals before applying committed overrides; no 
     }
     assert.equal(all[keyAt].position[0], 100.00000000001);
     assert.equal(all[keyAt].semanticLabel, 0);
+    toggleWithoutPositionChanges();
     overrides.setPointOverrides(undefined);
     absolute = 0;
     for (const object of render.objects) for (let i = 0; i < object.geometry.drawRange.count; i++, absolute++) assert.equal(object.geometry.getAttribute('position').getX(i), Math.fround(all[absolute].position[0]));

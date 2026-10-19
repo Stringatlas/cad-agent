@@ -140,7 +140,7 @@ export class ProjectController {
   }
   async decline(proposalId: string) {
     const snapshot = this.state.snapshot, proposal = this.state.modelProposals?.find(p => p.proposalId === proposalId);
-    if (!snapshot || !proposal || !this.modelScope || this.state.modelStreaming || this.state.needsRefresh) return;
+    if (!snapshot || !proposal || !this.modelScope || this.state.needsRefresh) return;
     await this.run('decline', false, async (signal, current) => {
       const r = protocolRecord(await this.transport('/project/decline', { ...projectBinding(snapshot), proposalId, digest: proposal.digest }, signal));
       protocolKeys(r, ['proposalId', 'declined']);
@@ -190,7 +190,7 @@ export class ProjectController {
   }
   clearPoints() { if (this.mutation) return; if (this.active) this.cancel(); this.emit({ points: [], context: undefined, proposal: undefined }); }
   private async run(name: string, mutation: boolean, work: (signal: AbortSignal, current: () => boolean) => Promise<void>) {
-    if (this.disposed || this.active || (mutation && this.state.needsRefresh)) return;
+    if (this.disposed || this.active || (mutation && this.state.needsRefresh) || (this.state.modelStreaming && ['proposal', 'save', 'load', 'undo'].includes(name))) return;
     const generation = ++this.generation, controller = this.active = new AbortController(); this.mutation = mutation;
     const current = () => !this.disposed && !controller.signal.aborted && generation === this.generation;
     this.emit({ pending: name, status: `${name} pending…` });
@@ -209,6 +209,24 @@ export class ProjectController {
       this.undoReceiptSessionId = session.snapshot.sessionId;
       this.emit({ snapshot: session.snapshot, session, needsRefresh: false, undoAvailable: session.nextUndoTransactionId !== null && this.undoReceipts.has(session.nextUndoTransactionId), status: 'Refreshed server authority.' });
     });
+  }
+  /** Read-only agent rebind: no intermediate empty snapshot or selection reset. */
+  async refreshAgentAuthority() {
+    if (this.active) {
+      const deadline = Date.now() + 10000;
+      while (this.active && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
+      if (this.active) throw new Error('Project authority is busy.');
+    }
+    const before = this.state.snapshot, points = this.state.points, selectedId = this.state.selectedId;
+    let refreshed = false;
+    if (!before || this.state.needsRefresh) throw new Error('Project refresh required.');
+    await this.run('agent-refresh', false, async (signal, current) => {
+      const session = validateSession(await this.transport('/project/session', undefined, signal));
+      if (!current() || session.snapshot.sessionId !== before.sessionId || session.snapshot.project.revision !== before.project.revision ||
+        this.state.points !== points || this.state.selectedId !== selectedId || !equal(session.snapshot, before)) throw new Error('Project changed during agent refresh.');
+      this.emit({ snapshot: session.snapshot, session, status: 'Refreshed server authority.' }); refreshed = true;
+    });
+    if (!refreshed || !this.state.snapshot || this.state.pending || this.state.needsRefresh || this.state.points !== points || this.state.selectedId !== selectedId || !equal(this.state.snapshot, before)) throw new Error('Project authority refresh failed.');
   }
   async context() {
     const snapshot = this.state.snapshot; if (!snapshot || this.state.needsRefresh) return;
@@ -230,9 +248,9 @@ export class ProjectController {
       if (current()) this.emit({ proposal, status: 'Preview only — authority unchanged. Review exact digest and parameters before approval.' });
     });
   }
-  private async finishCommit(result: ProjectCommitResult, signal: AbortSignal, current: () => boolean) {
+  private async finishCommit(result: ProjectCommitResult, signal: AbortSignal, current: () => boolean, preserveSelection = false) {
     if (!current()) return;
-    this.emit({ snapshot: result.snapshot, session: undefined, selectedId: null, points: [], proposal: undefined, context: undefined,
+    this.emit({ snapshot: result.snapshot, session: undefined, selectedId: preserveSelection ? this.state.selectedId : null, points: preserveSelection ? this.state.points : [], proposal: undefined, context: undefined,
       undoAvailable: result.nextUndoTransactionId !== null && this.undoReceipts.has(result.nextUndoTransactionId), status: `Committed ${result.operation}, revision ${result.snapshot.project.revision}. Parameter postconditions checked, not CAD. Not persisted.` });
     // Persistence dirtiness comes from server truth, not revision arithmetic.
     try {
@@ -243,13 +261,13 @@ export class ProjectController {
   }
   async approve(proposalId?: string) {
     const snapshot = this.state.snapshot, proposal = proposalId === undefined ? this.state.proposal : this.state.modelProposals?.find(p => p.proposalId === proposalId);
-    if (!snapshot || !proposal || this.state.needsRefresh || this.state.modelStreaming || (proposalId !== undefined && !this.modelScope)) return;
+    if (!snapshot || !proposal || this.state.needsRefresh || (this.state.modelStreaming && proposalId === undefined) || (proposalId !== undefined && !this.modelScope)) return;
     if (proposal.expiresAt <= Date.now()) { this.clearProposal(); this.emit({ status: 'Proposal expired. Request a fresh exact preview; no commit.' }); return; }
     const request = canonicalBoxApprovalRequest({ ...projectBinding(snapshot), proposalId: proposal.proposalId, digest: proposal.digest, humanApproved: true });
     await this.run('approve', true, async (signal, current) => {
       const result = validateCommit(await this.transport('/project/approve', request, signal), snapshot, expectedBoxProject(snapshot.project, proposal), proposal.edit.kind);
       if (!current()) return; this.undoReceipts.set(result.transactionId, snapshot.project);
-      await this.finishCommit(result, signal, current);
+      await this.finishCommit(result, signal, current, proposalId !== undefined);
     });
   }
   async undo() {

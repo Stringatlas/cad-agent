@@ -12,7 +12,7 @@ interface Input {
   readPayload: (offset: number, size: number) => Promise<Buffer>;
   /** Actual prepared adapters require provenance; synthetic legacy decoders may omit it. */
   requireSourceIds?: boolean;
-  decode: (bytes: Buffer, index: number) => { positions: number[]; colors: number[]; sourceIds?: readonly number[] };
+  decode: (bytes: Buffer, index: number) => { positions: number[]; colors: number[]; sourceIds?: readonly number[]; label?: number };
 }
 function range(offset: number, size: number, limit: number) {
   if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(size) || offset < 0 || size < 0 || offset > limit - size) throw new Error('Invalid crop payload range');
@@ -47,6 +47,7 @@ export async function* readFullResolutionCrop(input: Input, requested: CropSelec
   const hash = createHash('sha256').update(JSON.stringify(selection));
   let sequence = 0;
   let provenance: boolean | undefined = input.requireSourceIds ? true : undefined;
+  let semanticLabels: boolean | undefined;
   while (pending.length) {
     checkpoint(); await yieldTurn(); checkpoint();
     const chunk = pending.pop()!;
@@ -91,7 +92,7 @@ export async function* readFullResolutionCrop(input: Input, requested: CropSelec
           stats.bytesRead += payload.length;
           for (let block = 0; block < length; block += CROP_BATCH_POINTS) {
             await yieldTurn(); checkpoint();
-            const positions: number[] = [], colors: number[] = [], sourceIds: number[] = [];
+            const positions: number[] = [], colors: number[] = [], sourceIds: number[] = [], labels: number[] = [];
             for (let j = block; j < Math.min(length, block + CROP_BATCH_POINTS); j++) {
               const point = input.decode(payload, j); stats.scannedPoints++;
               const hasSourceIds = point.sourceIds !== undefined;
@@ -99,14 +100,18 @@ export async function* readFullResolutionCrop(input: Input, requested: CropSelec
               if (hasSourceIds !== provenance || (hasSourceIds && (!Array.isArray(point.sourceIds) || point.sourceIds.length !== 2 ||
                   !Number.isInteger(point.sourceIds[0]) || point.sourceIds[0] < 1 || point.sourceIds[0] > 4 ||
                   !Number.isSafeInteger(point.sourceIds[1]) || point.sourceIds[1] < 0 || point.sourceIds[1] > 0xffffffff))) throw new Error('Invalid/missing crop provenance');
+              const hasLabel = point.label !== undefined;
+              if (semanticLabels === undefined) semanticLabels = hasLabel;
+              if (hasLabel !== semanticLabels || (hasLabel && (!Number.isInteger(point.label) || point.label! < 0 || point.label! > 8))) throw new Error('Invalid/missing crop labels');
               if (containsCropPoint(selection, point.positions)) {
                 positions.push(...point.positions); colors.push(...point.colors);
                 if (point.sourceIds) sourceIds.push(...point.sourceIds);
+                if (hasLabel) labels.push(point.label!);
                 stats.count++;
               }
             }
             // Empty batches carry progress/provenance mode and let consumers stop a source-expensive query.
-            const sample = { positions, colors, ...(provenance ? { sourceIds } : {}) };
+            const sample = { positions, colors, ...(provenance ? { sourceIds } : {}), ...(semanticLabels ? { labels } : {}) };
             hash.update(JSON.stringify(sample));
             yield { type: 'batch', sequence: sequence++, ...sample, stats: snapshot() };
           }

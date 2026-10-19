@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { SCENE_POINT_LIMIT, type ProjectSnapshot, type PointOverrideSnapshot } from '@spatial/contracts';
+  import { SCENE_POINT_LIMIT, type ProjectSnapshot, type PointOverrideSnapshot, type ModelReferenceSelection } from '@spatial/contracts';
   import { ChatController, type ChatEntry } from './chat-client';
   import BoxControls from './BoxControls.svelte';
   import type { ProjectController, ProjectView } from './project-client';
@@ -7,11 +7,15 @@
   import ModelChat from './ModelChat.svelte';
   import { effectivePosition } from './point-override-client';
   import { pointSemanticName, semanticName } from './point-presentation';
-  import { onDestroy, untrack } from 'svelte';
+  import { onDestroy, tick, untrack } from 'svelte';
   import { createPointTypeChannel, pointTypeKey, type PointTypeState } from './point-type-client';
   import type { VisualModelSource } from './visual-model-source';
+  import type { AreaOfInterestInput } from './area-of-interest';
   import { modelScene } from './model-chat-client';
-  let { snapshot, view, controller: projectController, sceneMode, points, pointStatus, onclearpoint, visualSource, pointOverrides, onverifiedresult, pointBlocked = true, onpointproposal = () => {}, oncadproposal = () => {}, ontorontostreaming = () => {}, torontoCadBlocked = true }: {
+  let { areaInput, snapshot, view, controller: projectController, sceneMode, points, pointStatus, onclearpoint, visualSource, pointOverrides, onverifiedresult, pointBlocked = true, onpointproposal = () => {}, oncadproposal = () => {}, ontorontostreaming = () => {}, onselectreference, onauthorityrefresh, torontoCadBlocked = true }: {
+    areaInput?: AreaOfInterestInput;
+    onselectreference: (reference: ModelReferenceSelection, isCurrent: () => boolean) => Promise<void>;
+    onauthorityrefresh: () => Promise<void>;
     torontoCadBlocked?: boolean;
     oncadproposal?: () => void; ontorontostreaming?: (streaming: boolean) => void;
     pointBlocked?: boolean; onpointproposal?: () => void;
@@ -32,7 +36,7 @@
     return label === 'loading' ? 'Loading type…' : semanticName(label);
   }
   // Query lineage stays attached locally; the strict model-reference protocol carries only original source fields.
-  const scene = $derived(modelScene(sceneMode, snapshot, view, activePoints.map(({ evidence: _evidence, semanticLabel: _label, ...original }) => original)));
+  const scene = $derived(modelScene(sceneMode, snapshot, view, activePoints.map(({ evidence: _evidence, semanticLabel: _label, ...original }) => original), areaInput?.area));
   const listedPoints = $derived(sceneMode === 'demo' ? view.points : activePoints);
   let command = $state('metadata');
   let entry = $state<ChatEntry>();
@@ -50,7 +54,6 @@
 </script>
 
 <aside class="chat" aria-label="Scene chat" data-testid="chat">
-  <header><h2>Chat</h2></header>
   {#if pointStatus}<p class="point-status" role="status" data-testid="point-status">{pointStatus}</p>{/if}
   <details class="attachments" data-testid="draft-attachments" aria-label="Scene point references">
     <summary><span>Scene references</span><span class="reference-preview" title={listedPoints.map(point => `${point.name} · ${'datasetId' in point ? selectedType(point) : 'Synthetic'}`).join(', ')}>{listedPoints.map(point => `${point.name} · ${'datasetId' in point ? selectedType(point) : 'Synthetic'}`).join(', ') || 'None'}</span><span class="reference-count">{listedPoints.length}/{SCENE_POINT_LIMIT}</span></summary>
@@ -73,7 +76,9 @@
       <p class="empty">{sceneMode === 'pole' ? 'Switch to Toronto3D or Synthetic demo to attach numbered points.' : 'Cmd/Ctrl-click any rendered cloud point to attach Point 1, Point 2, and more.'}</p>
     {/if}
   </details>
-  <ModelChat {scene} {visualSource} points={activePoints} {onverifiedresult}
+  <ModelChat {scene} {visualSource} points={activePoints} {onverifiedresult} areaInput={sceneMode === 'toronto' ? areaInput : undefined}
+    onselectreference={async (reference, current) => { await onselectreference(reference, current); await tick(); return scene; }}
+    onauthorityrefresh={async () => { await onauthorityrefresh(); await tick(); return scene; }}
     proposalsBlocked={sceneMode === 'demo' ? (!!view.pending || view.needsRefresh) : sceneMode === 'toronto' && (torontoCadBlocked || pointBlocked)}
     onstreamingchange={streaming => { projectController.setModelStreaming(streaming); ontorontostreaming(streaming); }}
     onauthorityproposal={kind => { if (sceneMode === 'toronto') { if (kind === 'cad') oncadproposal(); else onpointproposal(); } }}
@@ -124,8 +129,7 @@
 
 <style>
   .chat { box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; height: 100%; min-height: 0; min-width: 0; overflow: hidden; background: #202124; color: #f1f1f3; padding: 18px 16px 12px; }
-  header, .attachment-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  header { flex-shrink: 0; } h2 { font-size: 18px; margin: 0; font-weight: 600; letter-spacing: -.4px; }
+  .attachment-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   h3 { font-size: 14px; font-weight: 550; } p { color: #a5a5ad; font-size: 11px; line-height: 1.5; }
   .point-status { margin: 0; flex-shrink: 0; max-height: 52px; overflow: auto; color: #d7c697; }
   .attachments, .technical { flex-shrink: 0; min-height: 0; border-top: 1px solid #ffffff12; padding-top: 9px; font-size: 11px; }

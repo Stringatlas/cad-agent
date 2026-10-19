@@ -1,5 +1,7 @@
 import { CAD_LIMITS, canonicalCadOperation, type TorontoCadSnapshot, type TorontoCadProposal, type TorontoCadBody, type TorontoCadPrimitive } from '@spatial/contracts';
 
+import { torontoReadonlyFetch } from './toronto-readonly-fetch';
+
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 function record(v: unknown): Record<string, any> { if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('Invalid CAD object'); return v as Record<string, any>; }
 function token(v: unknown): string { if (typeof v !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(v)) throw new Error('Invalid CAD identifier'); return v; }
@@ -28,7 +30,7 @@ export function validateTorontoCadSnapshot(value: unknown, artifactRevision: str
 export type TorontoCadAction = 'refresh' | 'propose' | 'approve' | 'decline' | 'undo';
 export type TorontoCadTransport = (action: TorontoCadAction, body: unknown, signal: AbortSignal) => Promise<unknown>;
 export const torontoCadTransport: TorontoCadTransport = async (action, body, signal) => {
-  const response = await fetch(`/datasets/toronto3d/cad${action === 'refresh' ? '' : `/${action}`}`, { method: action === 'refresh' ? 'GET' : 'POST', headers: body ? { 'Content-Type': 'application/json' } : {}, ...(body ? { body: JSON.stringify(body) } : {}), signal });
+  const response = await torontoReadonlyFetch(`/datasets/toronto3d/cad${action === 'refresh' ? '' : `/${action}`}`, { method: action === 'refresh' ? 'GET' : 'POST', headers: body ? { 'Content-Type': 'application/json' } : {}, ...(body ? { body: JSON.stringify(body) } : {}), signal });
   if (!response.headers.get('content-type')?.startsWith('application/json')) throw new Error('Invalid CAD response');
   const text = await response.text(); if (text.length > 16_000_000) throw new Error('Oversized CAD response');
   const reply = JSON.parse(text); if (!response.ok || reply.ok !== true) throw new Error(`CAD ${reply.error?.code ?? response.status}`); return reply.result;

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ModelChatController, streamModelTurn, validateModelEvent, type VisualModelAttachment } from '../apps/web/src/model-chat-client';
-import { MODEL_VISUAL_LIMITS, type ModelChatEvent, type ModelTurnRequest, type ModelVisualObservation, type VisualObservation, type VisualPixelResolution } from '@spatial/contracts';
+import { MODEL_CHAT_LIMITS, MODEL_VISUAL_LIMITS, type ModelChatEvent, type ModelTurnRequest, type ModelVisualObservation, type VisualObservation, type VisualPixelResolution } from '@spatial/contracts';
 
 function observation(bytes = 1): VisualObservation {
   const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
@@ -64,10 +64,10 @@ test('tool envelope identities, exact keys, integer coordinates and image bounds
   assert.throws(() => validateModelEvent({ kind: 'tool', requestId: r.requestId, name: 'resolve_visual_pixel', context: {} }, request()));
 });
 
-test('duplicate call IDs/nonces, maximum two requests and terminal-late tool requests fail closed', async () => {
+test('duplicate call IDs/nonces, bounded requests and terminal-late tool requests fail closed', async () => {
   for (const sequence of [
     [{}, { nonce: 'nonce-two' }], [{}, { toolCallId: 'call-two' }],
-    [{}, { toolCallId: 'call-two', nonce: 'nonce-two' }, { toolCallId: 'call-three', nonce: 'nonce-three' }],
+    Array.from({ length: MODEL_CHAT_LIMITS.toolCalls + 1 }, (_, i) => ({ toolCallId: `call-${i}`, nonce: `nonce-${i}` })),
   ]) {
     const a = adapter(), r = request(a.attachment.observation); let posts = 0;
     await assert.rejects(streamModelTurn(r, signal(), () => {}, async path => path === '/chat/turn' ? response([start(r), ...sequence.map(s => tool(r, s)), done(r)]) : (++posts, new Response(null, { status: 204 })), a.attachment));
@@ -100,12 +100,13 @@ test('invalid, mismatched and oversized pixel results never POST', async () => {
   }
 });
 
-test('mismatched attachments and image continuation reject without traffic', async () => {
+test('mismatched attachments reject without traffic; image continuation is supported', async () => {
   const a = adapter(), r = request(a.attachment.observation); let calls = 0;
   const f: typeof fetch = async () => { calls++; return response([]); };
   await assert.rejects(streamModelTurn(r, signal(), () => {}, f));
   await assert.rejects(streamModelTurn(request(), signal(), () => {}, f, a.attachment));
-  await assert.rejects(streamModelTurn({ ...r, conversationId: 'previous' }, signal(), () => {}, f, a.attachment));
+  const continued = { ...r, conversationId: 'conversation-one' };
+  await streamModelTurn(continued, signal(), () => {}, async () => response([start(continued), done(continued)]), a.attachment);
   await assert.rejects(streamModelTurn(r, signal(), () => {}, f, { ...a.attachment, observation: { ...a.attachment.observation, viewGeneration: 2 } }));
   assert.equal(calls, 0);
   a.stale(); await streamModelTurn(r, signal(), () => {}, async () => response([start(r), done(r)]), a.attachment);
@@ -201,8 +202,43 @@ test('historical pixel tool reports unavailable without resolving against change
   assert.deepEqual(result, { status: 'unavailable', observationId: 'observation-one', x: 2, y: 3, reason: 'Capture-time pixel grounding is no longer available' });
 });
 
-test('controller image turns force fresh conversation, discard returned ID and omit image on later text turns', async () => {
-  const turns: ModelTurnRequest[] = [], a = adapter();
+// Model Svelte's deep state proxy restriction without weakening protocol freezing.
+function reactiveObservation(value = observation()): VisualObservation {
+  const proxies = new WeakMap<object, object>();
+  const wrap = (value: unknown): unknown => {
+    if (!value || typeof value !== 'object') return value;
+    let proxy = proxies.get(value);
+    if (!proxy) {
+      proxy = new Proxy(value, {
+        get: (target, key) => wrap(Reflect.get(target, key)),
+        defineProperty() { throw new Error('state_descriptors_fixed'); },
+      });
+      proxies.set(value, proxy);
+    }
+    return proxy;
+  };
+  return wrap(value) as VisualObservation;
+}
+
+test('controller detaches reactive agent captures before freezing message history', async () => {
+  const image = reactiveObservation(), a = adapter(image);
+  const client = new ModelChatController(() => {}, async (path, init) => {
+    if (path === '/chat/models') return Response.json({ mode: 'api-key', ready: true, generation: 'account-one', code: 'ready', models: [{ id: 'fixture-vision-vNext', label: 'Fixture' }] });
+    if (path === '/chat/browser-result') return new Response(null, { status: 204 });
+    const r = JSON.parse(init!.body as string) as ModelTurnRequest;
+    return response([start(r), { kind: 'browser-request', requestId: r.requestId, toolCallId: 'capture-one', nonce: 'nonce-one', action: { kind: 'capture', request: { kind: 'current' } } }, done(r)]);
+  }, undefined, undefined, { oncapture: async () => a.attachment });
+  try {
+    client.bind(scene); await client.refreshModels(); await client.send('Capture the scene');
+    assert.equal(client.view.phase, 'completed');
+    const retained = client.view.messages[1]!.attachments![0]!;
+    assert.deepEqual(retained, image); assert.notEqual(retained, image);
+    assert.ok(Object.isFrozen(retained.image)); assert.ok(!Object.isFrozen(image.image));
+  } finally { client.dispose(); }
+});
+
+test('controller keeps history through reactive screenshots and scene selection updates, retaining inline attachments', async () => {
+  const turns: ModelTurnRequest[] = [], a = adapter(reactiveObservation());
   const client = new ModelChatController(() => {}, async (path, init) => {
     if (path === '/chat/models') return Response.json({ mode: 'api-key', ready: true, generation: 'account-one', code: 'ready', models: [{ id: 'fixture-vision-vNext', label: 'Unfamiliar catalog model' }] });
     const r = JSON.parse(init!.body as string) as ModelTurnRequest; turns.push(r); return response([start(r), done(r)]);
@@ -210,9 +246,14 @@ test('controller image turns force fresh conversation, discard returned ID and o
   try {
     client.bind(scene); await client.refreshModels();
     assert.equal(await client.send('Text first'), true); assert.equal(client.view.continuationActive, true);
-    assert.equal(await client.send('Image next', a.attachment), true); assert.equal(turns[1]!.conversationId, null); assert.equal(turns[1]!.model, 'fixture-vision-vNext'); assert.deepEqual(turns[1]!.visualObservation, a.attachment.observation);
-    assert.equal(client.view.phase, 'completed'); assert.equal(client.view.continuationActive, false);
-    await client.send('No retained image'); assert.equal(turns[2]!.conversationId, null); assert.ok(!Object.hasOwn(turns[2]!, 'visualObservation'));
+    assert.equal(await client.send('Image next', a.attachment), true); assert.equal(turns[1]!.conversationId, 'conversation-one'); assert.equal(turns[1]!.model, 'fixture-vision-vNext'); assert.deepEqual(turns[1]!.visualObservation, a.attachment.observation);
+    assert.equal(client.view.phase, 'completed'); assert.equal(client.view.continuationActive, true);
+    assert.deepEqual(client.view.messages[2]!.attachments, [a.attachment.observation]);
+    assert.notEqual(client.view.messages[2]!.attachments![0], a.attachment.observation);
+    assert.ok(Object.isFrozen(client.view.messages[2]!.attachments![0]!.image));
+    assert.ok(!Object.isFrozen(a.attachment.observation.image));
+    client.bind({ ...scene, areaOfInterest: { datasetId: 'toronto3d', artifactRevision: 'a'.repeat(64), frameId: 'toronto3d-local-v1', units: 'm', localOrigin: [627285, 4841948, 0], corners: [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]] } });
+    await client.send('Refer to the previous screenshot'); assert.equal(turns[2]!.conversationId, 'conversation-one'); assert.ok(!Object.hasOwn(turns[2]!, 'visualObservation'));
     a.stale(); assert.equal(await client.send('Historical image', a.attachment), true); assert.equal(turns.length, 4);
   } finally { client.dispose(); }
 });

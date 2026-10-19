@@ -42,9 +42,11 @@ test('multiple model ghosts retain exact candidates; accept one invalidates all 
     assert.equal(f.client.view.modelProposals!.length, 2);
     assert.ok(Object.isFrozen(f.client.view.modelProposals![0]!.after.center));
     assert.deepEqual(f.authority.snapshot(), before);
-    f.client.setModelStreaming(true); await f.client.approve(first.proposalId); await f.client.decline(second.proposalId);
-    assert.equal(f.calls.filter(c => c.path !== '/project/session').length, 0);
-    f.client.setModelStreaming(false); await f.client.approve(second.proposalId);
+    f.client.setModelStreaming(true); await f.client.decline(first.proposalId);
+    assert.equal(f.calls.filter(c => c.path === '/project/decline').length, 1);
+    assert.deepEqual(f.authority.snapshot(), before);
+    await f.client.approve(second.proposalId);
+    f.client.setModelStreaming(false);
     assert.deepEqual(f.authority.snapshot().project.entities.find(e => e.id === edit.entityId), second.after);
     assert.equal(f.client.view.modelProposals!.length, 0); assert.equal(f.client.view.undoAvailable, true);
     await f.client.approve(first.proposalId); assert.equal(f.authority.snapshot().project.revision, before.project.revision + 1);
@@ -149,16 +151,16 @@ test('model tool callback admits ghosts during streaming, retains contexts, and 
     while (!admissions.length) await new Promise(resolve => setTimeout(resolve, 0));
     assert.equal(await admissions[0], true); assert.equal(chat.view.phase, 'streaming');
     assert.deepEqual(chat.view.messages.at(-1)!.tools, [context]);
-    await f.client.approve(proposal.proposalId); assert.equal(f.authority.snapshot().project.revision, proposal.projectRevision);
+    await f.client.approve(proposal.proposalId); assert.equal(f.authority.snapshot().project.revision, proposal.projectRevision + 1);
     push({ kind: 'done', requestId: turn.requestId, conversationId: 'conversation-one' }); stream.close(); await sending;
-    assert.equal(f.client.view.modelStreaming, false); assert.equal(f.client.view.modelProposals!.length, 1);
+    assert.equal(f.client.view.modelStreaming, false); assert.equal(f.client.view.modelProposals!.length, 0);
     chat.accountChanged(); assert.equal(guards[0]!(), false); assert.equal(f.client.view.modelProposals!.length, 0);
     const request = { ...turn, scene: { mode: 'toronto', project: null, toronto: [] } };
     assert.throws(() => validateModelEvent({ kind: 'tool', requestId: turn.requestId, name: 'propose_box_update', context }, request as ModelTurnRequest));
   } finally { chat?.dispose(); f.dispose(); }
 });
 
-test('image-turn proposal admission waits for clean EOF so a new ghost cannot stale active pixel grounding', async () => {
+test('image-turn proposals admit immediately; historical pixels do not gate human review', async () => {
   const f = fixture(); let chat: ModelChatController | undefined;
   try {
     await ready(f); const proposal = f.proposal(), snapshot = f.authority.snapshot();

@@ -152,7 +152,7 @@ test('composer clears only a completed unchanged submission and retains failed/r
     let finish!: (sent: boolean) => void;
     let calls = 0, removals = 0;
     const attachment = {};
-    const scope = { canSend: scenario !== 'blocked', draft: 'Submitted message', draftRevision: 0, attachment,
+    const scope = { canSend: scenario !== 'blocked', draft: 'Submitted message', draftRevision: 0, attachment, effectiveAttachment: attachment,
       view: { phase: 'streaming' }, removeAttachment: () => { removals++; },
       controller: { send: (text: string, image: unknown) => {
         calls++; assert.equal(text, 'Submitted message'); assert.equal(image, attachment);

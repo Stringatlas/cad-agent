@@ -38,6 +38,8 @@ export type CropEvent =
       /** Original decoded binary64 local-meter XYZ, never GPU Float32 positions. */
       readonly positions: readonly number[]; readonly colors: readonly number[];
       /** Flat (sourceFileId 1..4, uint32 sourceRow) pairs aligned with XYZ. Optional only for legacy synthetic streams. */
-      readonly sourceIds?: readonly number[]; readonly stats: CropStats }
+      readonly sourceIds?: readonly number[];
+      /** Source semantic type 0..8 per point, aligned with XYZ. Absent in legacy synthetic streams. */
+      readonly labels?: readonly number[]; readonly stats: CropStats }
   | { readonly type: 'end'; readonly complete: true; readonly stats: CropStats; readonly sampleHash: string }
   | { readonly type: 'error'; readonly error: string };

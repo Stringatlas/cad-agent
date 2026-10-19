@@ -225,10 +225,10 @@ for (const bad of [
   const f = fixture(); await f.model.models(signal()); f.queue.push(sse(complete([bad])));
   await assert.rejects(turn(f), code('unsupported-tool')); assert.equal(f.requests.length, 2); f.model.close();
 });
-test('bounded tool loop does not retry or exceed two executed read-only calls', async () => {
+test('bounded tool loop does not retry or exceed the executed tool budget', async () => {
   const f = fixture(); await f.model.models(signal());
-  for (let i = 0; i < 3; i++) f.queue.push(sse(complete([{ type: 'function_call', namespace: 'scene', name: 'inspect_scene', call_id: `call_${i}`, arguments: '{}' }])));
-  await assert.rejects(turn(f), code('tool-limit')); assert.equal(f.requests.length, 4); f.model.close();
+  for (let i = 0; i <= L.toolCalls; i++) f.queue.push(sse(complete([{ type: 'function_call', namespace: 'scene', name: 'inspect_scene', call_id: `call_${i}`, arguments: '{}' }])));
+  await assert.rejects(turn(f), code('tool-limit')); assert.equal(f.requests.length, L.toolCalls + 2); f.model.close();
 });
 for (const [stream, expected] of [
   [event({ type: 'response.output_text.delta', delta: 'Partial' }), 'interrupted-stream'],

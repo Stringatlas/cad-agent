@@ -5,17 +5,25 @@ import { SCENE_POINT_LIMIT, canonicalScenePointName, canonicalSceneContextReques
 import { protocolRecord, protocolKeys, protocolToken, protocolHash, protocolInteger, canonicalProtocolJson } from './tool-protocol';
 
 export const MODEL_CHAT_LIMITS = Object.freeze({ requestBytes: 65536, textChars: 12000, conversations: 8,
-  conversationTtlMs: 30 * 60 * 1000, turns: 16, historyBytes: 256 * 1024, providerBytes: 1024 * 1024,
-  outputChars: 32000, frameBytes: 128 * 1024, deadlineMs: 90000, models: 128, toolCalls: 2, requestsPerMinute: 30 });
+  conversationTtlMs: 30 * 60 * 1000, turns: 16, historyBytes: 256 * 1024, imageHistoryBytes: 12 * 1024 * 1024, providerBytes: 1024 * 1024,
+  outputChars: 32000, frameBytes: 128 * 1024, deadlineMs: 15 * 60 * 1000, models: 128, toolCalls: 16, requestsPerMinute: 30 });
 export interface ModelTorontoPoint {
   readonly name: ScenePointName; readonly datasetId: 'toronto3d'; readonly artifactRevision: string;
   readonly key: { readonly sourceFileId: number; readonly sourceRow: number }; readonly position: Vec3;
   readonly frameId: 'toronto3d-local-v1'; readonly units: 'm'; readonly handedness: 'right'; readonly upAxis: 'Z';
   readonly localOrigin: readonly [627285, 4841948, 0];
 }
+export interface ModelAreaOfInterest {
+  readonly datasetId: 'toronto3d'; readonly artifactRevision: string;
+  readonly frameId: 'toronto3d-local-v1'; readonly units: 'm';
+  readonly localOrigin: readonly [627285, 4841948, 0];
+  /** Ordered rectangle corners on a reference XY plane; all elevations are of interest. */
+  readonly corners: readonly [Vec3, Vec3, Vec3, Vec3];
+}
 export interface ModelScene {
   readonly mode: 'toronto' | 'demo' | 'pole'; readonly project: SceneContextRequest | null;
   readonly toronto: readonly ModelTorontoPoint[];
+  readonly areaOfInterest?: ModelAreaOfInterest;
 }
 export interface ModelCatalog {
   readonly mode: 'disabled' | 'api-key' | 'chatgpt'; readonly ready: boolean; readonly code: string;
@@ -25,19 +33,59 @@ export interface ModelTurnRequest {
   readonly requestId: string; readonly conversationId: string | null; readonly generation: string;
   readonly model: string; readonly text: string; readonly scene: ModelScene; readonly visualObservation?: ModelVisualObservation;
 }
-export const MODEL_INSPECTION_LIMITS = Object.freeze({ rounds: 3, snapshotBytes: 49152, textChars: 12000, inputItems: 128 });
+export const MODEL_INSPECTION_LIMITS = Object.freeze({ rounds: 17, snapshotBytes: 49152, textChars: 12000, inputItems: 128 });
 export type ModelInspectionOmission = 'credentials-and-headers' | 'opaque-reasoning' | 'unrecognized-fields' | 'truncated' | 'image-bytes';
 export interface ModelRequestInspection {
   readonly round: number; readonly mode: 'api-key' | 'chatgpt'; readonly continuation: boolean;
   readonly bodyJson: string; readonly omissions: readonly ModelInspectionOmission[];
 }
 export type ModelRequestPhase = 'dispatched' | 'completed' | 'failed' | 'cancelled';
+export type ModelCaptureRequest = { readonly kind: 'current' } | { readonly kind: 'top-down' } |
+  { readonly kind: 'camera'; readonly position: Vec3; readonly target: Vec3; readonly up?: Vec3 };
+export type ModelReferenceSelection = { readonly kind: 'toronto-point'; readonly key: { readonly sourceFileId: number; readonly sourceRow: number } } |
+  { readonly kind: 'project-point'; readonly entityId: string; readonly pointIndex: number };
+export type ModelBrowserAction = { readonly kind: 'capture'; readonly request: ModelCaptureRequest } | { readonly kind: 'select-reference'; readonly reference: ModelReferenceSelection };
+export type ModelProposalAuthority = 'project' | 'points' | 'cad';
+export function canonicalModelCaptureRequest(value: unknown): ModelCaptureRequest {
+  const r = protocolRecord(value);
+  if (r.kind === 'current' || r.kind === 'top-down') { protocolKeys(r, ['kind']); return { kind: r.kind }; }
+  protocolKeys(r, ['kind', 'position', 'target'], ['up']);
+  if (r.kind !== 'camera') throw new TypeError('Invalid camera kind');
+  assertVec3(r.position); assertVec3(r.target); if (r.up !== undefined) assertVec3(r.up);
+  if ([...r.position, ...r.target, ...(r.up as Vec3 | undefined ?? [])].some(n => Math.abs(n) > 1e7) ||
+    r.position.every((n, i) => n === (r.target as Vec3)[i])) throw new TypeError('Invalid camera');
+  if (r.up !== undefined) {
+    const up = r.up as Vec3, d = r.target.map((n, i) => n - (r.position as Vec3)[i]);
+    if (Math.hypot(up[1] * d[2] - up[2] * d[1], up[2] * d[0] - up[0] * d[2], up[0] * d[1] - up[1] * d[0]) < 1e-9) throw new TypeError('Degenerate camera up');
+  }
+  return JSON.parse(JSON.stringify(r)) as ModelCaptureRequest;
+}
+export function canonicalModelReferenceSelection(value: unknown): ModelReferenceSelection {
+  const r = protocolRecord(value);
+  if (r.kind === 'toronto-point') {
+    protocolKeys(r, ['kind', 'key']); const key = protocolRecord(r.key); protocolKeys(key, ['sourceFileId', 'sourceRow']);
+    protocolInteger(key.sourceFileId, 4); protocolInteger(key.sourceRow, 0xffffffff); if (key.sourceFileId < 1) throw new TypeError('Invalid source');
+  } else {
+    protocolKeys(r, ['kind', 'entityId', 'pointIndex']); if (r.kind !== 'project-point') throw new TypeError('Invalid reference');
+    protocolToken(r.entityId); protocolInteger(r.pointIndex, 0xffffffff);
+  }
+  return JSON.parse(JSON.stringify(r)) as ModelReferenceSelection;
+}
+export function canonicalModelBrowserAction(value: unknown): ModelBrowserAction {
+  const r = protocolRecord(value);
+  if (r.kind === 'capture') { protocolKeys(r, ['kind', 'request']); return { kind: r.kind, request: canonicalModelCaptureRequest(r.request) }; }
+  protocolKeys(r, ['kind', 'reference']); if (r.kind !== 'select-reference') throw new TypeError('Invalid action');
+  return { kind: r.kind, reference: canonicalModelReferenceSelection(r.reference) };
+}
 export type ModelChatEvent =
   | { readonly kind: 'request-inspection'; readonly requestId: string; readonly inspection: ModelRequestInspection }
   | { readonly kind: 'request-phase'; readonly requestId: string; readonly round: number; readonly phase: ModelRequestPhase }
+  | { readonly kind: 'browser-request'; readonly requestId: string; readonly toolCallId: string; readonly nonce: string; readonly action: ModelBrowserAction }
+  | { readonly kind: 'approval-wait'; readonly requestId: string; readonly proposalId: string; readonly authority: ModelProposalAuthority }
+  | { readonly kind: 'approval-result'; readonly requestId: string; readonly proposalId: string; readonly authority: ModelProposalAuthority; readonly outcome: 'accepted' | 'declined' | 'invalidated'; readonly scene: ModelScene }
   | { readonly kind: 'start'; readonly requestId: string; readonly conversationId: string; readonly model: string }
   | { readonly kind: 'delta'; readonly requestId: string; readonly text: string }
-  | { readonly kind: 'tool'; readonly requestId: string; readonly name: 'inspect_scene' | 'resolve_visual_pixel' | 'nearest_label' | 'propose_box_create' | 'propose_box_update' | 'propose_point_move' | 'propose_point_move_to_nearest_label' | 'propose_cad_box' | 'propose_cad_cylinder' | 'assess_utility_box' | 'propose_utility_box'; readonly context: unknown }
+  | { readonly kind: 'tool'; readonly requestId: string; readonly name: 'inspect_scene' | 'capture_scene' | 'select_reference' | 'resolve_visual_pixel' | 'nearest_label' | 'propose_box_create' | 'propose_box_update' | 'propose_point_move' | 'propose_point_move_to_nearest_label' | 'propose_cad_box' | 'propose_cad_cylinder' | 'assess_utility_box' | 'propose_utility_box'; readonly context: unknown }
   | { readonly kind: 'tool-request'; readonly requestId: string; readonly toolCallId: string; readonly nonce: string; readonly observationId: string; readonly x: number; readonly y: number }
   | { readonly kind: 'done'; readonly requestId: string; readonly conversationId: string }
   | { readonly kind: 'error'; readonly requestId: string; readonly code: string };
@@ -45,7 +93,7 @@ function boundedText(value: unknown, max: number): asserts value is string {
   if (typeof value !== 'string' || !value.length || value.length > max || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)) throw new TypeError('Invalid bounded text');
 }
 export function canonicalModelScene(value: unknown): ModelScene {
-  const r = protocolRecord(value); protocolKeys(r, ['mode', 'project', 'toronto']);
+  const r = protocolRecord(value); protocolKeys(r, ['mode', 'project', 'toronto'], ['areaOfInterest']);
   if (typeof r.mode !== 'string' || !['demo', 'toronto', 'pole'].includes(r.mode) || !Array.isArray(r.toronto) || r.toronto.length > SCENE_POINT_LIMIT) throw new TypeError('Invalid scene');
   const project = r.project === null ? null : canonicalSceneContextRequest(r.project);
   // Non-demo scenes may carry an empty authoritative revision binding, never hidden synthetic selections.
@@ -66,7 +114,25 @@ export function canonicalModelScene(value: unknown): ModelScene {
       frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] } as const;
   });
   if (new Set(toronto.map(p => p.name)).size !== toronto.length || new Set(toronto.map(p => p.artifactRevision)).size > 1) throw new TypeError('Conflicting Toronto selections');
-  return { mode: r.mode as ModelScene['mode'], project, toronto };
+  let areaOfInterest: ModelAreaOfInterest | undefined;
+  if (r.areaOfInterest !== undefined) {
+    const a = protocolRecord(r.areaOfInterest);
+    protocolKeys(a, ['datasetId', 'artifactRevision', 'frameId', 'units', 'localOrigin', 'corners']);
+    if (r.mode !== 'toronto' || a.datasetId !== 'toronto3d' || a.frameId !== 'toronto3d-local-v1' || a.units !== 'm' ||
+      JSON.stringify(a.localOrigin) !== '[627285,4841948,0]' || !Array.isArray(a.corners) || a.corners.length !== 4) throw new TypeError('Invalid area binding');
+    protocolHash(a.artifactRevision);
+    const corners = a.corners.map(p => { assertVec3(p); if (p.some(n => Math.abs(n) > 1e7)) throw new TypeError('Area position limit'); return [...p] as Vec3; });
+    const [p, q, s, t] = corners;
+    const u = [q[0] - p[0], q[1] - p[1]], v = [t[0] - p[0], t[1] - p[1]];
+    const lu = Math.hypot(...u), lv = Math.hypot(...v);
+    if (lu < .01 || lv < .01 || corners.some(c => Math.abs(c[2] - p[2]) > 1e-6) ||
+      Math.abs(u[0] * v[0] + u[1] * v[1]) > lu * lv * 1e-6 ||
+      Math.hypot(s[0] - q[0] - t[0] + p[0], s[1] - q[1] - t[1] + p[1]) > 1e-5 ||
+      toronto.some(point => point.artifactRevision !== a.artifactRevision)) throw new TypeError('Invalid XY rectangle');
+    areaOfInterest = { datasetId: 'toronto3d', artifactRevision: a.artifactRevision, frameId: 'toronto3d-local-v1', units: 'm',
+      localOrigin: [627285, 4841948, 0], corners: corners as unknown as ModelAreaOfInterest['corners'] };
+  }
+  return { mode: r.mode as ModelScene['mode'], project, toronto, ...(areaOfInterest ? { areaOfInterest } : {}) };
 }
 export function canonicalModelTurnRequest(value: unknown): ModelTurnRequest {
   const r = protocolRecord(value); protocolKeys(r, ['requestId', 'conversationId', 'generation', 'model', 'text', 'scene'], ['visualObservation']);
@@ -101,9 +167,17 @@ export function canonicalModelChatEvent(value: unknown): ModelChatEvent {
     }
     case 'request-phase': protocolKeys(r, ['kind', 'requestId', 'round', 'phase']); protocolInteger(r.round, MODEL_INSPECTION_LIMITS.rounds);
       if (r.round < 1 || typeof r.phase !== 'string' || !['dispatched', 'completed', 'failed', 'cancelled'].includes(r.phase)) throw new TypeError('Invalid inspection phase'); break;
+    case 'browser-request':
+      protocolKeys(r, ['kind', 'requestId', 'toolCallId', 'nonce', 'action']);
+      if (typeof r.toolCallId !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/u.test(r.toolCallId)) throw new TypeError('Invalid tool call ID');
+      protocolToken(r.nonce); canonicalModelBrowserAction(r.action); break;
+    case 'approval-wait': case 'approval-result':
+      protocolKeys(r, ['kind', 'requestId', 'proposalId', 'authority', ...(r.kind === 'approval-result' ? ['outcome', 'scene'] : [])]);
+      protocolToken(r.proposalId); if (typeof r.authority !== 'string' || !['project', 'points', 'cad'].includes(r.authority)) throw new TypeError('Invalid authority');
+      if (r.kind === 'approval-result') { if (typeof r.outcome !== 'string' || !['accepted', 'declined', 'invalidated'].includes(r.outcome)) throw new TypeError('Invalid approval outcome'); canonicalModelScene(r.scene); } break;
     case 'start': protocolKeys(r, ['kind', 'requestId', 'conversationId', 'model']); protocolToken(r.conversationId); boundedText(r.model, 256); break;
     case 'delta': protocolKeys(r, ['kind', 'requestId', 'text']); boundedText(r.text, MODEL_CHAT_LIMITS.outputChars); break;
-    case 'tool': protocolKeys(r, ['kind', 'requestId', 'name', 'context']); if (!['inspect_scene', 'resolve_visual_pixel', 'nearest_label', 'propose_box_create', 'propose_box_update', 'propose_point_move', 'propose_point_move_to_nearest_label', 'propose_cad_box', 'propose_cad_cylinder', 'assess_utility_box', 'propose_utility_box'].includes(String(r.name)) || canonicalProtocolJson(r.context).length > MODEL_CHAT_LIMITS.frameBytes / 2) throw new TypeError('Invalid tool context'); break;
+    case 'tool': protocolKeys(r, ['kind', 'requestId', 'name', 'context']); if (typeof r.name !== 'string' || !['inspect_scene', 'capture_scene', 'select_reference', 'resolve_visual_pixel', 'nearest_label', 'propose_box_create', 'propose_box_update', 'propose_point_move', 'propose_point_move_to_nearest_label', 'propose_cad_box', 'propose_cad_cylinder', 'assess_utility_box', 'propose_utility_box'].includes(String(r.name)) || canonicalProtocolJson(r.context).length > MODEL_CHAT_LIMITS.frameBytes / 2) throw new TypeError('Invalid tool context'); break;
     case 'tool-request': protocolKeys(r, ['kind', 'requestId', 'toolCallId', 'nonce', 'observationId', 'x', 'y']);
       if (typeof r.toolCallId !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/u.test(r.toolCallId)) throw new TypeError('Invalid tool call ID');
       protocolToken(r.nonce); protocolToken(r.observationId); protocolInteger(r.x, 4095); protocolInteger(r.y, 4095); break;

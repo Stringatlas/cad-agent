@@ -53,13 +53,13 @@ test('inspection validation freezes accepted snapshots and rejects wrong binding
   const cases: unknown[] = [
     { ...snapshot(), requestId: 'wrong-request' },
     { ...snapshot(), secret: 'unexpected' },
-    ...[{ ...s, round: 0 }, { ...s, round: 4 }, { ...s, round: 1.5 }, { ...s, mode: 'disabled' },
+    ...[{ ...s, round: 0 }, { ...s, round: MODEL_INSPECTION_LIMITS.rounds + 1 }, { ...s, round: 1.5 }, { ...s, mode: 'disabled' },
       { ...s, continuation: true }, { ...s, bodyJson: JSON.stringify({ model: 'wrong-model' }) },
       { ...s, bodyJson: 'not json' }, { ...s, bodyJson: '[]' }, { ...s, bodyJson: JSON.stringify({ model: request.model, padding: '界'.repeat(MODEL_INSPECTION_LIMITS.snapshotBytes / 3) }) },
       { ...s, omissions: [] }, { ...s, omissions: ['credentials-and-headers', 'credentials-and-headers'] },
       { ...s, omissions: ['credentials-and-headers', 'unknown'] }, { ...s, apiKey: 'not-allowed' }]
       .map(inspection => ({ ...snapshot(), inspection })),
-    phase(request, 0), phase(request, 4), phase(request, 1, 'prepared'), phase(request, 1, 'interrupted'),
+    phase(request, 0), phase(request, MODEL_INSPECTION_LIMITS.rounds + 1), phase(request, 1, 'prepared'), phase(request, 1, 'interrupted'),
     { ...phase(), requestId: 'wrong-request' }, { ...phase(), source: 'client' },
   ];
   for (const bad of cases) assert.throws(() => validateModelEvent(bad, request), JSON.stringify(bad).slice(0, 200));

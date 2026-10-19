@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { AdaptivePayload } from './adaptive-display';
 import { createNativePickCache, type PoleSelection } from './pole-picking';
+import { pointTypeColor, type PointColorMode } from './point-colors';
 
 export const ADAPTIVE_BATCH_CAPACITY = 131_072;
 export const ADAPTIVE_RESIDENT_LIMIT = 3_000_000;
@@ -48,6 +49,7 @@ export function createAdaptiveRender(material: THREE.PointsMaterial, options: Ad
   const nodes = new Map<string, Node>();
   let batches: Batch[] = [], count = 0, disposed = false;
   let datasetSignature: string | undefined;
+  let colorMode: PointColorMode = 'rgb';
 
   function allocate(): Batch {
     // The final allocation is capped too: total GPU slots never exceed the point budget.
@@ -62,6 +64,25 @@ export function createAdaptiveRender(material: THREE.PointsMaterial, options: Ad
     return { object, positions, colors, sourceIds: new Uint32Array(slots * 2), spans: [], count: 0 };
   }
 
+  // Recolor from immutable source spans without disturbing committed position overrides.
+  function recolor(batch: Batch) {
+    let offset = 0;
+    for (const span of batch.spans) {
+      const payload = span.node.payload;
+      for (let i = 0; i < span.count; i++) {
+        const source = span.start + i, target = offset + i;
+        const typeColor = colorMode === 'type' ? pointTypeColor(payload.labels[source]) : undefined;
+        for (let axis = 0; axis < 3; axis++) {
+          batch.colors[target * 3 + axis] = typeColor
+            ? Math.round(255 * typeColor[axis])
+            : linearColors[payload.colors[source * 3 + axis]];
+        }
+      }
+      offset += span.count;
+    }
+    batch.object.geometry.getAttribute('color').needsUpdate = true;
+  }
+
   function rebuild(batch: Batch) {
     // unregister does not restore old override positions. Never copy GPU values;
     // reconstruct the touched packed batch from its original source-node arrays.
@@ -73,7 +94,6 @@ export function createAdaptiveRender(material: THREE.PointsMaterial, options: Ad
         const source = span.start + i, target = offset + i;
         for (let axis = 0; axis < 3; axis++) {
           batch.positions[target * 3 + axis] = payload.positions[source * 3 + axis];
-          batch.colors[target * 3 + axis] = linearColors[payload.colors[source * 3 + axis]];
         }
         batch.sourceIds[target * 2] = payload.sourceIds[source * 2];
         batch.sourceIds[target * 2 + 1] = payload.sourceIds[source * 2 + 1];
@@ -83,7 +103,7 @@ export function createAdaptiveRender(material: THREE.PointsMaterial, options: Ad
     batch.count = offset;
     batch.object.geometry.setDrawRange(0, offset);
     batch.object.geometry.getAttribute('position').needsUpdate = true;
-    batch.object.geometry.getAttribute('color').needsUpdate = true;
+    recolor(batch);
     batch.object.geometry.computeBoundingBox(); batch.object.geometry.computeBoundingSphere();
   }
 
@@ -137,6 +157,12 @@ export function createAdaptiveRender(material: THREE.PointsMaterial, options: Ad
     get count() { return count; },
     get chunks() { return batches.length; },
     get names(): readonly string[] { return [...nodes.keys()]; },
+    setColorMode(mode: PointColorMode) {
+      if (disposed) throw new Error('Adaptive render is disposed');
+      if (mode === colorMode) return;
+      colorMode = mode;
+      for (const batch of batches) recolor(batch);
+    },
     add(payload: AdaptivePayload) {
       if (disposed) throw new Error('Adaptive render is disposed');
       if (nodes.has(payload.name)) throw new Error('Duplicate adaptive render node');
