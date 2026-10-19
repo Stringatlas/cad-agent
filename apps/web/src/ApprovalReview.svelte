@@ -14,11 +14,12 @@
 </script>
 
 <script lang="ts">
-  let { items }: { items: readonly ApprovalReviewItem[] } = $props();
+  let { items, focusId }: { items: readonly ApprovalReviewItem[]; focusId?: string } = $props();
   let selectedId = $state<string>();
   // Keep the current candidate stable as other proposals arrive or disappear.
   const index = $derived(Math.max(0, items.findIndex(item => item.id === selectedId)));
   const item = $derived(items[index]);
+  $effect(() => { if (focusId) selectedId = focusId; });
   function navigate(offset: number) { selectedId = items[index + offset]?.id ?? item?.id; }
   $effect(() => { if (item && selectedId !== item.id) selectedId = item.id; });
 </script>

@@ -147,7 +147,7 @@ async function artifactFixture(t: { after(fn: () => unknown): void }) {
   return { root, artifactRevision, authority: new ProjectSession(join(root, 'project.json')) };
 }
 
-test('server binds an AOI-only turn to current artifact and exposes all-elevation intent without query or mutation authority', async t => {
+test('server binds an AOI-only turn to current artifact and exposes all-elevation query without mutation authority', async t => {
   const f = await artifactFixture(t), input = scene({ ...area(), artifactRevision: f.artifactRevision });
   const bound = await bindModelScene(input, f.authority, f.root, signal());
   try {
@@ -155,7 +155,9 @@ test('server binds an AOI-only turn to current artifact and exposes all-elevatio
     assert.deepEqual(context.areaOfInterest.corners, input.areaOfInterest!.corners);
     assert.equal(context.areaOfInterest.elevationScope, 'all-elevations');
     assert.equal(context.areaOfInterest.referencePlane, 'orbit-target-z-not-terrain');
-    assert.equal(context.areaOfInterest.purpose, 'spatial-intent-not-geometry-authority-or-query-filter');
+    assert.equal(context.areaOfInterest.purpose, 'spatial-query-footprint-not-geometry-authority');
+    assert.equal(context.capabilities.queryAoiPoints, true);
+    assert.equal(typeof bound.queryAoiPoints, 'function');
     assert.equal(context.areaOfInterest.source, 'user-selected-xy-rectangle');
     assert.deepEqual(context.toronto, []); assert.equal(context.capabilities.inspectScene, true);
     assert.equal(context.capabilities.nearestLabel, false); assert.equal(context.capabilities.geometryMutation, false);

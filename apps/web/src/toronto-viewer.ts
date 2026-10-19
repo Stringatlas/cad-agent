@@ -1,14 +1,17 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { SCENE_POINT_LIMIT, type CropBox, type CropSelection, type PointObservation, type DatasetInfo, type Vec3, type PointOverrideSnapshot, type PointMoveProposal, type TorontoCadSnapshot, type ModelCaptureRequest } from '@spatial/contracts';
+import type { SceneObjectSnapshot } from '@spatial/contracts';
+import { createSceneObjectRender } from './scene-object-render';
 import { createVisualCapture } from './visual-capture';
 import { createViewportSizer } from './viewport-size';
 import { createCameraFlight } from './camera-flight';
+import { focusOrbit, isOrbitFocusGesture, orbitHitPosition } from './orbit-focus';
 import { updateStableOrbitControls } from './orbit-stability';
 import { createAdaptiveDisplay, type AdaptiveSettings, type AdaptiveStats } from './adaptive-display';
 import { createAdaptiveRender } from './adaptive-render';
 import { createCropLayer } from './crop-render';
-import { pointColors, type PointColorMode } from './point-colors';
+import { pointColors, POINT_TYPE_KEY, UNKNOWN_POINT_COLOR, type PointColorMode } from './point-colors';
 import { createTorontoCadRender } from './toronto-cad-render';
 import { createPreprocessingLayer, type PreprocessingSummary } from './preprocessing-overlays';
 import { createPointOverrideRender } from './point-override-render';
@@ -18,7 +21,7 @@ import { createAreaOverlay } from './area-overlay';
 import { createPolePickCache, createDetailPickCache, poleGestureKind, isPoleClick, type PoleSelection } from './pole-picking';
 
 /** Disposable point projection; prepared dataset remains authoritative, not this render cache. */
-export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) => void, onSelect?: (selection: CropSelection) => void, onFailure?: (error: string) => void, onQuery?: (selection: PoleSelection) => void, onAdaptiveStatus?: (stats: AdaptiveStats) => void, onArea?: (corners?: readonly [Vec3, Vec3, Vec3, Vec3], error?: string) => void, onInteraction?: () => void) {
+export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) => void, onSelect?: (selection: CropSelection) => void, onFailure?: (error: string) => void, onQuery?: (selection: PoleSelection) => void, onAdaptiveStatus?: (stats: AdaptiveStats) => void, onArea?: (corners?: readonly [Vec3, Vec3, Vec3, Vec3], error?: string) => void, onInteraction?: () => void, onObjectSelect?: (id: string) => void) {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x101927);
   const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 10_000);
@@ -30,6 +33,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
   host.appendChild(renderer.domElement);
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
+  controls.zoomToCursor = true;
   controls.maxDistance = 5000;
   controls.minDistance = 1;
   const material = new THREE.PointsMaterial({ vertexColors: true, size: 2, sizeAttenuation: false });
@@ -38,8 +42,19 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
   const cropLayer = createCropLayer(scene);
   let colorMode: PointColorMode = 'rgb';
   let overviewColors: { rgb: Uint8Array; labels: Uint8Array } | undefined;
+  // Render-only: captures can borrow colors synchronously without touching Svelte's
+  // display setting, authority, controls, or capture invalidation generation.
+  const applyColorMode = (mode: PointColorMode) => {
+    colorMode = mode;
+    if (overviewColors) {
+      const attribute = points.geometry.getAttribute('color') as THREE.BufferAttribute;
+      (attribute.array as Float32Array).set(pointColors(overviewColors.rgb, overviewColors.labels, mode)); attribute.needsUpdate = true;
+    }
+    native.setColorMode(mode); cropLayer.setColorMode(mode);
+  };
   const pointOverrides = createPointOverrideRender(scene);
   const cad = createTorontoCadRender(scene);
+  const authoredObjects = createSceneObjectRender(scene);
   const preprocessing = createPreprocessingLayer(scene);
   const overlay = document.createElement('div'); overlay.className = 'selection-window';
   overlay.setAttribute('data-testid', 'selection-window'); overlay.hidden = true;
@@ -80,6 +95,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
   let disposed = false, renderDirty = true, renderedFrames = 0;
   const captureSource = createVisualCapture({
     renderer, scene, camera, target: () => controls.target.toArray() as [number, number, number],
+    pointColorMode: { get: () => colorMode, set: applyColorMode },
     available: () => !disposed && !gpuFailed && !!dataset && !!overview && viewport.sync(),
     binding: () => {
       if (!dataset) throw new Error('Toronto dataset unavailable');
@@ -97,16 +113,17 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
         algorithm: overview.algorithm, candidatePoints: overview.candidatePoints, opacity: material.opacity } : null,
       detail: { displayedPointCount: cropLayer.count, chunkCount: cropLayer.group.children.length, state: detailState },
       pointColorMode: colorMode,
+      ...(colorMode === 'type' ? { pointTypeKey: [...POINT_TYPE_KEY, { label: null, name: 'Unknown', color: UNKNOWN_POINT_COLOR }] } : {}),
       observation: 'capture-time-rendered-scene-not-current-geometry',
-      layers: { areaOfInterest: areaOverlay.visible, cadSolidsOrGhosts: cad.captureBlocked, pointEditsOrPreview: pointOverrides.captureBlocked, derivedOverlays: preprocessing.count },
-      pointProvenance: pointOverrides.captureBlocked ? 'unavailable-for-edited-imagery' : 'original-source-records-only',
+      layers: { areaOfInterest: areaOverlay.visible, cadSolidsOrGhosts: cad.captureBlocked, pointEditsOrPreview: pointOverrides.captureBlocked, derivedOverlays: preprocessing.count, authoredDatumsOrGhosts: authoredObjects.count },
+      pointProvenance: pointOverrides.captureBlocked || authoredObjects.count ? 'unavailable-for-edited-imagery' : 'original-source-records-only',
       pointCountScope: 'overview-adaptive-manual-detail-only-excludes-edit-preview-and-fallback-markers',
       scope: 'Displayed scene including CAD solids, pending ghosts, point edits and overlays when present; not whole-dataset or authoritative geometry evidence' }),
     points: () => [...(points.visible ? [points] : []), ...native.objects, ...cropLayer.group.children],
     resolve: (object, index) => {
       // Original pick caches do not describe effective/preview positions. Keep image
       // capture usable but do not falsely ground edited imagery to original coordinates.
-      if (pointOverrides.captureBlocked) return;
+      if (pointOverrides.captureBlocked || authoredObjects.count) return;
       const original = object === points ? pickCache?.resolve(index) : detailCaches.get(object)?.resolve(index) ?? native.resolve(object, index);
       if (!original || !dataset || original.artifactRevision !== dataset.revision) return;
       return { datasetId: original.datasetId, artifactRevision: original.artifactRevision,
@@ -235,6 +252,8 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       if (!isPoleClick(Math.max(start.travel, Math.hypot(dx, dy)), false, start.cache === pickCache && start.version === pickVersion) || disposed || gpuFailed) return;
       raycaster.params.Points.threshold = camera.position.distanceTo(controls.target) * 2 * Math.tan(camera.fov * Math.PI / 360) / Math.max(rect.height, 1) * 6;
       raycaster.setFromCamera(new THREE.Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1), camera);
+      const datum = authoredObjects.pick(raycaster);
+      if (datum) { onObjectSelect?.(datum); return; }
       // Detail is the active picking layer; overview is context/fallback only.
       const hit = raycaster.intersectObjects([...detailCaches.keys(), ...native.objects])[0] ?? raycaster.intersectObject(pointOverrides.fallback)[0] ?? (points.visible ? raycaster.intersectObject(points)[0] : undefined);
       const resolved = hit?.index === undefined ? undefined : hit.object === pointOverrides.fallback ? pointOverrides.resolveFallback(hit.index) :
@@ -261,6 +280,34 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       if (original) onPick?.(original.position);
     }
   };
+  let objectPress: { id: number; x: number; y: number } | undefined;
+  const objectDown = (event: PointerEvent) => {
+    objectPress = event.button === 0 && !event.shiftKey && !event.ctrlKey && !event.metaKey ? { id: event.pointerId, x: event.clientX, y: event.clientY } : undefined;
+  };
+  const objectUp = (event: PointerEvent) => {
+    const start = objectPress; objectPress = undefined;
+    if (!onObjectSelect || !start || start.id !== event.pointerId || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4 || disposed || gpuFailed) return;
+    const rect = renderer.domElement.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    raycaster.params.Points.threshold = camera.position.distanceTo(controls.target) * 2 * Math.tan(camera.fov * Math.PI / 360) / rect.height * 9;
+    raycaster.setFromCamera(new THREE.Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1), camera);
+    const id = authoredObjects.pick(raycaster); if (id) onObjectSelect(id);
+  };
+  const objectCancel = () => { objectPress = undefined; };
+  const doubleClick = (event: MouseEvent) => {
+    if (!isOrbitFocusGesture(event) || disposed || gpuFailed || pointerStart) return;
+    const rect = renderer.domElement.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    raycaster.params.Points.threshold = camera.position.distanceTo(controls.target) * 2 * Math.tan(camera.fov * Math.PI / 360) / rect.height * 6;
+    raycaster.setFromCamera(new THREE.Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1), camera);
+    const hit = raycaster.intersectObjects([...cad.group.children, ...cropLayer.group.children, ...native.objects,
+      pointOverrides.fallback, ...(points.visible ? [points] : [])])[0];
+    if (hit && focusOrbit(camera, controls, orbitHitPosition(hit))) { flight.reset(); visual.invalidate(); }
+  };
+  renderer.domElement.addEventListener('dblclick', doubleClick);
+  renderer.domElement.addEventListener('pointerdown', objectDown, true);
+  renderer.domElement.addEventListener('pointerup', objectUp, true);
+  renderer.domElement.addEventListener('pointercancel', objectCancel, true);
   const contextMenu = (event: MouseEvent) => { if (onQuery && (event.ctrlKey || event.metaKey || pointerStart?.kind === 'query')) { event.preventDefault(); event.stopImmediatePropagation(); } };
   renderer.domElement.addEventListener('contextmenu', contextMenu, true);
   renderer.domElement.addEventListener('pointerdown', pointerDown, true);
@@ -298,6 +345,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
           camera.updateMatrixWorld();
           frustum.setFromProjectionMatrix(projection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
           adaptive.update({ position: camera.position.toArray() as [number, number, number],
+            focus: controls.target.toArray() as [number, number, number],
             planes: frustum.planes.map(p => [p.normal.x, p.normal.y, p.normal.z, p.constant] as const),
             viewportHeight: host.clientHeight, fovDegrees: camera.fov });
         }
@@ -410,12 +458,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
     },
     setColorMode(mode: PointColorMode) {
       if (disposed || mode === colorMode) return;
-      colorMode = mode;
-      if (overviewColors) {
-        const attribute = points.geometry.getAttribute('color') as THREE.BufferAttribute;
-        (attribute.array as Float32Array).set(pointColors(overviewColors.rgb, overviewColors.labels, mode)); attribute.needsUpdate = true;
-      }
-      native.setColorMode(mode); cropLayer.setColorMode(mode); visual.invalidate();
+      applyColorMode(mode); visual.invalidate();
     },
     update(sample: PointObservation) {
       if (disposed) return;
@@ -444,6 +487,14 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       pickCache?.dispose(); pickCache = nextCache;
       bounds = sample.dataset.bounds;
       if (!initialized) { initialized = true; frameDataset(); }
+    },
+    setObjects(snapshot?: SceneObjectSnapshot, selectedId?: string, hiddenIds: readonly string[] = []) {
+      if (disposed) return;
+      if (authoredObjects.set(snapshot?.artifactRevision === dataset?.revision ? snapshot : undefined, selectedId, hiddenIds)) visual.invalidate();
+    },
+    focusPosition(position: Vec3) {
+      const delta = new THREE.Vector3(...position).sub(controls.target);
+      camera.position.add(delta); controls.target.set(...position); controls.update(); visual.invalidate();
     },
     setDraftMarkers(references: readonly { name: string; position: Vec3; artifactRevision: string; proposed?: boolean; markerId?: string }[]) {
       if (disposed) return;
@@ -509,14 +560,18 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
     frameDataset,
     dispose() {
       adaptive?.dispose(); native.dispose(); scene.remove(native.group); nativeMaterial.dispose();
+      renderer.domElement.removeEventListener('dblclick', doubleClick);
       flight.dispose(); visual.dispose(); areaOverlay.dispose();
       controls.removeEventListener('change', controlsChanged);
       disposed = true; clearDetail(); pickCache?.dispose(); pickCache = undefined; finishGesture();
-      pointOverrides.dispose(); cad.dispose(); preprocessing.dispose();
+      pointOverrides.dispose(); cad.dispose(); preprocessing.dispose(); authoredObjects.dispose();
       markerGeometry.dispose(); markerMaterial.dispose(); winnerGeometry.dispose(); winnerMaterial.dispose(); lineGeometry.dispose(); lineMaterial.dispose();
       for (const name of draftMarkers.keys()) removeDraftMarker(name);
       delete host.dataset.draftMarkers;
       renderer.domElement.removeEventListener('contextmenu', contextMenu, true);
+      renderer.domElement.removeEventListener('pointerdown', objectDown, true);
+      renderer.domElement.removeEventListener('pointerup', objectUp, true);
+      renderer.domElement.removeEventListener('pointercancel', objectCancel, true);
       cancelAnimationFrame(frame);
       resize.disconnect();
       controls.dispose();

@@ -100,6 +100,125 @@ test('type mode applies to arrivals, split spans and eviction repacking, then re
   } finally { render.dispose(); material.dispose(); }
 });
 
+test('append only writes new color/ID spans and extends source bounds without geometry scans', () => {
+  const material = new THREE.PointsMaterial();
+  let ids: Uint32Array | undefined;
+  const render = createAdaptiveRender(material, { pointBudget: 10,
+    register(_object, sourceIds) { ids = sourceIds; }, unregister() {},
+  });
+  try {
+    render.add(payload('r0', 2, 100));
+    const object = render.objects[0], geometry = object.geometry;
+    const colors = geometry.getAttribute('color').array;
+    const box = geometry.boundingBox!, sphere = geometry.boundingSphere!;
+    assert.ok(box.min.x > 0 && box.min.y > 0 && box.min.z > 0, 'unused slots must not include the origin');
+    // Sentinels expose an accidental full recolor/ID rewrite on the append path.
+    colors[0] = 17; ids![1] = 1234;
+    geometry.computeBoundingBox = () => { throw new Error('whole-position box scan'); };
+    geometry.computeBoundingSphere = () => { throw new Error('whole-position sphere scan'); };
+    // External registrations may change live bounds, but not the source-only cache.
+    box.min.set(-9999, -9999, -9999); box.max.set(9999, 9999, 9999);
+    sphere.radius = 9999;
+    const next = payload('r1', 1, 200);
+    (next.positions as Float64Array).set([-7.123456789, 5, 9]);
+    render.add(next);
+    assert.equal(colors[0], 17); assert.equal(ids![1], 1234);
+    assert.deepEqual(Array.from(colors.slice(6, 9)), [55, 255, 0]);
+    assert.deepEqual(Array.from(ids!.slice(4, 6)), [1, 200]);
+    assert.equal(geometry.boundingBox, box); assert.equal(geometry.boundingSphere, sphere);
+    assert.equal(box.min.x, Math.min(-7.123456789, Math.fround(-7.123456789)));
+    const lastOriginalX = 100 + 1 / 1000 + 0.00000000001;
+    assert.equal(box.max.x, Math.max(lastOriginalX, Math.fround(lastOriginalX)));
+    assert.equal(box.min.y, 2); assert.equal(box.max.y, 5);
+    assert.equal(box.min.z, 3); assert.equal(box.max.z, 9);
+    assert.ok(Math.abs(sphere.radius - box.getSize(new THREE.Vector3()).length() / 2) < 1e-12);
+    for (const point of projected(render)) {
+      const original = new THREE.Vector3(...point.position);
+      assert.ok(box.containsPoint(original));
+      assert.ok(sphere.distanceToPoint(original) <= 1e-12);
+      assert.ok(box.containsPoint(new THREE.Vector3(...point.position.map(Math.fround))));
+    }
+    // Exact picks consult immutable binary64 caches, not the sentinel GPU IDs.
+    assert.equal(render.resolve(object, 0)!.key.sourceRow, 100);
+    assert.equal(render.resolve(object, 2)!.position[0], -7.123456789);
+  } finally { render.dispose(); material.dispose(); }
+});
+
+test('queued recolors and multiple appends retain every required GPU upload range', () => {
+  const material = new THREE.PointsMaterial();
+  const render = createAdaptiveRender(material, { pointBudget: 10 });
+  function covers(attribute: THREE.BufferAttribute, start: number, end: number) {
+    for (let index = start; index < end; index++) assert.ok(attribute.updateRanges.some(range => range.start <= index && range.start + range.count > index), `missing upload component ${index}`);
+  }
+  try {
+    render.add(payload('r0', 2));
+    const geometry = render.objects[0].geometry;
+    const colors = geometry.getAttribute('color') as THREE.BufferAttribute;
+    const positions = geometry.getAttribute('position') as THREE.BufferAttribute;
+    // Simulate WebGL consuming the previous frame's queued ranges.
+    colors.clearUpdateRanges(); positions.clearUpdateRanges();
+    render.add(payload('r1', 1, 100));
+    render.add(payload('r2', 1, 200));
+    covers(colors, 6, 12); covers(positions, 6, 12);
+    assert.ok(colors.updateRanges.every(range => range.start >= 6), 'append must not upload the old color prefix');
+    assert.ok(positions.updateRanges.every(range => range.start >= 6));
+    render.setColorMode('type');
+    render.add(payload('r3', 1, 300));
+    covers(colors, 0, 15); covers(positions, 6, 15);
+    for (let index = 0; index < 5; index++) {
+      const expected = pointTypeColor(render.resolve(render.objects[0], index)!.semanticLabel).map(value => Math.round(255 * value));
+      assert.deepEqual(Array.from(colors.array.slice(index * 3, index * 3 + 3)), expected);
+    }
+  } finally { render.dispose(); material.dispose(); }
+});
+
+test('append restores source positions before override re-registration and rollback rebuilds bounds', () => {
+  const material = new THREE.PointsMaterial();
+  const overrides = createPointOverrideRender(new THREE.Scene());
+  overrides.setArtifactRevision(dataset.revision);
+  let fail = false;
+  const render = createAdaptiveRender(material, { pointBudget: 10,
+    register(object, ids) {
+      // The first source must always be original at registration, not its old override.
+      assert.equal(object.geometry.getAttribute('position').getX(0), Math.fround(100.00000000001));
+      overrides.register(object, ids);
+      if (fail) { fail = false; throw new Error('append failed'); }
+    },
+    unregister(object) { overrides.unregister(object); },
+  });
+  const snapshot: PointOverrideSnapshot = { datasetId: 'toronto3d', artifactRevision: dataset.revision, sessionId: 'append-test', revision: 1, frameId: 'toronto3d-local-v1', units: 'm', nextUndoTransactionId: null, entries: [{ key: { sourceFileId: 1, sourceRow: 100 }, originalPosition: [100.00000000001, 2, 3], position: [-900, 91, 92] }] };
+  try {
+    render.add(payload('r0', 2, 100));
+    overrides.setPointOverrides(snapshot);
+    render.add(payload('r1', 1, 200));
+    const geometry = render.objects[0].geometry;
+    assert.equal(geometry.getAttribute('position').getX(0), -900);
+    overrides.setPointOverrides(undefined);
+    assert.equal(geometry.getAttribute('position').getX(0), Math.fround(100.00000000001));
+    assert.equal(render.resolve(render.objects[0], 0)!.position[0], 100.00000000001);
+    const before = projected(render), box = new THREE.Box3();
+    // Override refresh computes live bounds including unused slots; the renderer
+    // rebuild must recover its own tighter, conservative source-only bounds.
+    for (const point of before) {
+      box.expandByPoint(new THREE.Vector3(...point.position));
+      box.expandByPoint(new THREE.Vector3(...point.position.map(Math.fround)));
+    }
+    const color = geometry.getAttribute('color') as THREE.BufferAttribute;
+    const position = geometry.getAttribute('position') as THREE.BufferAttribute;
+    color.clearUpdateRanges(); position.clearUpdateRanges();
+    fail = true;
+    assert.throws(() => render.add(payload('r2', 1, 900_000)), /append failed/);
+    assert.deepEqual(projected(render), before); assert.equal(render.count, 3);
+    assert.ok(geometry.boundingBox!.equals(box), 'failed append must not leave expanded bounds');
+    assert.deepEqual(color.updateRanges, [{ start: 0, count: color.array.length }]);
+    assert.deepEqual(position.updateRanges, [{ start: 0, count: position.array.length }]);
+    assert.equal(position.getX(3), 0, 'rollback clears the unpublished tail');
+    render.add(payload('r3', 1, 300));
+    assert.ok(geometry.boundingBox!.max.x < 301, 'later append uses recovered source bounds');
+    assert.equal(geometry.getAttribute('position').count, 10, 'small budget caps allocation');
+  } finally { render.dispose(); overrides.dispose(); material.dispose(); }
+});
+
 test('1000 native nodes use bounded dense GPU batches with compact linear colors and exact picks', () => {
   const material = new THREE.PointsMaterial({ vertexColors: true });
   const render = createAdaptiveRender(material);

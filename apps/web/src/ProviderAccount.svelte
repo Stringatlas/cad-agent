@@ -29,9 +29,10 @@
 </script>
 
 <details class="account" data-testid="provider-account">
-  <summary><span class="account-label">Account</span><span class="connection" class:connected={view.phase === 'available' && view.status?.mode === 'chatgpt' && view.status.authenticated}><span class="status-dot" aria-hidden="true"></span>{accountHeader(view)}</span></summary>
+  <summary title={accountHeader(view)}>Account</summary>
   <section class="account-panel" aria-label="Provider account">
     <h2>Account connection</h2>
+    <p class="connection">{accountHeader(view)}</p>
     <p class="eyebrow">ChatGPT plan · local workspace</p>
     <div role="status" aria-live="polite" data-testid="provider-status">
       {#if view.phase === 'loading'}<p>Checking provider status…</p>
@@ -46,7 +47,7 @@
         <a href={PROVIDER_USAGE_URL} target="_blank" rel="noopener noreferrer">Manage usage ↗</a>
       </div>
     {/if}
-    <p class="model-note">Available models load in Scene chat; you can change the selection before sending. Credential readiness alone does not prove model availability or a successful response. Chat is read-only; exact-approval scene tools remain separate.</p>
+    <p class="model-note">Available models load in Scene chat. Credential readiness alone does not prove model availability. Scene changes remain previews until you accept each change.</p>
     {#if view.status?.mode === 'disabled'}
       <p>To enable Sign in with ChatGPT, set <code>SPATIAL_PROVIDER_MODE=chatgpt</code> in <code>apps/server/.env</code>, then restart the server. Open the workspace at <code>http://127.0.0.1:5173</code>, not localhost.</p>
     {:else if view.status?.mode === 'api-key'}
@@ -84,19 +85,16 @@
 
 <style>
   .account { position: relative; margin-left: auto; font-size: 12px; }
-  summary { display: flex; align-items: center; gap: 10px; border: 1px solid #3d6469; border-radius: 7px; padding: 8px 12px; color: #c6f4e9; cursor: pointer; white-space: nowrap; }
-  summary:hover { background: #233d42; }
-  .account-label { color: #e4ecf7; font-weight: 600; }
-  .connection { display: inline-flex; align-items: center; gap: 6px; color: #b8c8dd; }
-  .status-dot { width: 6px; height: 6px; background: #8d9aad; border-radius: 50%; }
-  .connected { color: #b3ebd6; }
-  .connected .status-dot { background: #75d5ad; }
+  summary { list-style: none; border: 1px solid transparent; border-radius: 7px; padding: 8px 10px; color: #b9bac3; cursor: pointer; white-space: nowrap; }
+  summary::-webkit-details-marker { display: none; }
+  summary:hover { color: #fff; background: #ffffff0c; }
+  .connection { color: #b8c8dd; }
   .eyebrow { color: #94a8c1; font-size: 11px; margin-top: -5px; }
   .plan-card { padding: 12px; background: #183a38; border: 1px solid #3d7067; border-radius: 7px; color: #c6f4e9; }
   .plan-card p { margin: 7px 0; }
   .plan-card a { color: #c6f4e9; text-underline-offset: 3px; }
   .connection-note { color: #a5c4b9; }
-  .account-panel { position: absolute; z-index: 30; right: 0; top: calc(100% + 10px); width: min(440px, calc(100vw - 32px)); max-height: 75vh; overflow: auto; padding: 18px; background: #111d2d; border: 1px solid #3b526c; border-radius: 10px; box-shadow: 0 12px 32px #0008; color: #bdccdf; overflow-wrap: anywhere; }
+  .account-panel { position: absolute; z-index: 30; right: 0; top: calc(100% + 10px); width: min(440px, calc(100vw - 32px)); max-height: 75vh; overflow: auto; padding: 18px; background: #202124; border: 1px solid #ffffff24; border-radius: 10px; box-shadow: 0 12px 32px #0008; color: #bdccdf; overflow-wrap: anywhere; }
   h2 { color: #e4ecf7; font-size: 16px; margin: 0 0 12px; }
   p { margin: 10px 0; }
   .model-note { padding: 9px; background: #293126; color: #e4dba5; border-radius: 5px; }
@@ -108,5 +106,6 @@
   button { font: inherit; color: #d2e1f3; background: #21344a; border: 1px solid #49607b; border-radius: 5px; padding: 8px 10px; cursor: pointer; }
   button:disabled { opacity: .5; }
   .privacy { color: #94a8c1; font-size: 11px; }
-  @media (max-width: 760px) { .account { margin-left: auto; } summary { padding: 7px; gap: 6px; font-size: 11px; } .account-label { display: none; } }
+  @media (max-width: 760px) { .account { margin-left: auto; } summary { padding: 7px; font-size: 11px; } }
+  @media (pointer: coarse) { summary, button { min-height: 44px; box-sizing: border-box; } }
 </style>

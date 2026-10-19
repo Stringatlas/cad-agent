@@ -237,6 +237,65 @@ test('controller detaches reactive agent captures before freezing message histor
   } finally { client.dispose(); }
 });
 
+test('controller deduplicates exact images across successful continuation but retains changed images and original thumbnails', async () => {
+  const turns: ModelTurnRequest[] = [], a = adapter(reactiveObservation());
+  const client = new ModelChatController(() => {}, async (path, init) => {
+    if (path === '/chat/models') return Response.json({ mode: 'api-key', ready: true, generation: 'account-one', code: 'ready', models: [{ id: 'fixture-vision-vNext', label: 'Fixture' }] });
+    const r = JSON.parse(init!.body as string) as ModelTurnRequest; turns.push(r); return response([start(r), done(r)]);
+  });
+  try {
+    client.bind(scene); await client.refreshModels();
+    await client.send('AOI', a.attachment);
+    const first = client.view.messages[0]!.attachments![0]!;
+    // Equal but separately allocated/reactive input must also deduplicate.
+    await client.send('Follow up', adapter(reactiveObservation()).attachment);
+    assert.equal(turns[1]!.conversationId, 'conversation-one'); assert.equal(turns[1]!.visualObservation, undefined);
+    assert.equal(client.view.messages[2]!.attachments, undefined);
+    assert.equal(client.view.messages[0]!.attachments![0], first);
+    const changed = adapter({ ...observation(), viewGeneration: 2 });
+    await client.send('Changed capture metadata', changed.attachment);
+    assert.deepEqual(turns[2]!.visualObservation, changed.attachment.observation);
+    const pixels = adapter(observation(2));
+    await client.send('Changed image bytes', pixels.attachment);
+    assert.deepEqual(turns[3]!.visualObservation, pixels.attachment.observation);
+    await client.send('Original AOI again', a.attachment);
+    assert.equal(turns[4]!.visualObservation, undefined);
+    assert.equal(turns[4]!.conversationId, 'conversation-one');
+    assert.equal(client.view.messages.filter(message => message.attachments?.length).length, 3);
+  } finally { client.dispose(); }
+});
+
+test('controller resends the same image after reset, failure, or cancellation, never relying on display-only history', async () => {
+  for (const reset of ['new-chat', 'account', 'scene', 'failure', 'cancel'] as const) {
+    const turns: ModelTurnRequest[] = [], a = adapter(); let fail = false, hold = false;
+    const client = new ModelChatController(() => {}, async (path, init) => {
+      if (path === '/chat/models') return Response.json({ mode: 'api-key', ready: true, generation: 'account-one', code: 'ready', models: [{ id: 'fixture-vision-vNext', label: 'Fixture' }] });
+      const r = JSON.parse(init!.body as string) as ModelTurnRequest; turns.push(r);
+      if (hold) return new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(lines([start(r)]))); } }), { headers: { 'Content-Type': 'application/x-ndjson' } });
+      return response(fail ? [start(r), { kind: 'error', requestId: r.requestId, code: 'provider-unavailable' }] : [start(r), done(r)]);
+    });
+    try {
+      client.bind(scene); await client.refreshModels(); await client.send('First image', a.attachment);
+      if (reset === 'new-chat') client.newChat();
+      if (reset === 'account') { client.accountChanged(); await client.refreshModels(); }
+      if (reset === 'scene') client.bind({ mode: 'pole', project: null, toronto: [] });
+      if (reset === 'failure') { fail = true; await client.send('Failed followup', a.attachment); fail = false; }
+      if (reset === 'cancel') {
+        hold = true; const pending = client.send('Interrupted followup', a.attachment);
+        while (turns.length < 2) await delay(); client.cancel(); await pending; hold = false;
+      }
+      await client.send('Fresh history needs image', a.attachment);
+      // A confirmed failed followup preserves the completed image on the server.
+      // Actual reset/cancellation cannot rely on that checkpoint.
+      assert.equal(turns.at(-1)!.conversationId, reset === 'failure' ? 'conversation-one' : null, reset);
+      assert.deepEqual(turns.at(-1)!.visualObservation, reset === 'failure' ? undefined : a.attachment.observation, reset);
+      await client.send('Successful continuation', a.attachment);
+      assert.equal(turns.at(-1)!.conversationId, 'conversation-one', reset);
+      assert.equal(turns.at(-1)!.visualObservation, undefined, reset);
+    } finally { client.dispose(); }
+  }
+});
+
 test('controller keeps history through reactive screenshots and scene selection updates, retaining inline attachments', async () => {
   const turns: ModelTurnRequest[] = [], a = adapter(reactiveObservation());
   const client = new ModelChatController(() => {}, async (path, init) => {
@@ -255,5 +314,7 @@ test('controller keeps history through reactive screenshots and scene selection 
     client.bind({ ...scene, areaOfInterest: { datasetId: 'toronto3d', artifactRevision: 'a'.repeat(64), frameId: 'toronto3d-local-v1', units: 'm', localOrigin: [627285, 4841948, 0], corners: [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]] } });
     await client.send('Refer to the previous screenshot'); assert.equal(turns[2]!.conversationId, 'conversation-one'); assert.ok(!Object.hasOwn(turns[2]!, 'visualObservation'));
     a.stale(); assert.equal(await client.send('Historical image', a.attachment), true); assert.equal(turns.length, 4);
+    assert.equal(turns[3]!.conversationId, 'conversation-one'); assert.ok(!Object.hasOwn(turns[3]!, 'visualObservation'));
+    assert.equal(client.view.messages.filter(message => message.attachments?.length).length, 1);
   } finally { client.dispose(); }
 });

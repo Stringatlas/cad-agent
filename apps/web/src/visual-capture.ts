@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { canonicalModelCaptureRequest, VISUAL_OBSERVATION_LIMITS as LIMITS, type ModelCaptureRequest, type Vec3, type VisualBinding, type VisualCoverage, type VisualObservation, type VisualPixelResolution, type VisualPointProvenance } from '@spatial/contracts';
+import { canonicalModelCaptureRequest, VISUAL_OBSERVATION_LIMITS as LIMITS, type ModelCaptureColorMode, type ModelCaptureRequest, type Vec3, type VisualBinding, type VisualCoverage, type VisualObservation, type VisualPixelResolution, type VisualPointProvenance } from '@spatial/contracts';
 
 export interface VisualCaptureOptions {
   renderer: THREE.WebGLRenderer;
@@ -9,6 +9,8 @@ export interface VisualCaptureOptions {
   target?: () => Vec3;
   binding: () => VisualBinding;
   coverage: () => VisualCoverage;
+  /** Synchronous render-only recoloring; must not invalidate captures or change UI state. */
+  pointColorMode?: { get: () => ModelCaptureColorMode; set: (mode: ModelCaptureColorMode) => void };
   /** Displayed point layers; blocking scene meshes are included automatically. */
   points: () => THREE.Object3D[];
   resolve: (object: THREE.Object3D, index: number) => VisualPointProvenance | undefined;
@@ -84,6 +86,9 @@ export function createVisualCapture(options: VisualCaptureOptions) {
       const { x: width, y: height } = before.size;
       if (![width, height].every(n => Number.isSafeInteger(n) && n > 0 && n <= LIMITS.maxDimension)) throw new Error('Visual viewport exceeds capture limits');
       const view = canonicalModelCaptureRequest(request ?? { kind: 'current' });
+      if (view.colorMode !== undefined && !options.pointColorMode) throw new Error('Capture point color mode unavailable in this viewer');
+      const liveColorMode = options.pointColorMode?.get();
+      const recolor = view.colorMode !== undefined && view.colorMode !== liveColorMode;
       const frozenCamera = camera.clone();
       if (view.kind === 'top-down') {
         // Keep the user's orbit focus, not the dataset/world origin. Without controls,
@@ -107,13 +112,20 @@ export function createVisualCapture(options: VisualCaptureOptions) {
       frozenCamera.updateMatrixWorld(true);
       // All rendering/extraction/restoration is synchronous: neither controls nor
       // the animation loop can observe/mutate a temporary camera or leave its frame.
-      let dataUrl: string;
+      let dataUrl: string, coverage = before.coverage;
       try {
+        if (recolor) options.pointColorMode!.set(view.colorMode!);
+        coverage = detached(options.coverage());
         renderer.render(scene, frozenCamera);
         dataUrl = renderer.domElement.toDataURL('image/png');
       } finally {
-        if (view.kind !== 'current') renderer.render(scene, camera);
+        // Restore even on recolor/render/extraction failure, before yielding to hashing.
+        try { if (recolor) options.pointColorMode!.set(liveColorMode!); }
+        finally { if (recolor || view.kind !== 'current') renderer.render(scene, camera); }
       }
+      // Recoloring may advance GPU attribute versions, even after restoring values.
+      // Retain grounding against the restored live scene, not temporary colors.
+      const liveSignature = recolor ? state().signature : before.signature;
       if (!dataUrl.startsWith('data:image/png;base64,') || dataUrl.length > Math.ceil(LIMITS.maxPngBytes / 3) * 4 + 22) throw new Error('PNG unavailable or exceeds capture limit');
       const binary = atob(dataUrl.slice(22));
       if (binary.length === 0 || binary.length > LIMITS.maxPngBytes) throw new Error('PNG exceeds capture limit');
@@ -129,8 +141,8 @@ export function createVisualCapture(options: VisualCaptureOptions) {
         camera: detached({ position: frozenCamera.position.toArray() as unknown as Vec3, quaternion: frozenCamera.quaternion.toArray(), up: frozenCamera.up.toArray() as unknown as Vec3,
           near: frozenCamera.near, far: frozenCamera.far, fov: frozenCamera.fov, aspect: frozenCamera.aspect, zoom: frozenCamera.zoom,
           matrixWorld: frozenCamera.matrixWorld.toArray(), matrixWorldInverse: frozenCamera.matrixWorldInverse.toArray(), projectionMatrix: frozenCamera.projectionMatrix.toArray() }),
-        binding: before.binding, coverage: before.coverage });
-      const bundle = { observation, signature: before.signature, camera: frozenCamera, objects: before.objects, generation: viewGeneration };
+        binding: before.binding, coverage });
+      const bundle = { observation, signature: liveSignature, camera: frozenCamera, objects: before.objects, generation: viewGeneration };
       // Retain live pixel grounding only if the rendered scene still matches. The
       // observation itself is immutable and does not depend on this disposable cache.
       try { if (current(bundle)) retained = bundle; }

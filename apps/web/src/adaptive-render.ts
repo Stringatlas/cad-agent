@@ -25,6 +25,8 @@ interface Batch {
   positions: Float32Array;
   colors: Uint8Array;
   sourceIds: Uint32Array;
+  /** Source-only bounds; override registration may replace geometry bounds. */
+  sourceBounds: THREE.Box3;
   spans: Span[];
   count: number;
 }
@@ -37,7 +39,8 @@ const linearColors = Uint8Array.from({ length: 256 }, (_, value) => {
 
 /** Disposable bounded native-node projection. Nodes may span multiple GPU batches.
  * All batches except the last are full: draw calls stay ceil(resident/capacity),
- * including after arbitrary eviction/append cycles. Only changed batches rebuild.
+ * including after arbitrary eviction/append cycles. Appends pack only new color/ID
+ * spans and extend source bounds; eviction/repacking/rollback rebuild touched batches.
  * Original binary64 node caches, not packed float32 indexes, resolve provenance.
  * Material ownership stays with the caller.
  */
@@ -61,13 +64,21 @@ export function createAdaptiveRender(material: THREE.PointsMaterial, options: Ad
     geometry.setDrawRange(0, 0);
     const object = new THREE.Points(geometry, material);
     object.name = 'adaptive-native-batch';
-    return { object, positions, colors, sourceIds: new Uint32Array(slots * 2), spans: [], count: 0 };
+    return { object, positions, colors, sourceIds: new Uint32Array(slots * 2), sourceBounds: new THREE.Box3(), spans: [], count: 0 };
+  }
+
+  // Do not clear queued partial uploads: a recolor and several arrivals can precede
+  // the next frame. A full range subsumes all previous ranges, including rollback.
+  function upload(attribute: THREE.BufferAttribute, start = 0, count = attribute.array.length) {
+    if (start === 0 && count === attribute.array.length) attribute.clearUpdateRanges();
+    attribute.addUpdateRange(start, count);
+    attribute.needsUpdate = true;
   }
 
   // Recolor from immutable source spans without disturbing committed position overrides.
-  function recolor(batch: Batch) {
-    let offset = 0;
-    for (const span of batch.spans) {
+  function recolor(batch: Batch, firstSpan = 0, offset = 0) {
+    const start = offset;
+    for (const span of batch.spans.slice(firstSpan)) {
       const payload = span.node.payload;
       for (let i = 0; i < span.count; i++) {
         const source = span.start + i, target = offset + i;
@@ -80,13 +91,62 @@ export function createAdaptiveRender(material: THREE.PointsMaterial, options: Ad
       }
       offset += span.count;
     }
-    batch.object.geometry.getAttribute('color').needsUpdate = true;
+    const attribute = batch.object.geometry.getAttribute('color') as THREE.BufferAttribute;
+    if (firstSpan === 0) upload(attribute);
+    else upload(attribute, start * 3, (offset - start) * 3);
+  }
+
+  function bounds(batch: Batch) {
+    const geometry = batch.object.geometry;
+    (geometry.boundingBox ??= new THREE.Box3()).copy(batch.sourceBounds);
+    batch.sourceBounds.getBoundingSphere(geometry.boundingSphere ??= new THREE.Sphere());
+  }
+
+  // Only newly packed source points extend this box. Include binary64 originals and
+  // float32 render coordinates, but never unused zero slots or committed overrides.
+  function extendBounds(batch: Batch, span: Span, offset: number) {
+    const min = batch.sourceBounds.min, max = batch.sourceBounds.max;
+    for (let i = 0; i < span.count; i++) {
+      const source = (span.start + i) * 3, target = (offset + i) * 3;
+      const positions = span.node.payload.positions;
+      min.x = Math.min(min.x, positions[source], batch.positions[target]);
+      min.y = Math.min(min.y, positions[source + 1], batch.positions[target + 1]);
+      min.z = Math.min(min.z, positions[source + 2], batch.positions[target + 2]);
+      max.x = Math.max(max.x, positions[source], batch.positions[target]);
+      max.y = Math.max(max.y, positions[source + 1], batch.positions[target + 1]);
+      max.z = Math.max(max.z, positions[source + 2], batch.positions[target + 2]);
+    }
+  }
+
+  function append(batch: Batch, previous: { spans: Span[]; count: number }) {
+    let offset = 0;
+    // unregister does not restore overrides. Restore originals by typed-array copy
+    // before re-registering, so an override can never become the cached original.
+    for (let index = 0; index < batch.spans.length; index++) {
+      const span = batch.spans[index], payload = span.node.payload;
+      if (options.register || index >= previous.spans.length) {
+        batch.positions.set((payload.positions as Float64Array).subarray(span.start * 3, (span.start + span.count) * 3), offset * 3);
+      }
+      if (index >= previous.spans.length) {
+        batch.sourceIds.set((payload.sourceIds as Uint32Array).subarray(span.start * 2, (span.start + span.count) * 2), offset * 2);
+        extendBounds(batch, span, offset);
+      }
+      offset += span.count;
+    }
+    batch.object.geometry.setDrawRange(0, batch.count);
+    const attribute = batch.object.geometry.getAttribute('position') as THREE.BufferAttribute;
+    // Registration can reapply overrides anywhere in the buffer, not just the tail.
+    if (options.register) upload(attribute);
+    else upload(attribute, previous.count * 3, (batch.count - previous.count) * 3);
+    recolor(batch, previous.spans.length, previous.count);
+    bounds(batch);
   }
 
   function rebuild(batch: Batch) {
     // unregister does not restore old override positions. Never copy GPU values;
     // reconstruct the touched packed batch from its original source-node arrays.
     batch.positions.fill(0); batch.colors.fill(0); batch.sourceIds.fill(0);
+    batch.sourceBounds.makeEmpty();
     let offset = 0;
     for (const span of batch.spans) {
       const payload = span.node.payload;
@@ -98,17 +158,18 @@ export function createAdaptiveRender(material: THREE.PointsMaterial, options: Ad
         batch.sourceIds[target * 2] = payload.sourceIds[source * 2];
         batch.sourceIds[target * 2 + 1] = payload.sourceIds[source * 2 + 1];
       }
+      extendBounds(batch, span, offset);
       offset += span.count;
     }
     batch.count = offset;
     batch.object.geometry.setDrawRange(0, offset);
-    batch.object.geometry.getAttribute('position').needsUpdate = true;
+    upload(batch.object.geometry.getAttribute('position') as THREE.BufferAttribute);
     recolor(batch);
-    batch.object.geometry.computeBoundingBox(); batch.object.geometry.computeBoundingSphere();
+    bounds(batch);
   }
 
   /** Metadata is staged first. Original arrays also permit rollback without GPU buffer copies. */
-  function transaction(change: (touch: (batch: Batch) => void) => void) {
+  function transaction(change: (touch: (batch: Batch) => void) => void, appendOnly = false) {
     const before = batches.slice();
     const saved = new Map<Batch, { spans: Span[]; count: number }>();
     const touch = (batch: Batch) => { if (!saved.has(batch)) saved.set(batch, { spans: batch.spans.map(span => ({ ...span })), count: batch.count }); };
@@ -119,7 +180,8 @@ export function createAdaptiveRender(material: THREE.PointsMaterial, options: Ad
       for (const batch of saved.keys()) if (before.includes(batch)) options.unregister?.(batch.object);
       for (const batch of saved.keys()) {
         if (!batches.includes(batch)) continue;
-        rebuild(batch);
+        if (appendOnly) append(batch, saved.get(batch)!);
+        else rebuild(batch);
         attempted.add(batch); options.register?.(batch.object, batch.sourceIds);
       }
     } catch (failure) {
@@ -187,7 +249,7 @@ export function createAdaptiveRender(material: THREE.PointsMaterial, options: Ad
             const size = Math.min(payload.count - start, batch.positions.length / 3 - batch.count);
             batch.spans.push({ node, start, count: size }); batch.count += size; start += size;
           }
-        });
+        }, true);
       } catch (error) { cache.dispose(); throw error; }
       nodes.set(payload.name, node); count += payload.count; datasetSignature = signature;
     },

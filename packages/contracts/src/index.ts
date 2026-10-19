@@ -1,5 +1,6 @@
 export { ADAPTIVE_BINARY_MIME, ADAPTIVE_BINARY_LIMITS, encodeAdaptiveBinary, decodeAdaptiveBinary } from './adaptive-binary';
 export type { AdaptiveBinaryIdentity, AdaptiveBinaryInput, AdaptiveBinaryPayload } from './adaptive-binary';
+export * from './scene-objects';
 export { TORONTO_CAD_LIMITS } from './toronto-cad';
 export type { TorontoCadPrimitive, TorontoCadMesh, TorontoCadBody, TorontoCadBinding, TorontoCadProposal, TorontoCadSnapshot, TorontoCadErrorCode } from './toronto-cad';
 export { POINT_OVERRIDE_LIMITS, canonicalPointMoveProposalRequest, canonicalPointMoveApprovalRequest, canonicalPointMoveUndoRequest } from './point-overrides';
@@ -10,7 +11,7 @@ export type { ModelVisualToolResult } from './model-visual';
 export { VISUAL_OBSERVATION_LIMITS } from './visual-observation';
 export type { VisualJson, VisualBinding, VisualCoverage, VisualPointProvenance, VisualObservation, VisualPixelResolution } from './visual-observation';
 export { canonicalModelCaptureRequest, canonicalModelReferenceSelection, canonicalModelBrowserAction, MODEL_CHAT_LIMITS, MODEL_INSPECTION_LIMITS, canonicalModelScene, canonicalModelTurnRequest, canonicalModelCatalog, canonicalModelChatEvent } from './model-chat';
-export type { ModelCaptureRequest, ModelReferenceSelection, ModelBrowserAction, ModelProposalAuthority, ModelAreaOfInterest, ModelTorontoPoint, ModelScene, ModelCatalog, ModelTurnRequest, ModelChatEvent, ModelRequestInspection, ModelRequestPhase, ModelInspectionOmission } from './model-chat';
+export type { ModelCaptureColorMode, ModelCaptureRequest, ModelReferenceSelection, ModelBrowserAction, ModelProposalAuthority, ModelAreaOfInterest, ModelTorontoPoint, ModelScene, ModelCatalog, ModelTurnRequest, ModelChatEvent, ModelRequestInspection, ModelRequestPhase, ModelInspectionOmission } from './model-chat';
 export { PROJECT_LIMITS, SCENE_POINT_LIMIT, canonicalScenePointName, canonicalProjectBinding, canonicalBoxProposalRequest, canonicalBoxApprovalRequest, canonicalProjectUndoRequest, canonicalSceneContextRequest, canonicalPersistentProject } from './project-edit';
 export type { ProjectBinding, ScenePointName, ScenePointReference, SceneContextRequest, SceneContext, BoxEdit, BoxProposalRequest, BoxProposal, BoxApprovalRequest, ProjectUndoRequest, ProjectCommitResult, ProjectSessionInfo, ProjectSaveResult, ProjectLoadResult, ProjectErrorCode, ProjectReply } from './project-edit';
 export { CAD_OPERATIONS, CAD_LIMITS, CadError, canonicalCadBodyRef, canonicalCadOperation, canonicalCadRequest } from './cad';

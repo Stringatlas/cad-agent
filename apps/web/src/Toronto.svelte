@@ -2,6 +2,9 @@
   import { onMount, tick, untrack } from 'svelte';
   import ApprovalReview, { type ApprovalReviewItem } from './ApprovalReview.svelte';
   import TorontoCad from './TorontoCad.svelte';
+  import SceneObjects from './SceneObjects.svelte';
+  import { SceneObjectController, type SceneObjectView } from './scene-object-client';
+  import type { SceneObjectSnapshot } from '@spatial/contracts';
   import PointEdits from './PointEdits.svelte';
   import { TorontoCadController, type TorontoCadView } from './toronto-cad-client';
   import { assertCropBox, type CropBox, type CropSelection, type CropStats, type PointObservation, type PointOverrideSnapshot, type PointMoveProposal, type Vec3 } from '@spatial/contracts';
@@ -22,7 +25,8 @@
   import { observedPointLabel } from './point-presentation';
   import { DEFAULT_ADAPTIVE_SETTINGS, type AdaptiveStats } from './adaptive-display';
 
-  let { onarea = () => {}, points = [], pointOverrides, pointPreview, pointRefresh = 0, onpointstate = () => {}, cadRefresh = 0, modelStreaming = false, oncadblocked = () => {}, onrevision = () => {}, allocatePointName, onpoint, onpoints = () => {}, onvisualsource = () => {} }: {
+  let { objectRefresh = 0, onobjectstate = () => {}, onarea = () => {}, points = [], pointOverrides, pointPreview, pointRefresh = 0, onpointstate = () => {}, cadRefresh = 0, modelStreaming = false, oncadblocked = () => {}, onrevision = () => {}, allocatePointName, onpoint, onpoints = () => {}, onvisualsource = () => {} }: {
+    objectRefresh?: number; onobjectstate?: (snapshot: SceneObjectSnapshot | undefined, selectedId: string | undefined, blocked: boolean) => void;
     onarea?: (input?: AreaOfInterestInput) => void;
     cadRefresh?: number; modelStreaming?: boolean; oncadblocked?: (blocked: boolean) => void;
     pointRefresh?: number; onpointstate?: (snapshot?: PointOverrideSnapshot, proposal?: PointMoveProposal, blocked?: boolean) => void;
@@ -32,6 +36,29 @@
     onpoint: (point: TorontoDraftPoint) => void; onpoints?: (points: readonly TorontoDraftPoint[]) => void;
   } = $props();
   const draftGate = createDraftPointGate();
+  let objectView = $state<SceneObjectView>({ busy: false, needsRefresh: true });
+  let selectedObjectId = $state<string>(), selectedSource = $state<string>();
+  let hiddenObjectIds = $state<readonly string[]>([]);
+  let reviewFocusId = $state<string>();
+  const objectController = new SceneObjectController(value => { objectView = value; });
+  function selectObject(id?: string) { selectedObjectId = id; selectedSource = undefined; }
+  export function clearObjectSelection() { selectObject(); }
+  async function focusPending(id: string) { reviewFocusId = undefined; await tick(); reviewFocusId = id; }
+  $effect(() => {
+    const snapshot = objectView.snapshot;
+    // Preserve selection across transient reads, but never across authority replacement/removal.
+    if (snapshot && selectedObjectId && !snapshot.objects.some(object => object.id === selectedObjectId)) selectedObjectId = undefined;
+    onobjectstate(snapshot, selectedObjectId, objectView.busy || objectView.needsRefresh);
+  });
+  $effect(() => { if (mounted) viewer?.setObjects(objectView.snapshot ? $state.snapshot(objectView.snapshot) : undefined, selectedObjectId, hiddenObjectIds); });
+  $effect(() => { const token = objectRefresh; untrack(() => { if (token && cadArtifact && !objectView.needsRefresh) void objectController.refresh(); }); });
+  const objectReviewItems = $derived<ApprovalReviewItem[]>((objectView.snapshot?.proposals ?? []).map(proposal => ({
+    id: proposal.proposalId, title: `Create ${proposal.object.name}`, summary: 'Datum point · pending',
+    details: `[${proposal.object.position.join(', ')}] m\nToronto local · Z-up\nSession-only independent datum\nProposal ${proposal.proposalId}\nRevision ${proposal.revision}`,
+    disabled: objectView.busy || objectView.needsRefresh,
+    testId: 'scene-object-proposal', acceptTestId: 'scene-object-accept', declineTestId: 'scene-object-decline',
+    onaccept: () => objectController.approve(proposal.proposalId), ondecline: () => objectController.decline(proposal.proposalId),
+  })));
   let cadView = $state<TorontoCadView>({ busy: false, needsRefresh: true, status: 'Waiting for Toronto artifact…' });
   const cadController = new TorontoCadController(value => { cadView = value; oncadblocked(value.busy || value.needsRefresh); });
   let cadArtifact = $state<string>();
@@ -49,15 +76,15 @@
     onaccept: () => cadController.approve(proposal.proposalId),
     ondecline: () => cadController.decline(proposal.proposalId),
   })));
-  const reviewItems = $derived([...pointReviewItems, ...cadReviewItems]);
+  const reviewItems = $derived([...pointReviewItems, ...cadReviewItems, ...objectReviewItems]);
   export async function refreshAgentAuthorities(): Promise<void> {
     await tick();
     const deadline = Date.now() + 35_000;
-    while (cadView.busy && alive && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
-    if (!alive || !cadArtifact || !pointEditor || cadView.busy) throw new Error('Toronto authority unavailable or busy. Retry Refresh.');
-    await Promise.all([cadController.refresh(), pointEditor.refreshAuthority()]);
+    while ((cadView.busy || objectView.busy) && alive && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+    if (!alive || !cadArtifact || !pointEditor || cadView.busy || objectView.busy) throw new Error('Toronto authority unavailable or busy. Retry Refresh.');
+    await Promise.all([cadController.refresh(), pointEditor.refreshAuthority(), objectController.refresh()]);
     await tick();
-    if (!alive || cadView.needsRefresh) throw new Error(cadView.status);
+    if (!alive || cadView.needsRefresh || objectView.needsRefresh) throw new Error(objectView.error ?? cadView.status);
   }
   $effect(() => { const token = cadRefresh; untrack(() => { if (token && cadArtifact && !cadView.needsRefresh) void cadController.refresh(); }); });
   $effect(() => { if (mounted) viewer?.setCad(cadView.snapshot ? $state.snapshot(cadView.snapshot) : undefined); });
@@ -85,7 +112,7 @@
   function pinPoint(selection: PoleSelection) {
     if (!alive || viewerError) return;
     const point = draftGate.accept(selection, allocatePointName());
-    if (point) onpoint({ ...point, semanticLabel: observedPointLabel(selection, display) });
+    if (point) { selectedObjectId = undefined; selectedSource = point.name; onpoint({ ...point, semanticLabel: observedPointLabel(selection, display) }); }
   }
   let host: HTMLDivElement;
   let viewer: ReturnType<typeof createTorontoViewer> | undefined;
@@ -145,7 +172,7 @@
   const displayChannel = createObservationChannel('display', sample => {
     if (draftGate.bind(sample.dataset.revision)) { onpoints([]); clearCrop(); clearArea(); }
     viewer?.update(sample); display = sample; onrevision(sample.dataset.revision);
-    if (cadArtifact !== sample.dataset.revision) { cadArtifact = sample.dataset.revision; cadController.bind(cadArtifact); void cadController.refresh(); }
+    if (cadArtifact !== sample.dataset.revision) { cadArtifact = sample.dataset.revision; selectedObjectId = undefined; selectedSource = undefined; hiddenObjectIds = []; cadController.bind(cadArtifact); objectController.bind(cadArtifact); void cadController.refresh(); void objectController.refresh(); }
     viewer?.setPointOverrides(sceneSnapshot ? $state.snapshot(sceneSnapshot) : undefined); viewer?.setPointMovePreview($state.snapshot(sceneProposals));
     viewer?.setDraftMarkers(effectiveMarkers);
   });
@@ -250,21 +277,21 @@
   }
   onMount(() => {
     try {
-      viewer = createTorontoViewer(host, placeBox, undefined, viewerFailure, pinPoint, stats => { adaptiveStats = stats; }, (corners, error) => { void selectArea(corners, error); }, () => { boxInitialized = true; });
+      viewer = createTorontoViewer(host, placeBox, undefined, viewerFailure, pinPoint, stats => { adaptiveStats = stats; }, (corners, error) => { void selectArea(corners, error); }, () => { boxInitialized = true; }, selectObject);
       tuneDisplay(); mounted = true;
       const current = viewer;
       onvisualsource({ capture: request => current.capture(request), isCurrent: id => current.isCaptureCurrent(id), resolvePixel: (id, x, y) => current.resolvePixel(id, x, y) });
       void loadDisplay(); void loadHarness();
     }
     catch (error) { viewerError = String(error); }
-    return () => { alive = false; mounted = false; clearArea(); onvisualsource(undefined); draftGate.dispose(); cadController.dispose(); onpoints([]); displayChannel.dispose(); harnessChannel.dispose(); cropChannel.dispose(); viewer?.dispose(); };
+    return () => { alive = false; mounted = false; clearArea(); onvisualsource(undefined); draftGate.dispose(); cadController.dispose(); objectController.dispose(); onobjectstate(undefined, undefined, true); onpoints([]); displayChannel.dispose(); harnessChannel.dispose(); cropChannel.dispose(); viewer?.dispose(); };
   });
 </script>
 
 <main>
   <div class="workspace">
     <section class="scene-panel">
-      <div class="toolbar"><span>Toronto3D</span><button data-testid="focus-street" disabled={!display || cropPhase === 'loading'} onclick={focusStreet}>Street chunk</button>
+      <div class="toolbar"><button data-testid="focus-street" disabled={!display || cropPhase === 'loading'} onclick={focusStreet}>Street chunk</button>
         <select class="color-mode" data-testid="point-color-mode" aria-label="Point colors" bind:value={colorMode} disabled={!display || !!viewerError} onchange={event => { colorMode = event.currentTarget.value as PointColorMode; viewer?.setColorMode(colorMode); }}>
           <option value="rgb">Natural RGB</option><option value="type">Point types</option>
         </select>
@@ -279,7 +306,6 @@
           </details>
         {/if}
       </div>
-      {#if areaInput}<div class="area-selection" data-testid="area-of-interest" role="status"><span>Area of interest · All heights{areaInput.pending ? ' · Capturing…' : ''}</span><button type="button" data-testid="clear-area" onclick={clearArea}>Clear</button></div>{/if}
       {#if areaError}<p class="area-error" role="alert">{areaError}</p>{/if}
       <div class="viewport" data-testid="toronto-viewer" bind:this={host}></div>
       {#if viewerError}<p role="alert">Viewer unavailable: {viewerError}</p>{/if}
@@ -293,7 +319,8 @@
           </section>
         {/if}
       </div>
-      <ApprovalReview items={reviewItems} />
+      <SceneObjects {areaInput} view={objectView} controller={objectController} hiddenIds={hiddenObjectIds} onvisibility={(id, visible) => { hiddenObjectIds = visible ? hiddenObjectIds.filter(hidden => hidden !== id) : [...hiddenObjectIds, id]; if (!visible && selectedObjectId === id) selectObject(); }} {points} overrides={sceneSnapshot} selectedId={selectedObjectId} {selectedSource} streaming={modelStreaming} onselect={selectObject} onsource={name => { selectedSource = name; selectedObjectId = undefined; const point = points.find(point => point.name === name); if (point) viewer?.focusPosition(point.position); }} onpending={id => void focusPending(id)} onfocus={position => viewer?.focusPosition(position)} />
+      <ApprovalReview items={reviewItems} focusId={reviewFocusId} />
       <div class="scene-feedback" hidden={cropPhase === 'idle' || cropPhase === 'complete'}>
         <p class="crop-summary" data-testid="crop-summary" aria-live="polite">{cropStatus}</p>
         {#if cropPhase === 'loading'}<div class="inline-crop-actions"><button data-testid="quick-cancel-crop" onclick={cancelCrop}>Cancel detail loading</button><span>{feedback.count}</span></div>
@@ -305,8 +332,8 @@
       <div class="tools-content">
       <div bind:this={pointToolsHost}></div>
       <details class="tool-section" open data-testid="toronto-cad-tools"><summary>CAD tools</summary><TorontoCad view={cadView} controller={cadController} streaming={modelStreaming} /></details>
-      <details class="tool-section"><summary>Navigation &amp; points</summary>
-        <p class="note">Click or Tab into the scene, then hold W/S to fly forward/back and A/D to strafe. Drag to orbit · Scroll to zoom · Shift-drag to select an AI area of interest and snapshot. Cmd/Ctrl-click to pin a numbered point; remove individual points in Scene references.</p>
+      <details class="tool-section"><summary>Navigation help</summary>
+        <p class="note">Click or Tab into the scene, then hold W/S to fly forward/back and A/D to strafe. Drag to orbit · Double-click a point or surface to set the orbit center · Scroll to zoom toward the pointer · Shift-drag to select an AI area of interest and snapshot. Cmd/Ctrl-click to pin a numbered point; remove individual points in Scene references.</p>
         <p class="note">Toronto local frame · meters · Z-up.</p>
         <button onclick={() => viewer?.frameDataset()}>Frame dataset</button>
         <button data-testid="clear-toronto-pins" disabled={!points.length} onclick={() => onpoints([])}>Clear points</button>
@@ -327,7 +354,6 @@
       {/if}
       <button onclick={loadDisplay}>Reload display</button>
       </details><details class="tool-section"><summary>Full-resolution selection &amp; crop</summary>
-      <h2>Full-resolution display selection</h2>
       <p class="note">Shift-drag selects an XY area of interest for chat and automatically attaches a scene snapshot. The rectangle follows the view orientation at the orbit target’s elevation, not terrain; all elevations are in scope. Send shares it with the model. Clear removes both. Tiny Shift-click places the box below. Full-resolution loading is manual.</p>
       <p data-testid="selection-info" class="note">{selectionInfo}</p>
       {#if projected}<p data-testid="projected-selection" class="note">Orbit does not change this selection. Edit box fields to return to box selection.</p><button data-testid="reload-window" disabled={cropPhase === 'loading' || !!viewerError} onclick={() => { if (projected) void loadSelection(projected); }}>Reload projected window</button>{/if}
@@ -349,7 +375,6 @@
       {:else if crop}<p class="note">Source bytes: {crop.bytesRead.toLocaleString()}; scanned points: {crop.scannedPoints.toLocaleString()}; hierarchy chunks: {crop.hierarchyChunks.toLocaleString()}. {cropPhase === 'complete' && crop.count === 0 ? 'No points in this volume. Select a different region.' : ''}</p>{/if}
       <p class="note">No total point/source-work cap and no downsampling. Bounded stream/GPU chunks load progressively; large selections can exhaust browser/GPU memory or take a long time. Cancel stops future work (not instantaneous OS/GPU work); Clear releases detail. Editing the box cancels and clears old detail.</p>
       </details><details class="tool-section"><summary>Harness observation &amp; export</summary>
-      <h2>Harness input LOD (independent)</h2>
       <label>Harness point budget <select data-testid="harness-budget" bind:value={harnessBudget} onchange={event => { harnessBudget = Number(event.currentTarget.value); void loadHarness(); }}><option value={256}>256</option><option value={1024}>1,024</option><option value={4096}>4,096</option></select></label>
       <label>Harness maximum depth <select data-testid="harness-depth" bind:value={harnessDepth} onchange={event => { harnessDepth = Number(event.currentTarget.value); void loadHarness(); }}>{#each [0, 1, 2, 3] as depth}<option value={depth}>{depth}</option>{/each}</select></label>
       <p data-testid="harness-status" aria-live="polite">{harnessStatus}</p>
@@ -362,8 +387,10 @@
       <p class="note">Deterministic evenly spaced points across breadth-first levels 0–depth. Camera-independent, not screen-space LOD or an unbiased whole-cloud sample. Display first shows level 0. JSON contains local XYZ, RGB, semantic labels and stable source IDs; no model consumes it yet.</p>
       </details>
       {#if mounted}<VisualObservationPanel label="Toronto" capture={() => viewer!.capture()} isCurrent={id => viewer!.isCaptureCurrent(id)} resolvePixel={(id: string, x: number, y: number) => viewer!.resolvePixel(id, x, y)} />{/if}
+      <details class="tool-section"><summary>Dataset details</summary>
       <p class="note">Read-only prepared cloud · 78.3M source points. Local meters · right-handed Z-up · world = local + [627285, 4841948, 0]. Session-only point overrides are separate from original semantic queries. Real CAD solids use a separate volatile Toronto authority. No Toronto-to-synthetic mapping.</p>
       <p class="note">CC BY-NC 4.0 · <a href="https://github.com/WeikaiTan/Toronto-3D">Toronto-3D</a>. Source UTM; no reprojection or independent CRS certification.</p>
+      </details>
       </div>
       </details>
     </aside>
@@ -376,7 +403,6 @@
   .viewport { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; }
   :global(canvas) { display: block; touch-action: none; }
   .toolbar { position: absolute; z-index: 1; top: 16px; left: 16px; display: flex; align-items: center; gap: 10px; padding: 5px 10px; border: 1px solid #ffffff12; border-radius: 12px; background: #202124ed; font-size: 12px; }
-  .toolbar > span { font-weight: 550; }
   .toolbar .color-mode { width: auto; margin: 0; padding: 7px 5px; }
   .color-key summary { padding: 8px 0; }
   .color-key ul { position: absolute; top: calc(100% + 8px); left: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 9px 14px; list-style: none; margin: 0; padding: 12px; border: 1px solid #ffffff24; border-radius: 10px; background: #202124f5; width: 240px; box-shadow: 0 8px 24px #0004; }
@@ -388,8 +414,6 @@
   .cad-recovery button { margin: 0; }
   .toolbar button { background: transparent; border-color: transparent; color: #a8caff; padding: 6px; }
   .scene-feedback { position: absolute; z-index: 1; left: 16px; bottom: 16px; max-width: min(520px, calc(100% - 32px)); max-height: 25%; overflow-y: auto; border: 1px solid #ffffff12; border-radius: 10px; background: #202124ed; }
-  .area-selection { position: absolute; z-index: 2; top: 72px; left: 16px; background: #202124ed; border: 1px solid #8be6d444; border-radius: 10px; display: flex; align-items: center; gap: 14px; padding: 7px 12px; font-size: 12px; color: #8be6d4; }
-  .area-selection button { margin-left: auto; }
   .scene-panel .area-error { position: absolute; z-index: 2; left: 16px; top: 140px; max-width: calc(100% - 32px); border-radius: 8px; background: #202124ed; font-size: 12px; padding: 0 12px; color: #ffd1a3; }
   .crop-summary { font-size: 11px; color: #b9bac1; padding: 9px 12px; margin: 0; overflow-wrap: anywhere; }
   .inline-crop-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 0 12px 8px; font-size: 11px; color: #b9bac1; }
@@ -401,7 +425,6 @@
   summary { color: #e8e8ed; font-size: 12px; cursor: pointer; }
   .tool-section { border-top: 1px solid #ffffff18; margin-top: 12px; padding-top: 12px; }
   .tool-section[open] { padding-bottom: 8px; }
-  h2 { font-size: 12px; color: #a8a9b0; margin-top: 16px; font-weight: 500; }
   label { display: block; margin: 10px 0; font-size: 12px; color: #b9bac1; }
   select { display: block; width: 100%; margin-top: 4px; }
   .mode-toggle { display: flex; align-items: center; gap: 8px; }
@@ -415,6 +438,6 @@
   dt, .note { font-size: 11px; color: #a8a9b0; line-height: 1.5; } dd { margin: 0 0 8px; font-size: 11px; overflow-wrap: anywhere; } p { font-size: 12px; overflow-wrap: anywhere; }
   a { color: #a8caff; }
   [role="alert"] { position: absolute; z-index: 1; left: 16px; right: 16px; top: 64px; max-height: 25%; overflow-y: auto; margin: 0; color: #ffb2aa; background: #202124f5; border: 1px solid #ffb2aa44; border-radius: 10px; padding: 10px 14px; overflow-wrap: anywhere; }
-  @media (max-width: 600px) { .toolbar > span { display: none; } .toolbar { top: 12px; left: 12px; gap: 4px; padding: 5px 8px; flex-wrap: wrap; max-width: calc(100% - 150px); } .toolbar .color-mode { font-size: 11px; } .area-selection { top: 120px; left: 12px; right: 12px; } .scene-panel .area-error { top: 180px; } .toolbar button { font-size: 11px; } aside { top: 12px; right: 12px; max-width: calc(100% - 24px); } .scene-feedback { left: 12px; bottom: 12px; max-width: calc(100% - 24px); } }
+  @media (max-width: 600px) { .toolbar { top: 12px; left: 12px; gap: 4px; padding: 5px 8px; flex-wrap: wrap; max-width: calc(100% - 150px); } .toolbar .color-mode { font-size: 11px; } .scene-panel .area-error { top: 180px; } .toolbar button { font-size: 11px; } aside { top: 12px; right: 12px; max-width: calc(100% - 24px); } .scene-feedback { left: 12px; bottom: 12px; max-width: calc(100% - 24px); } }
 
 </style>

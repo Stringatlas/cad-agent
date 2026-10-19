@@ -39,6 +39,41 @@ test('near includes full native leaves plus ancestors; far remains coarse; budge
   assert.equal(planAdaptiveDisplay(hierarchy, view, { ...settings, pointBudget: 1 }).budgetLimited, true);
 });
 
+test('inspection focus reaches a far/edge branch instead of spending its budget on near-camera foreground', () => {
+  const edge: AdaptiveHierarchy = { dataset: { ...dataset, totalPoints: 10 }, nodes: [...hierarchy.nodes,
+    { name: 'r77', count: 2, bounds: { min: [6, 6, 6], max: [8, 8, 8] } },
+  ] };
+  const tight = { ...settings, nearRadius: 1, pointBudget: 6 };
+  const names = (v: AdaptiveView) => planAdaptiveDisplay(edge, v, tight).nodes.map(n => n.name);
+  assert.deepEqual(names(view), ['r', 'r0', 'r00'], 'foreground previously starved the inspected far branch');
+  const focused = { ...view, focus: [7, 7, 7] as const };
+  assert.deepEqual(names(focused), ['r', 'r7', 'r77']);
+  assert.deepEqual(names({ ...focused, focus: [1, 1, 1] }), ['r', 'r0', 'r00'], 'moving the focus restores detail at the other edge');
+  for (const pointBudget of [1, 2, 3, 4, 5, 6, 8, 10]) {
+    const plan = planAdaptiveDisplay(edge, focused, { ...tight, pointBudget });
+    assert.ok(plan.points <= pointBudget);
+    for (const node of plan.nodes) if (node.name !== 'r') assert.ok(plan.nodes.some(n => n.name === node.name.slice(0, -1)));
+  }
+  assert.equal(planAdaptiveDisplay(edge, focused, tight).budgetLimited, true);
+  assert.deepEqual(names({ ...focused, planes: [[-1, 0, 0, 3]] }), ['r', 'r0', 'r00'], 'focus never bypasses frustum culling');
+  assert.deepEqual(names({ ...focused, position: [10000, 10000, 10000] }), ['r'], 'focus does not invent distant full-detail eligibility');
+  for (const focus of [[NaN, 0, 0], [Infinity, 0, 0], [1, 2]]) {
+    assert.throws(() => planAdaptiveDisplay(edge, { ...view, focus: focus as unknown as AdaptiveView['position'] }, tight), /camera/);
+  }
+});
+
+test('focus-only motion replans and evicts within budget even if camera pose and frustum stay unchanged', async () => {
+  const visible = new Set<string>(); let points = 0;
+  const fetcher: typeof fetch = async input => response(String(input).endsWith('display-hierarchy') ? hierarchy : payload(new URL(String(input), 'http://local').searchParams.get('name')!));
+  const channel = createAdaptiveDisplay({ add(p) { visible.add(p.name); }, remove(n) { visible.delete(n); }, status(s) { points = s.loadedPoints; assert.ok(points <= 4); } }, fetcher);
+  try {
+    channel.configure({ ...settings, pointBudget: 4 }); channel.update({ ...view, focus: [1, 1, 1] }); channel.bind(dataset);
+    await until(() => points === 4); assert.deepEqual([...visible], ['r', 'r0']);
+    channel.update({ ...view, focus: [7, 7, 7] });
+    await until(() => visible.has('r7')); assert.deepEqual([...visible], ['r', 'r7']);
+  } finally { channel.dispose(); }
+});
+
 test('default and maximum budget are hard-capped at three million native points', () => {
   assert.equal(DEFAULT_ADAPTIVE_SETTINGS.pointBudget, 3_000_000);
   const names = ['r', ...Array.from({ length: 8 }, (_, i) => `r${i}`), ...Array.from({ length: 64 }, (_, i) => `r${i >> 3}${i % 8}`)];
@@ -286,6 +321,33 @@ test('camera motion retains useful hierarchy and node requests without restartin
     assert.equal(hierarchyCalls, 1); assert.equal(rootCalls, 1); assert.equal(peak, 1);
     assert.equal(adds.filter(name => name === 'r').length, 1);
   } finally { releaseHierarchy?.(); releaseNode?.(); channel.dispose(); }
+});
+
+test('active serial lane finishes useful parent-before-child loads while camera timer is frozen', async t => {
+  const setTimer = globalThis.setTimeout;
+  // Freeze only camera planning; real request deadlines/cleanup keep normal handles.
+  t.mock.method(globalThis, 'setTimeout', (callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) =>
+    setTimer(callback, delay === 150 ? 60_000 : delay, ...args));
+  const adds: string[] = []; let active = 0, peak = 0;
+  const fetcher: typeof fetch = async input => {
+    active++; peak = Math.max(peak, active);
+    try {
+      if (String(input).endsWith('display-hierarchy')) return response(hierarchy);
+      const name = new URL(String(input), 'http://local').searchParams.get('name')!;
+      // Schedule the camera throttle during an active request, then never fire it.
+      if (name === 'r') channel.update({ ...view, position: [2, 1, 1] });
+      return response(payload(name));
+    } finally { active--; }
+  };
+  const channel = createAdaptiveDisplay({ add: p => adds.push(p.name), remove() {}, status() {} }, fetcher);
+  try {
+    channel.configure(settings); channel.update(view); channel.bind(dataset);
+    for (let i = 0; i < 30 && adds.length < 4; i++) await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(adds.length, 4, 'camera throttle must not pause the active lane');
+    assert.equal(peak, 1);
+    assert.ok(adds.indexOf('r') < adds.indexOf('r0'));
+    assert.ok(adds.indexOf('r0') < adds.indexOf('r00'));
+  } finally { channel.dispose(); }
 });
 
 test('errors stay latched across camera frames until explicit retry; bounded streams and invalid payloads fail closed', async () => {

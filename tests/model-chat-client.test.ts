@@ -313,10 +313,11 @@ test('catalog errors fail closed even with a previously ready catalog, retain hi
     await f.client.refreshModels(); await f.client.send('first'); const history = f.client.view.messages;
     f.failCatalog(); await f.client.refreshModels();
     assert.equal(f.client.view.catalogPhase, 'error'); assert.equal(await f.client.send('blocked'), false);
-    assert.deepEqual(f.client.view.messages, history); assert.match(f.client.view.historyNotice!, /readiness could not be verified/);
+    assert.deepEqual(f.client.view.messages, history); assert.equal(f.client.view.historyNotice, undefined);
+    assert.equal(f.client.view.continuationActive, true);
     assert.ok(!JSON.stringify(f.client.view).includes('PRIVATE')); assert.equal(f.turns.length, 1);
     f.catalog(catalog); await f.client.refreshModels(); assert.equal(f.turns.length, 1);
-    await f.client.send('explicit recovery'); assert.equal(f.turns[1]!.conversationId, null);
+    await f.client.send('explicit recovery'); assert.equal(f.turns[1]!.conversationId, 'conversation-fixture');
   } finally { f.client.dispose(); }
 });
 
@@ -377,10 +378,30 @@ test('each failed message retains its classification through later sends; failed
       await delay(); assert.equal(turns, 2); // No automatic retry or provider fallback.
       await f.client.send('explicit new send');
       assert.equal(f.client.view.phase, 'completed'); assert.equal(f.client.view.code, 'completed'); assert.equal(turns, 3);
-      assert.equal(JSON.parse(f.calls.at(-1)!.init.body as string).conversationId, null);
+      assert.equal(JSON.parse(f.calls.at(-1)!.init.body as string).conversationId, 'conversation-fixture');
+      assert.match(f.client.view.historyNotice!, /Earlier completed turns are retained/);
       assert.equal(f.client.view.messages[3], failed); assert.equal(f.client.view.messages[3]!.failureCode, code);
       assert.equal(f.client.view.messages.at(-1)!.failureCode, undefined);
       assert.deepEqual(f.calls.map(c => c.path), ['/chat/models', '/chat/turn', '/chat/turn', '/chat/turn']);
+    } finally { f.client.dispose(); }
+  });
+});
+
+test('untrusted stream endings and stale server checkpoints never retain a completed continuation', async t => {
+  for (const mode of ['trailing-junk', 'missing-terminal', 'stale-conversation', 'stale-account'] as const) await t.test(mode, async () => {
+    let turns = 0;
+    const f = fixture(r => {
+      if (++turns !== 2) return stream(ndjson(events(r)));
+      if (mode === 'missing-terminal') return stream(ndjson([events(r)[0]]));
+      const error = { kind: 'error', requestId: r.requestId, code: mode === 'trailing-junk' ? 'provider-unavailable' : mode };
+      return stream(ndjson([error], mode === 'trailing-junk' ? 'junk' : ''));
+    });
+    try {
+      await ready(f); await f.client.send('completed'); await f.client.send('failed');
+      assert.equal(f.client.view.phase, 'error'); assert.equal(f.client.view.continuationActive, false);
+      assert.match(f.client.view.historyNotice!, /display-only/);
+      await f.client.send('explicit restart');
+      assert.equal(JSON.parse(f.calls.at(-1)!.init.body as string).conversationId, null);
     } finally { f.client.dispose(); }
   });
 });

@@ -99,7 +99,7 @@ try {
   assert.equal(JSON.parse(await page.getByTestId('visual-resolution').textContent()).status, 'stale');
   assert.equal(await page.getByRole('button', { name: 'Resolve pixel in captured image' }).isDisabled(), true);
   report.checks.push('Source screenshot records adaptive native coverage and invalidates after quality/chunk changes');
-  await section('Navigation & points'); await page.getByRole('button', { name: 'Frame dataset', exact: true }).click(); const framed = await settled('framed', 500000); assert.notEqual(framed.camera, fine.camera);
+  await section('Navigation help'); await page.getByRole('button', { name: 'Frame dataset', exact: true }).click(); const framed = await settled('framed', 500000); assert.notEqual(framed.camera, fine.camera);
   await page.waitForFunction(() => document.querySelector('[data-testid="toronto-viewer"]')?.dataset.detailPickPoint);
   await viewer.scrollIntoViewIfNeeded(); const pick = JSON.parse((await state()).detailPickPoint), rect = await viewer.boundingBox();
   await page.keyboard.down('Control'); await page.mouse.click(rect.x + pick[0], rect.y + pick[1]); await page.keyboard.up('Control');

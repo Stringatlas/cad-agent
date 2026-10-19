@@ -4,10 +4,20 @@ Use [TEMPLATE.md](TEMPLATE.md) for bounded work with testable acceptance criteri
 
 ## Index
 
-Latest: [050 — Agent inspection and approval loop](050-agent-inspection-approval-loop.md) — Requested captures/reference selection, human-decision pause/resume and scene-native review.896 serial tests/typecheck/build and synthetic/Toronto fixture browser loops pass; fresh review and graph coverage pending.
+Latest: [062 — AI capture color mode](062-agent-capture-color-mode.md) — optional natural RGB/point-type captures with capture-time metadata and unchanged user viewport/display mode.
 
 | Task | Status |
 | --- | --- |
+| [062 — AI capture color mode](062-agent-capture-color-mode.md) | Implemented; 134 focused tests/typecheck/build pass, actual-source desktop/mobile capture checks. Two existing broad-suite UI-copy failures; fresh review pending. |
+| [061 — Candidate-assessment prompt](061-candidate-assessment-prompt.md) | Implemented; 185 focused tests/typecheck/build pass; exact effective-instruction readback tested against outgoing payloads. Live inference and fresh review pending. |
+| [060 — Chat history and loop recovery](060-chat-history-loop-recovery.md) | Implemented; 219 focused tests/typecheck/build pass; mounted desktop/mobile fixture checks. Broad suite 956/958, two existing UI-copy checks fail. Fresh review pending. |
+| [057 — Chat composer recovery](057-chat-composer-recovery.md) | Implemented; typecheck/build and four targeted regressions pass. Desktop/mobile fixture inspection; two existing broader test failures documented. Fresh review pending. |
+| [056 — Workspace UI hierarchy](056-workspace-ui-hierarchy.md) | Implemented; direct model choice, contextual datum actions, compact workspace/account controls. Typecheck/build pass; 57/58 focused checks pass (one reproduced baseline history failure). Visual acceptance and fresh-session review pending. |
+| [055 — Rendering rollback](055-rendering-rollback.md) | Pre-task054 rendering/loading restored; 40 focused tests, typecheck/build and13 browser groups pass. Fresh review pending. |
+| [054 — Point-cloud streaming latency](054-point-cloud-streaming.md) | Rolled back by task055 at user request; historical measurements retained. |
+| [053 — Camera orbit center and edge detail](053-camera-orbit-lod.md) | Implemented; 69 focused tests/typecheck/build and actual-cloud checks pass. Full-suite baseline failures and one browser settling failure recorded; fresh review pending. |
+| [052 — Authored datum points and scene hierarchy](052-scene-object-model.md) | Implemented; typed references, exact human-approved creation/Undo, hierarchy and view-only visibility. Verification/known baseline failures recorded; fresh review and complete graph certification pending. |
+| [051 — Chat context history](051-chat-context-history.md) | See task for independently scoped implementation and verification status. |
 | [050 — Agent inspection and approval loop](050-agent-inspection-approval-loop.md) | Implemented; agent captures/reference selection, exact human-decision continuation and bottom-right review.896 serial tests/typecheck/build and fixture browser loops pass; fresh-session review/graph coverage pending. |
 | [049 — Viewer color modes](049-viewer-color-modes.md) | Implemented; RGB/type toggle, compact key and label-aware manual/adaptive detail.852 tests/typecheck/build pass; browser blocked, fresh-session review pending. |
 | [048 — AI area of interest](048-area-of-interest.md) | Implemented; rotated XY selection, automatic bounded JPEG, artifact-bound model context and Clear.164 targeted tests/typecheck/build/browser fixture checks pass; fresh-session review pending. |

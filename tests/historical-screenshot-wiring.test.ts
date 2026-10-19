@@ -17,7 +17,9 @@ test('Toronto and synthetic capture paths admit mixed scenes and truthfully desc
   assert.ok(toronto.includes('cadSolidsOrGhosts: cad.captureBlocked'));
   assert.ok(toronto.includes('pointEditsOrPreview: pointOverrides.captureBlocked'));
   assert.ok(toronto.includes('derivedOverlays: preprocessing.count'));
-  assert.match(toronto, /resolve: \(object, index\) => \{[\s\S]*?if \(pointOverrides\.captureBlocked\) return;/);
+  assert.ok(toronto.includes('authoredDatumsOrGhosts: authoredObjects.count'));
+  assert.match(toronto, /pointProvenance: pointOverrides\.captureBlocked \|\| authoredObjects\.count \? 'unavailable-for-edited-imagery'/);
+  assert.match(toronto, /resolve: \(object, index\) => \{[\s\S]*?if \(pointOverrides\.captureBlocked \|\| authoredObjects\.count\) return;/);
   assert.ok(demo.includes('pendingGhosts: overlays.children.some'));
 });
 

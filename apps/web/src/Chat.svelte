@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { SCENE_POINT_LIMIT, type ProjectSnapshot, type PointOverrideSnapshot, type ModelReferenceSelection } from '@spatial/contracts';
+  import type { AuthoredObjectReference, DatumPoint } from '@spatial/contracts';
+  import { type ProjectSnapshot, type PointOverrideSnapshot, type ModelReferenceSelection } from '@spatial/contracts';
   import { ChatController, type ChatEntry } from './chat-client';
   import BoxControls from './BoxControls.svelte';
   import type { ProjectController, ProjectView } from './project-client';
@@ -12,7 +13,8 @@
   import type { VisualModelSource } from './visual-model-source';
   import type { AreaOfInterestInput } from './area-of-interest';
   import { modelScene } from './model-chat-client';
-  let { areaInput, snapshot, view, controller: projectController, sceneMode, points, pointStatus, onclearpoint, visualSource, pointOverrides, onverifiedresult, pointBlocked = true, onpointproposal = () => {}, oncadproposal = () => {}, ontorontostreaming = () => {}, onselectreference, onauthorityrefresh, torontoCadBlocked = true }: {
+  let { objectReferences = [], selectedObject, onclearobject = () => {}, objectBlocked = true, onobjectproposal = () => {}, areaInput, snapshot, view, controller: projectController, sceneMode, points, pointStatus, onclearpoint, visualSource, pointOverrides, onverifiedresult, pointBlocked = true, onpointproposal = () => {}, oncadproposal = () => {}, ontorontostreaming = () => {}, onselectreference, onauthorityrefresh, torontoCadBlocked = true }: {
+    objectReferences?: readonly AuthoredObjectReference[]; selectedObject?: DatumPoint; onclearobject?: () => void; objectBlocked?: boolean; onobjectproposal?: () => void;
     areaInput?: AreaOfInterestInput;
     onselectreference: (reference: ModelReferenceSelection, isCurrent: () => boolean) => Promise<void>;
     onauthorityrefresh: () => Promise<void>;
@@ -36,8 +38,9 @@
     return label === 'loading' ? 'Loading type…' : semanticName(label);
   }
   // Query lineage stays attached locally; the strict model-reference protocol carries only original source fields.
-  const scene = $derived(modelScene(sceneMode, snapshot, view, activePoints.map(({ evidence: _evidence, semanticLabel: _label, ...original }) => original), areaInput?.area));
+  const scene = $derived(modelScene(sceneMode, snapshot, view, activePoints.map(({ evidence: _evidence, semanticLabel: _label, ...original }) => original), areaInput?.area, objectReferences));
   const listedPoints = $derived(sceneMode === 'demo' ? view.points : activePoints);
+  const referencePreview = $derived([...listedPoints.map(point => `${point.name} · ${'datasetId' in point ? selectedType(point) : 'Synthetic'}`), ...(sceneMode === 'toronto' && selectedObject ? [`${selectedObject.name} · Datum point`] : [])].join(', ') || 'None');
   let command = $state('metadata');
   let entry = $state<ChatEntry>();
   let controller: ChatController | undefined;
@@ -56,8 +59,9 @@
 <aside class="chat" aria-label="Scene chat" data-testid="chat">
   {#if pointStatus}<p class="point-status" role="status" data-testid="point-status">{pointStatus}</p>{/if}
   <details class="attachments" data-testid="draft-attachments" aria-label="Scene point references">
-    <summary><span>Scene references</span><span class="reference-preview" title={listedPoints.map(point => `${point.name} · ${'datasetId' in point ? selectedType(point) : 'Synthetic'}`).join(', ')}>{listedPoints.map(point => `${point.name} · ${'datasetId' in point ? selectedType(point) : 'Synthetic'}`).join(', ') || 'None'}</span><span class="reference-count">{listedPoints.length}/{SCENE_POINT_LIMIT}</span></summary>
+    <summary><span>Scene references</span><span class="reference-preview" title={referencePreview}>{referencePreview}</span>{#if listedPoints.length}<span class="reference-count" aria-label={`${listedPoints.length} source references`}>{listedPoints.length}</span>{/if}</summary>
 
+    {#if sceneMode === 'toronto' && selectedObject}<div class="attachment" data-testid="datum-chat-reference"><div class="attachment-heading"><strong>{selectedObject.name} · Datum point</strong><button type="button" aria-label={`Remove ${selectedObject.name} reference`} onclick={onclearobject}>×</button></div><details><summary>Details</summary><p>[{selectedObject.position.join(', ')}] m · Toronto local</p><pre>{JSON.stringify(objectReferences[0], null, 2)}</pre></details></div>{/if}
     {#if listedPoints.length}
       <div class="point-list" role="list" aria-label="Numbered scene points">
       {#each listedPoints as point (point.name)}
@@ -72,20 +76,20 @@
       {/each}
       </div>
 
-    {:else}
+    {:else if !selectedObject || sceneMode !== 'toronto'}
       <p class="empty">{sceneMode === 'pole' ? 'Switch to Toronto3D or Synthetic demo to attach numbered points.' : 'Cmd/Ctrl-click any rendered cloud point to attach Point 1, Point 2, and more.'}</p>
     {/if}
   </details>
   <ModelChat {scene} {visualSource} points={activePoints} {onverifiedresult} areaInput={sceneMode === 'toronto' ? areaInput : undefined}
     onselectreference={async (reference, current) => { await onselectreference(reference, current); await tick(); return scene; }}
     onauthorityrefresh={async () => { await onauthorityrefresh(); await tick(); return scene; }}
-    proposalsBlocked={sceneMode === 'demo' ? (!!view.pending || view.needsRefresh) : sceneMode === 'toronto' && (torontoCadBlocked || pointBlocked)}
+    proposalsBlocked={sceneMode === 'demo' ? (!!view.pending || view.needsRefresh) : sceneMode === 'toronto' && (torontoCadBlocked || pointBlocked || objectBlocked)}
     onstreamingchange={streaming => { projectController.setModelStreaming(streaming); ontorontostreaming(streaming); }}
-    onauthorityproposal={kind => { if (sceneMode === 'toronto') { if (kind === 'cad') oncadproposal(); else onpointproposal(); } }}
+    onauthorityproposal={kind => { if (sceneMode === 'toronto') { if (kind === 'cad') oncadproposal(); else if (kind === 'objects') onobjectproposal(); else onpointproposal(); } }}
     oninvalidateproposals={() => projectController.clearModelProposals()}
     onproposal={(proposal, current) => { if (sceneMode === 'demo') void projectController.admitModelProposal(proposal, () => sceneMode === 'demo' && current()); }} />
   <details class="technical" data-testid="inspection-tools">
-    <summary>Technical tools</summary>
+    <summary>Diagnostics</summary>
     {#if snapshot}
       {#key snapshot}
       <section data-testid="chat-project-binding">
@@ -128,12 +132,12 @@
 </aside>
 
 <style>
-  .chat { box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; height: 100%; min-height: 0; min-width: 0; overflow: hidden; background: #202124; color: #f1f1f3; padding: 18px 16px 12px; }
+  .chat { box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; height: 100%; min-height: 0; min-width: 0; overflow: hidden; background: #202124; color: #f1f1f3; padding: 12px; }
   .attachment-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   h3 { font-size: 14px; font-weight: 550; } p { color: #a5a5ad; font-size: 11px; line-height: 1.5; }
   .point-status { margin: 0; flex-shrink: 0; max-height: 52px; overflow: auto; color: #d7c697; }
   .attachments, .technical { flex-shrink: 0; min-height: 0; border-top: 1px solid #ffffff12; padding-top: 9px; font-size: 11px; }
-  .attachments[open], .technical[open] { flex-shrink: 0; max-height: 20%; overflow: auto; }
+  .attachments[open], .technical[open] { flex-shrink: 0; max-height: 30%; overflow: auto; overscroll-behavior: contain; }
   summary { cursor: pointer; color: #b9b9c1; } summary:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid #70a9ff; outline-offset: 3px; }
   .attachments > summary { display: flex; align-items: center; gap: 8px; }
   .attachments > summary::before { content: '▸'; color: #8e8e98; }
@@ -141,6 +145,8 @@
   .reference-preview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #a5a5af; }
   .reference-count { margin-left: auto; color: #8e8e98; font-variant-numeric: tabular-nums; }
   .empty { padding: 6px 0; color: #92929c; }
+  .technical { border-top: 0; padding-top: 0; color: #92929c; }
+  @media(pointer: coarse) { .attachment-heading > button { min-width: 44px; min-height: 44px; } summary { min-height: 32px; } }
   .attachment { background: #151619; border: 1px solid #ffffff12; border-radius: 10px; margin: 8px 0; padding: 10px; }
   .attachment-heading { font-size: 11px; justify-content: start; } .attachment-heading > button { margin-left: auto; border: 0; padding: 0 5px; font-size: 18px; }
   .attachment-heading strong { overflow-wrap: anywhere; }

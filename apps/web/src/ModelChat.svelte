@@ -15,7 +15,7 @@
   let { areaInput, scene, visualSource, points = [], onverifiedresult = () => {}, onauthorityproposal = () => {}, onproposal = () => {}, oninvalidateproposals = () => {}, onstreamingchange = () => {}, onselectreference, onauthorityrefresh, proposalsBlocked = false }: {
     areaInput?: AreaOfInterestInput;
     scene: ModelScene; visualSource?: VisualModelSource; points?: readonly TorontoDraftPoint[]; onverifiedresult?: (context: unknown) => void;
-    onauthorityproposal?: (kind: 'points' | 'cad') => void;
+    onauthorityproposal?: (kind: 'points' | 'cad' | 'objects') => void;
     onproposal?: (proposal: unknown, isCurrent: () => boolean) => void; oninvalidateproposals?: () => void;
     onstreamingchange?: (streaming: boolean) => void; proposalsBlocked?: boolean;
     onselectreference?: (reference: ModelReferenceSelection, isCurrent: () => boolean) => Promise<ModelScene>;
@@ -66,18 +66,25 @@
     } catch (error) { if (alive && ticket === captureTicket) captureError = error instanceof Error ? error.message : 'Screenshot unavailable.'; }
     finally { if (alive && ticket === captureTicket) captureBusy = false; }
   }
-  async function send() {
-    if (!canSend) return;
-    const current = effectiveAttachment, submitted = draft, revision = draftRevision;
-    const sent = await controller.send(submitted, current);
-    if (sent && view.phase === 'completed') {
-      // A newer edit (even back to the same text) belongs to the next message.
-      if (draftRevision === revision) draft = '';
+  async function send(submitted = draft) {
+    if (!readyToSend || !submitted.trim()) return;
+    const current = effectiveAttachment;
+    const pending = controller.send(submitted, current);
+    // Admission is synchronous; clear before awaiting network/approval, not after completion.
+    // Rejected submissions (for example the history limit) keep their draft and image.
+    if (view.phase === 'streaming') {
+      draft = '';
       if (attachment === current) removeAttachment();
     }
+    await pending;
+  }
+  async function editMessage(text: string) {
+    draft = text;
+    await tick();
+    draftInput?.focus();
   }
   let draft = $state('');
-  let draftRevision = 0;
+  let draftInput: HTMLTextAreaElement;
   let view = $state<ModelChatView>({ catalogPhase: 'idle', model: '', phase: 'idle', code: 'refresh-models', messages: [] });
   const catalogModelSelected = $derived(view.catalogPhase === 'ready' && view.catalog?.ready && !!view.catalog.models.some(model => model.id === view.model));
   let approvalWaiting = $state(false);
@@ -102,7 +109,9 @@
   const effectiveAttachment = $derived(areaInput?.attachment ?? attachment);
   const areaIdentity = $derived(areaInput?.area);
   $effect(() => { areaIdentity; untrack(() => removeAttachment()); });
-  const canSend = $derived(!areaInput?.pending && !areaInput?.error && !proposalsBlocked && view.catalogPhase === 'ready' && view.catalog?.ready && !!view.model && view.phase !== 'streaming' && !!draft.trim() && !captureBusy && !cropOpen);
+  const readyToSend = $derived(!areaInput?.pending && !areaInput?.error && !proposalsBlocked && view.catalogPhase === 'ready' && view.catalog?.ready && !!view.model && view.phase !== 'streaming' && !captureBusy && !cropOpen);
+  const canSend = $derived(readyToSend && !!draft.trim());
+  const lastUserIndex = $derived(view.messages.map(message => message.role).lastIndexOf('user'));
   onMount(() => {
     // Discovery is read-only. Focus alone never erases a conversation or retries inference.
     const revalidate = () => { void controller.refreshModels(); };
@@ -124,20 +133,25 @@
 
 <section class="model-chat" data-testid="model-chat" data-state={view.phase} aria-label="Model conversation">
   <div class="chat-toolbar">
-    <span class="active-model">{view.model || 'Choose a model in settings'}</span>
+    <label class="model-label" for="chat-model">Model</label>
+    <select id="chat-model" data-testid="model-select" aria-label="Chat model" value={view.model} onchange={event => { removeAttachment(); controller.selectModel(event.currentTarget.value); }} disabled={!view.catalog?.ready || view.catalogPhase !== 'ready'}>
+      <option value="">Choose a model…</option>
+      {#each view.catalog?.models ?? [] as model (model.id)}<option value={model.id}>{model.label}</option>{/each}
+    </select>
     <button type="button" data-testid="model-new-chat" onclick={() => { controller.newChat(); removeAttachment(); }}>New chat</button>
   </div>
+  {#if view.catalogPhase === 'error' || (view.catalogPhase === 'ready' && (!view.catalog?.ready || !view.catalog.models.length))}
+    <div class="catalog-recovery" role="alert" data-testid="model-catalog-recovery">
+      <p>Models unavailable. Check Account and server connectivity, then retry.</p>
+      <button type="button" onclick={() => void controller.refreshModels()}>Retry models</button>
+    </div>
+  {/if}
   <div class="conversation-scroll" role="region" aria-label="Conversation and model context">
   <details class="model-settings" data-testid="model-settings">
-    <summary>Model &amp; session settings{view.catalogPhase === 'error' || (view.catalogPhase === 'ready' && !view.catalog?.ready) ? ' · unavailable' : ''}</summary>
+    <summary>Session details{view.catalogPhase === 'error' || (view.catalogPhase === 'ready' && !view.catalog?.ready) ? ' · unavailable' : ''}</summary>
     <div class="catalog-actions">
       <button type="button" data-testid="model-refresh" onclick={() => void controller.refreshModels()} disabled={view.catalogPhase === 'loading'}>{view.catalogPhase === 'loading' ? 'Loading models…' : 'Refresh models'}</button>
     </div>
-  <label class="model-label" for="chat-model">Model</label>
-  <select id="chat-model" data-testid="model-select" value={view.model} onchange={event => { removeAttachment(); controller.selectModel(event.currentTarget.value); }} disabled={!view.catalog?.ready || view.catalogPhase !== 'ready'}>
-    <option value="">Choose a model…</option>
-    {#each view.catalog?.models ?? [] as model (model.id)}<option value={model.id}>{model.label}</option>{/each}
-  </select>
   <p class="catalog-status" role="status" data-testid="model-catalog-status">
     {#if view.catalogPhase === 'idle'}Models load automatically. No message is sent until you choose Send.
     {:else if view.catalogPhase === 'loading'}Discovering models from the server's configured provider…
@@ -152,6 +166,9 @@
   </details>
   <details class="boundary"><summary>Changes require your approval</summary><p>{scene.mode === 'toronto' ? 'Chat can propose point translations and real kernel solids in Toronto local meters. Accept or Decline each retained change; only human Accept publishes. State is volatile.' : 'Chat can propose synthetic box changes, never approve them. Review each ghost; parameter checks are not CAD verification.'}</p></details>
   </details>
+  {#if view.historyNotice}
+    <p class="continuation" role="status" data-testid="model-history-notice">{view.historyNotice}</p>
+  {/if}
   {#if view.messages.length}
     <div class="history" aria-live="polite" data-testid="model-history">
       {#each view.messages as message, index (index)}
@@ -165,6 +182,16 @@
             <div class="message-body"><SafeMarkdown text={message.text || (message.state === 'streaming' ? 'Waiting for response…' : 'No completed answer.')} /></div>
           {:else}
             <p class="message-text">{message.text || 'Empty message'}</p>
+            <div class="message-actions">
+              <button type="button" aria-label="Edit message" title="Edit in composer · sends as a new message" data-testid="model-edit-message" disabled={view.phase === 'streaming' || !!draft.trim()} onclick={() => void editMessage(message.text)}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m16 3 5 5L8 21H3v-5Z M13 6l5 5"/></svg>
+              </button>
+              {#if index === lastUserIndex}
+                <button type="button" aria-label="Retry message" title="Send again using the current scene" data-testid="model-retry-message" disabled={!readyToSend || !!draft.trim()} onclick={() => void send(message.text)}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M20 7v5h-5 M20 12a8 8 0 1 0-2 6 M20 7l-3-3"/></svg>
+                </button>
+              {/if}
+            </div>
           {/if}
           {#if message.role === 'assistant'}
             <details class="request-inspector" data-testid="model-request-inspector">
@@ -181,7 +208,7 @@
             </details>
           {/if}
           {#each message.tools as context}
-            <details class="tool-context"><summary>Scene tool · actual context / evidence (not approval)</summary>
+            <details class="tool-context"><summary>Tool evidence</summary>
               {#each placementWitnesses(context, points) as evidence}
                 <button type="button" data-testid="model-select-placement-witness" onclick={() => onverifiedresult(evidence)}>Show {evidence.volume === 'body' ? 'box' : 'access'} conflict · {semanticName(evidence.witness.label)}</button>
               {/each}
@@ -201,7 +228,7 @@
       {/each}
     </div>
   {:else}
-    <div class="conversation-empty"><h3>What would you like to build?</h3><p>Ask about your scene or describe a change. Proposed changes stay previews until you accept each one.</p></div>
+    <div class="conversation-empty"><h3>What would you like to build?</h3><p>Select in the scene or describe a change.</p></div>
   {/if}
   </div>
   <form class="composer" data-testid="local-draft-form" onsubmit={event => { event.preventDefault(); void send(); }}>
@@ -217,7 +244,7 @@
     {#if areaInput?.error}<p role="alert">{areaInput.error}</p>{/if}
     {#if captureError && !cropOpen}<p role="alert" data-testid="model-image-error">{captureError}</p>{/if}
     <label class="draft-label" for="local-draft">Message</label>
-    <textarea id="local-draft" data-testid="local-draft" bind:value={draft} rows="2" maxlength={MODEL_CLIENT_LIMITS.textChars} placeholder="Ask about the scene…" oninput={() => draftRevision++} onkeydown={event => {
+    <textarea id="local-draft" data-testid="local-draft" bind:this={draftInput} bind:value={draft} rows="2" maxlength={MODEL_CLIENT_LIMITS.textChars} placeholder="Ask about the scene…" onkeydown={event => {
       if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
         if (!event.repeat) void send();
@@ -243,7 +270,9 @@
   .model-chat { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
   .chat-toolbar, .catalog-actions, .composer-footer { display: flex; align-items: center; gap: 8px; }
   .chat-toolbar { flex-shrink: 0; justify-content: space-between; margin-bottom: 8px; }
-  .active-model { color: #a5a5af; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chat-toolbar select { flex: 1; min-width: 0; width: 0; padding: 7px 8px; text-overflow: ellipsis; }
+  .catalog-recovery { flex-shrink: 0; max-height: 110px; overflow: auto; margin-bottom: 8px; padding: 8px 10px; border: 1px solid #a37e46; border-radius: 8px; }
+  .catalog-recovery p { margin: 0 0 6px; color: #f2d5a6; }
   .chat-toolbar button, .catalog-actions button { flex-shrink: 0; background: transparent; border-color: transparent; color: #aaaab4; padding: 4px 0; font-size: 10px; }
   .model-settings { font-size: 10px; color: #9999a4; padding: 6px 0 8px; border-bottom: 1px solid #ffffff0c; }
   .catalog-actions { margin: 8px 0; }
@@ -282,6 +311,11 @@
   button { background: #2c2d32; color: #ededf2; border: 1px solid #ffffff16; border-radius: 8px; padding: 7px 10px; cursor: pointer; font-size: 11px; }
   button:disabled { opacity: .4; cursor: default; }
   button:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid #70a9ff; outline-offset: 2px; }
+  .message-actions { display: flex; justify-content: flex-end; gap: 2px; opacity: 0; }
+  article:hover .message-actions, article:focus-within .message-actions { opacity: 1; }
+  .message-actions button { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; background: transparent; border-color: transparent; color: #b7b7c2; }
+  .message-actions button:hover { background: #ffffff0c; color: white; }
+  @media (hover: none) { .message-actions { opacity: 1; } .message-actions button { width: 36px; height: 36px; } }
   .camera { display: inline-flex; align-items: center; justify-content: center; padding: 6px; background: transparent; border-color: transparent; }
   .cancel { margin-left: auto; } .cancel:disabled { visibility: hidden; }
   .send { background: #3478f6; color: white; border-color: #4283fc; font-weight: 550; } .send span { margin-left: 7px; }

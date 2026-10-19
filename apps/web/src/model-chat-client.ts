@@ -24,14 +24,15 @@ function modelId(value: unknown): string {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,255}$/.test(value)) throw new Error('Invalid model');
   return value;
 }
+import type { AuthoredObjectReference } from '@spatial/contracts';
 /** Only references from the visible scene enter a turn; hidden-mode retained pins never leak. */
 export function modelScene(mode: string, snapshot: ProjectSnapshot | undefined,
-  view: Pick<ProjectView, 'selectedId' | 'points' | 'needsRefresh'>, points: readonly TorontoDraftPoint[], areaOfInterest?: ModelAreaOfInterest): ModelScene {
+  view: Pick<ProjectView, 'selectedId' | 'points' | 'needsRefresh'>, points: readonly TorontoDraftPoint[], areaOfInterest?: ModelAreaOfInterest, objects: readonly AuthoredObjectReference[] = []): ModelScene {
   if (mode !== 'demo' && mode !== 'toronto' && mode !== 'pole') throw new Error('Unknown scene');
   const project = snapshot && !view.needsRefresh ? canonicalSceneContextRequest({ sessionId: snapshot.sessionId,
     projectRevision: snapshot.project.revision, frameId: snapshot.frameId, units: snapshot.project.coordinates.units,
     entityIds: mode === 'demo' && view.selectedId ? [view.selectedId] : [], points: mode === 'demo' ? view.points : [] }) : null;
-  return freezeProtocolValue(canonicalModelScene({ mode, project, toronto: mode === 'toronto' ? points : [], ...(mode === 'toronto' && areaOfInterest ? { areaOfInterest } : {}) }));
+  return freezeProtocolValue(canonicalModelScene({ mode, project, toronto: mode === 'toronto' ? points : [], ...(mode === 'toronto' && objects.length ? { objects } : {}), ...(mode === 'toronto' && areaOfInterest ? { areaOfInterest } : {}) }));
 }
 export function validateModelCatalog(value: unknown): ModelCatalog {
   const r = protocolRecord(canonicalModelCatalog(value)); protocolKeys(r, ['mode', 'ready', 'code', 'generation', 'models']);
@@ -57,9 +58,10 @@ export function validateModelEvent(value: unknown, request: ModelTurnRequest): M
   if (r.kind === 'start' && (r.model !== request.model || (request.conversationId !== null && r.conversationId !== request.conversationId))) throw new Error('Wrong conversation/model');
   if (r.kind === 'delta' && (typeof r.text !== 'string' || !r.text.length || r.text.length > MODEL_CLIENT_LIMITS.outputChars)) throw new Error('Invalid text delta');
   if (r.kind === 'tool') {
-    if (!['inspect_scene', 'capture_scene', 'select_reference'].includes(String(r.name)) && !(r.name === 'resolve_visual_pixel' && request.visualObservation) &&
+    if (!['inspect_scene', 'capture_scene', 'select_reference'].includes(String(r.name)) &&
+      !(r.name === 'query_aoi_points' && request.scene.mode === 'toronto' && request.scene.areaOfInterest) && !(r.name === 'resolve_visual_pixel' && request.visualObservation) &&
       !(['nearest_label', 'assess_utility_box', 'propose_utility_box'].includes(String(r.name)) && request.scene.mode === 'toronto' && request.scene.toronto.length > 0) &&
-      !(['propose_point_move', 'propose_point_move_to_nearest_label', 'propose_cad_box', 'propose_cad_cylinder'].includes(String(r.name)) && request.scene.mode === 'toronto' && (!String(r.name).startsWith('propose_point_move') || request.scene.toronto.length > 0)) &&
+      !(['list_objects', 'get_object', 'propose_point_create', 'propose_point_move', 'propose_point_move_to_nearest_label', 'propose_cad_box', 'propose_cad_cylinder'].includes(String(r.name)) && request.scene.mode === 'toronto' && (!String(r.name).startsWith('propose_point_move') || request.scene.toronto.length > 0)) &&
       !((r.name === 'propose_box_create' || r.name === 'propose_box_update') && request.scene.mode === 'demo' && request.scene.project)) throw new Error('Unsupported tool');
     canonicalProtocolJson(r.context, { maxDepth: 12, maxNodes: 4096, maxArrayLength: 256, maxStringLength: 12000 });
   }
@@ -235,10 +237,12 @@ export async function streamModelTurn(request: ModelTurnRequest, signal: AbortSi
   if (buffer || !terminal) throw new Error('Missing terminal/EOF');
   // Completion is intentionally withheld until EOF and all trailing bytes are checked.
   const final = terminal as ModelChatEvent;
-  if (final.kind !== 'done') throw new ModelTurnFailure(final.kind === 'error' ? final.code : 'invalid-stream');
+  if (final.kind !== 'done') throw new ModelTurnFailure(final.kind === 'error' ? final.code : 'invalid-stream', final.kind === 'error');
   guard(); publish(final); guard(); return final.conversationId;
 }
-export class ModelTurnFailure extends Error { constructor(readonly code: string) { super('Model turn unavailable'); } }
+export class ModelTurnFailure extends Error {
+  constructor(readonly code: string, readonly confirmedServerFailure = false) { super('Model turn unavailable'); }
+}
 export interface ModelFailureDescription { readonly title: string; readonly detail: string; readonly recovery: string; }
 /** Closed UI copy only: header classifications never claim that a provider body or inference was verified. */
 export function modelFailureDescription(code: string | undefined): ModelFailureDescription {
@@ -330,12 +334,13 @@ export interface ModelChatView {
 export class ModelChatController {
   view: ModelChatView = { catalogPhase: 'idle', model: '', phase: 'idle', code: 'refresh-models', messages: [] };
   private scene?: ModelScene; private sceneKey = ''; private conversationId: string | null = null;
+  private conversationStart = 0;
   private sequence = 0; private generation = 0; private active?: AbortController; private disposed = false;
   private catalogActive?: AbortController; private catalogSequence = 0;
   constructor(private publish: (view: ModelChatView) => void,
     private fetcher: typeof fetch = (input, init) => globalThis.fetch(input, init),
     private deadlineMs: number = MODEL_CLIENT_LIMITS.deadlineMs, private catalogDeadlineMs: number = MODEL_CLIENT_LIMITS.catalogDeadlineMs,
-    private proposalEvents: ModelAgentCallbacks & { onproposal?: (proposal: unknown, isCurrent: () => boolean) => void; oninvalidate?: () => void; onauthorityproposal?: (kind: 'points' | 'cad') => void } = {}) {}
+    private proposalEvents: ModelAgentCallbacks & { onproposal?: (proposal: unknown, isCurrent: () => boolean) => void; oninvalidate?: () => void; onauthorityproposal?: (kind: 'points' | 'cad' | 'objects') => void } = {}) {}
   private approvalWaiting = false;
   private selecting?: ModelReferenceSelection;
   private acceptAgentScene(scene: ModelScene) {
@@ -351,6 +356,12 @@ export class ModelChatController {
       const same = (a: unknown, b: unknown) => canonicalProtocolJson(a) === canonicalProtocolJson(b);
       const approvalChange = this.approvalWaiting && previous.project && scene.project && scene.project.projectRevision === previous.project.projectRevision + 1 &&
         same({ ...scene, project: { ...scene.project, projectRevision: previous.project.projectRevision } }, previous);
+      const previousObjects = previous.objects ?? [], nextObjects = scene.objects ?? [];
+      const objectApprovalChange = this.approvalWaiting && previousObjects.length > 0 && nextObjects.length === previousObjects.length &&
+        nextObjects.every((reference, index) => {
+          const before = previousObjects[index]!;
+          return reference.revision === before.revision + 1 && same({ ...reference, revision: before.revision }, before);
+        }) && same({ ...scene, objects: previousObjects }, previous);
       const selection = this.selecting;
       const point = selection?.kind === 'toronto-point' ? scene.toronto.at(-1) : scene.project?.points.at(-1);
       const selectionChange = selection && point && (selection.kind === 'toronto-point' ?
@@ -358,7 +369,7 @@ export class ModelChatController {
         scene.project && previous.project && scene.project.points.length === previous.project.points.length + 1 &&
         (point as { entityId: string }).entityId === selection.entityId && (point as { pointIndex: number }).pointIndex === selection.pointIndex &&
         same({ ...scene, project: { ...scene.project, points: scene.project.points.slice(0, -1) } }, previous));
-      if (approvalChange || selectionChange) { this.acceptAgentScene(scene); return; }
+      if (approvalChange || objectApprovalChange || selectionChange) { this.acceptAgentScene(scene); return; }
     }
     const sameSession = this.scene?.mode === scene.mode && this.scene?.project?.sessionId === scene.project?.sessionId &&
       this.scene?.project?.frameId === scene.project?.frameId;
@@ -415,7 +426,8 @@ export class ModelChatController {
       this.set({ catalogPhase: 'ready', catalog, model });
     } catch {
       if (!this.disposed && sequence === this.catalogSequence) {
-        this.contextReset('Account readiness could not be verified');
+        // Discovery failure is not an account identity change. Block new sends until
+        // revalidated, but do not discard completed history or cancel an active turn.
         this.set({ catalogPhase: 'error', code: 'catalog-unavailable' });
       }
     } finally { clearTimeout(timer); if (sequence === this.catalogSequence) this.catalogActive = undefined; }
@@ -427,12 +439,24 @@ export class ModelChatController {
       messageBytes(messages) + encoder.encode(text).length > MODEL_CLIENT_LIMITS.historyBytes - 65536) {
       this.set({ code: 'history-limit-new-chat-required' }); return false;
     }
+    // AOI input remains attached in the composer. Successful server history already
+    // contains it; only append a new image when its full canonical observation changes.
+    // A null handle means history was reset or interrupted: resend even if visible in old messages.
+    let observation = attachment ? canonicalModelVisualObservation(attachment.observation) : undefined;
+    if (observation && this.conversationId !== null) {
+      const key = JSON.stringify(observation);
+      if (messages.slice(this.conversationStart).some((message, index, history) =>
+        (message.role === 'assistant' ? message.state === 'complete' : history[index + 1]?.state === 'complete') &&
+        message.attachments?.some(image => JSON.stringify(image) === key))) {
+        attachment = undefined; observation = undefined;
+      }
+    }
     const imageBytes = messages.reduce((total, message) => total + (message.attachments ?? []).reduce((sum, image) => sum + encoder.encode(image.image.dataUrl).length, 0), 0);
     if (imageBytes + (attachment ? encoder.encode(attachment.observation.image.dataUrl).length : 0) > MODEL_CHAT_LIMITS.imageHistoryBytes) {
       this.set({ code: 'history-limit-new-chat-required' }); return false;
     }
-    // UI attachments may be Svelte $state proxies; never freeze their live object graph.
-    const observation = attachment ? canonicalModelVisualObservation(attachment.observation) : undefined;
+    // Canonical observations detach UI $state proxies before history is frozen.
+    if (this.conversationId === null) this.conversationStart = messages.length;
     this.invalidate(); const currentGeneration = this.generation, controller = this.active = new AbortController();
     const request: ModelTurnRequest = { requestId: `model-${crypto.randomUUID()}-${++this.sequence}`, conversationId: this.conversationId,
       generation: catalog.generation, model, text, scene: this.scene, ...(observation ? { visualObservation: observation } : {}) };
@@ -462,6 +486,7 @@ export class ModelChatController {
         next[next.length - 1] = updated; next = boundInspections(next);
         this.set({ messages: [...next], code: event.kind === 'tool' ? 'inspecting-bound-scene' : 'receiving-model-response' });
         if (event.kind === 'tool' && request.scene.mode === 'toronto') {
+          if (event.name === 'propose_point_create' && protocolRecord(event.context).kind === 'scene-object-proposal') this.proposalEvents.onauthorityproposal?.('objects');
           if (event.name === 'propose_point_move' || (event.name === 'propose_point_move_to_nearest_label' && protocolRecord(event.context).status === 'pending')) this.proposalEvents.onauthorityproposal?.('points');
           if (event.name === 'propose_cad_box' || event.name === 'propose_cad_cylinder' || event.name === 'propose_utility_box') this.proposalEvents.onauthorityproposal?.('cad');
         }
@@ -501,8 +526,16 @@ export class ModelChatController {
       if (current()) {
         this.proposalEvents.oninvalidate?.();
         const code = controller.signal.aborted ? 'deadline-incomplete' : error instanceof ModelTurnFailure ? error.code : 'invalid-or-unavailable-stream';
-        this.conversationId = null; next[next.length - 1] = { ...settleInspections(next[next.length - 1]!, controller.signal.aborted ? 'cancelled' : 'interrupted'), state: 'incomplete', failureCode: code };
-        this.set({ messages: [...next], phase: 'error', code });
+        // A validated server error + EOF proves this turn was not committed. Keep
+        // the last successful checkpoint; never replay failed tools or partial text.
+        // Broken transport/cancellation is ambiguous and still drops continuation.
+        const retain = !controller.signal.aborted && error instanceof ModelTurnFailure && error.confirmedServerFailure &&
+          !['stale-conversation', 'stale-account', 'model-unavailable', 'closed'].includes(code);
+        if (!retain) this.conversationId = null;
+        next[next.length - 1] = { ...settleInspections(next[next.length - 1]!, controller.signal.aborted ? 'cancelled' : 'interrupted'), state: 'incomplete', failureCode: code };
+        this.set({ messages: [...next], phase: 'error', code,
+          historyNotice: this.conversationId ? 'Earlier completed turns are retained. This failed turn is not sent again; retry explicitly if needed.' :
+            'Conversation interrupted. Earlier messages are display-only; the next send starts a new conversation.' });
       }
     } finally { clearTimeout(timer); if (current()) this.active = undefined; this.approvalWaiting = false; this.selecting = undefined; this.proposalEvents.onapprovalwait?.(false); }
     return true;

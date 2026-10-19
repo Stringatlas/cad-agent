@@ -1,5 +1,5 @@
 import { setImmediate as yieldTurn } from 'node:timers/promises';
-import { assertCropBox, type CropBox, type Vec3 } from '@spatial/contracts';
+import { assertCropBox, type CropBox, type ModelAreaOfInterest, type Vec3 } from '@spatial/contracts';
 import { SemanticArtifact, requireData } from './semantic-artifact';
 import { getSemanticDiskIndex, pagePoints, recordBytes, type SemanticDiskIndex, type SemanticDiskPage } from './semantic-disk-index';
 
@@ -64,6 +64,11 @@ export interface SpatialBoxResult extends SpatialResult {
   readonly bounds: CropBox; readonly totalCount: number; readonly countsByLabel: readonly number[];
   readonly supportingGroundCount: number; readonly obstructionCount: number;
   /** Capped obstruction witnesses only; counts always cover the full inclusive volume. */
+  readonly points: readonly SpatialBoxPoint[]; readonly truncated: boolean;
+}
+export interface SpatialAoiResult extends SpatialResult {
+  readonly totalCount: number; readonly countsByLabel: readonly number[];
+  /** Original-source witnesses ordered by source key; counts cover the full XY footprint at every height. */
   readonly points: readonly SpatialBoxPoint[]; readonly truncated: boolean;
 }
 const lowerDistance = (q: Vec3, box: { min: Vec3; max: Vec3 }) => Math.hypot(...q.map((v, a) => Math.max(box.min[a] - v, v - box.max[a], 0)));
@@ -138,6 +143,74 @@ export class SpatialPageIndex {
     const obstructionCount = totalCount - supportingGroundCount;
     return { complete: true, binding: this.binding, bounds: box, totalCount, countsByLabel, supportingGroundCount, obstructionCount,
       points: points.sort(sourceOrder), truncated: obstructionCount > points.length,
+      statistics: { checkedPages, totalPages: this.disk.pages.length, checkedPoints, milliseconds: performance.now() - started } };
+  }
+  /** Exact inclusive rotated XY rectangle, extruded over ALL dataset heights (corners' Z is only a reference plane). */
+  async aoi(corners: ModelAreaOfInterest['corners'], options: SpatialQueryOptions & { readonly maxResults?: number } = {}): Promise<SpatialAoiResult> {
+    if (!Array.isArray(corners) || corners.length !== 4 || !corners.every(c =>
+      Array.isArray(c) && c.length === 3 && c.every(Number.isFinite))) throw new RangeError('Invalid AOI rectangle corners');
+    // Copy caller-owned values before the first await. Rectangle order may be clockwise or counterclockwise.
+    const rectangle = corners.map(c => vector(c)), [origin, next, opposite, previous] = rectangle;
+    const ux = next[0] - origin[0], uy = next[1] - origin[1];
+    const vx = previous[0] - origin[0], vy = previous[1] - origin[1];
+    const width = Math.hypot(ux, uy), height = Math.hypot(vx, vy);
+    // A few dozen ulps of coordinate/subtraction error, with a sub-nanometre floor; not a scene-scale buffer.
+    const tolerance = Math.max(1e-10, 64 * Number.EPSILON * Math.max(1, ...rectangle.flatMap(c => [Math.abs(c[0]), Math.abs(c[1])])));
+    const planeTolerance = Math.max(1e-10, 64 * Number.EPSILON * Math.max(1, ...rectangle.map(c => Math.abs(c[2]))));
+    if (![width, height, tolerance].every(Number.isFinite) || width <= 4 * tolerance || height <= 4 * tolerance ||
+      rectangle.some(c => Math.abs(c[2] - origin[2]) > planeTolerance) ||
+      Math.abs((opposite[0] - next[0]) - vx) > tolerance || Math.abs((opposite[1] - next[1]) - vy) > tolerance ||
+      Math.abs((ux / width) * (vx / height) + (uy / width) * (vy / height)) > tolerance / width + tolerance / height) {
+      throw new RangeError('AOI corners must form a nondegenerate ordered XY rectangle');
+    }
+    const label = options.label, signal = options.signal, cap = options.maxResults ?? 32;
+    const maxPages = options.maxPages ?? this.disk.pages.length, maxMilliseconds = options.maxMilliseconds ?? 30000;
+    if ((label !== undefined && (!Number.isInteger(label) || label < 0 || label > 8)) ||
+      !Number.isSafeInteger(cap) || cap < 1 || cap > 64 ||
+      !Number.isSafeInteger(maxPages) || maxPages < 0 || !Number.isSafeInteger(maxMilliseconds) || maxMilliseconds <= 0) {
+      throw new RangeError('Invalid AOI query budgets/options');
+    }
+    const boundaryTolerance = 4 * tolerance;
+    const minX = Math.min(...rectangle.map(c => c[0])) - boundaryTolerance, maxX = Math.max(...rectangle.map(c => c[0])) + boundaryTolerance;
+    const minY = Math.min(...rectangle.map(c => c[1])) - boundaryTolerance, maxY = Math.max(...rectangle.map(c => c[1])) + boundaryTolerance;
+    const intersects = (box: { readonly min: Vec3; readonly max: Vec3 }) =>
+      minX <= box.max[0] && maxX >= box.min[0] && minY <= box.max[1] && maxY >= box.min[1];
+    const started = performance.now(); let checkedPages = 0, checkedPoints = 0, totalCount = 0;
+    const countsByLabel = Array<number>(9).fill(0), points: SpatialBoxPoint[] = [];
+    const checkpoint = () => { signal?.throwIfAborted(); if (performance.now() - started >= maxMilliseconds) throw new RangeError('Spatial time budget exceeded'); };
+    checkpoint(); await this.snapshot.check(signal); await this.disk.check(signal); checkpoint();
+    const visit = async (node: PageKdNode): Promise<void> => {
+      checkpoint(); if (!intersects(node)) return;
+      if (node.page === undefined) { await visit(node.left!); await visit(node.right!); return; }
+      const page = this.disk.pages[node.page];
+      if (label !== undefined && (!page.labels[label] || !intersects(page.labels[label]!))) return;
+      if (checkedPages >= maxPages) throw new RangeError('Spatial page budget exceeded');
+      const bytes = await this.disk.readPage(page, signal); checkedPages++; checkpoint();
+      for (let n = 0; n < page.count; n++) {
+        checkedPoints++; const at = n * recordBytes, category = bytes.readUInt32LE(at + 36);
+        if (label !== undefined && category !== label) continue;
+        const x = bytes.readDoubleLE(at), y = bytes.readDoubleLE(at + 8);
+        if (x < minX || x > maxX || y < minY || y > maxY) continue;
+        const dx = x - origin[0], dy = y - origin[1];
+        const along = dx * (ux / width) + dy * (uy / width), across = dx * (vx / height) + dy * (vy / height);
+        if (!Number.isFinite(along) || !Number.isFinite(across)) throw new RangeError('Spatial AOI projection overflow');
+        if (along < -boundaryTolerance || along > width + boundaryTolerance || across < -boundaryTolerance || across > height + boundaryTolerance) continue;
+        totalCount++; countsByLabel[category]++;
+        const preparedRecordIndex = bytes.readUInt32LE(at + 32), sourceFileId = bytes.readUInt32LE(at + 24), sourceRow = bytes.readUInt32LE(at + 28);
+        const last = points.at(-1)?.source;
+        // Keep the lowest source keys, independent of BVH traversal order, with only cap-sized storage.
+        if (points.length === cap && last && (preparedRecordIndex - last.preparedRecordIndex || sourceFileId - last.sourceFileId || sourceRow - last.sourceRow) >= 0) continue;
+        points.push(Object.freeze({ position: vector([x, y, bytes.readDoubleLE(at + 16)]), label: category,
+          source: Object.freeze({ sourceFileId, sourceRow, preparedRecordIndex }),
+          artifactRevision: this.binding.artifactRevision, frameId: 'toronto3d-local-v1', units: 'm' }));
+        points.sort(sourceOrder); if (points.length > cap) points.pop();
+      }
+      await yieldTurn(); checkpoint();
+    };
+    if (this.tree.root) await visit(this.tree.root);
+    await this.snapshot.check(signal); await this.disk.check(signal); checkpoint();
+    return { complete: true, binding: this.binding, totalCount, countsByLabel: Object.freeze(countsByLabel),
+      points: Object.freeze(points), truncated: totalCount > points.length,
       statistics: { checkedPages, totalPages: this.disk.pages.length, checkedPoints, milliseconds: performance.now() - started } };
   }
   /** Point-to-source-point clearance only: NOT a solid/surface/obstacle clearance proof. */

@@ -6,6 +6,7 @@ import { createVisualCapture } from './visual-capture';
 import { createViewportSizer } from './viewport-size';
 import { updateStableOrbitControls } from './orbit-stability';
 import { createCameraFlight } from './camera-flight';
+import { focusOrbit, isOrbitFocusGesture, orbitHitPosition } from './orbit-focus';
 import { createBoxGhost } from './proposal-ghosts';
 
 export function createViewer(host: HTMLElement, initial: ProjectState, onSelect: (id: string | null) => void,
@@ -25,6 +26,7 @@ export function createViewer(host: HTMLElement, initial: ProjectState, onSelect:
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.target.set(0, 0, 0.4);
   controls.enableDamping = true;
+  controls.zoomToCursor = true;
   controls.update();
   const grid = new THREE.GridHelper(8, 16, 0x475773, 0x28384c);
   grid.rotation.x = Math.PI / 2; // Three grid is XZ; project ground is XY.
@@ -88,6 +90,16 @@ export function createViewer(host: HTMLElement, initial: ProjectState, onSelect:
         onPoint?.({ entityId: entity.id, pointIndex: hit.index, position: entity.points[hit.index]! });
     } else onSelect(resolvePickedEntityId(state, raycaster.intersectObjects(objects, false)[0]?.object));
   };
+  const doubleClick = (event: MouseEvent) => {
+    if (!isOrbitFocusGesture(event) || disposed || contextLost || renderUnavailable) return;
+    const rect = renderer.domElement.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    raycaster.setFromCamera(new THREE.Vector2((event.clientX - rect.left) / rect.width * 2 - 1,
+      -(event.clientY - rect.top) / rect.height * 2 + 1), camera);
+    const hit = raycaster.intersectObjects(objects, false)[0];
+    if (hit && focusOrbit(camera, controls, orbitHitPosition(hit))) { flight.reset(); visual.invalidate(); }
+  };
+  renderer.domElement.addEventListener('dblclick', doubleClick);
   renderer.domElement.addEventListener('pointerdown', pointerDown);
   renderer.domElement.addEventListener('pointerup', pointerUp);
   const resize = new ResizeObserver(() => { viewport.sync(); });
@@ -185,6 +197,7 @@ export function createViewer(host: HTMLElement, initial: ProjectState, onSelect:
       disposed = true; host.dataset.ready = 'false';
       cancelAnimationFrame(frame); clearOverlays();
       resize.disconnect();
+      renderer.domElement.removeEventListener('dblclick', doubleClick);
       renderer.domElement.removeEventListener('pointerdown', pointerDown);
       renderer.domElement.removeEventListener('pointerup', pointerUp);
       renderer.domElement.removeEventListener('webglcontextlost', contextLostListener);

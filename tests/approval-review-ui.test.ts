@@ -49,20 +49,21 @@ test('actual navigation handler chooses adjacent candidate and retains current c
   assert.equal(navigate(items, 0, items[0], -1), 'point');
 });
 
-test('awaited Toronto refresh waits in-flight approval and flushes both refreshed authorities', async () => {
+test('awaited Toronto refresh waits in-flight approval and flushes all three refreshed authorities', async () => {
   const toronto = source('Toronto.svelte');
   const handler = toronto.slice(toronto.indexOf('  export async function refreshAgentAuthorities'), toronto.indexOf('  $effect(() => { const token = cadRefresh'));
   const js = ts.transpile(handler.replace('export ', ''), { target: ts.ScriptTarget.ES2022 });
   const view = { busy: true, needsRefresh: false, status: 'Ready' }, calls: string[] = [];
-  const refresh = new Function('tick', 'cadView', 'alive', 'cadArtifact', 'pointEditor', 'cadController', `${js}; return refreshAgentAuthorities;`)(
+  const refresh = new Function('tick', 'cadView', 'alive', 'cadArtifact', 'pointEditor', 'cadController', 'objectView', 'objectController', `${js}; return refreshAgentAuthorities;`)(
     async () => { calls.push('tick'); }, view, true, 'artifact',
     { async refreshAuthority() { calls.push('points'); await new Promise(resolve => setTimeout(resolve, 5)); calls.push('points-done'); } },
     { async refresh() { assert.equal(view.busy, false); calls.push('cad'); } },
+    { busy: false, needsRefresh: false }, { async refresh() { calls.push('objects'); } },
   );
   setTimeout(() => { view.busy = false; calls.push('approval-done'); }, 5);
   await refresh();
   assert.ok(calls.indexOf('approval-done') < calls.indexOf('cad'));
-  assert.ok(calls.includes('points-done')); assert.equal(calls.at(-1), 'tick');
+  assert.ok(calls.includes('objects')); assert.ok(calls.includes('points-done')); assert.equal(calls.at(-1), 'tick');
   view.needsRefresh = true; view.status = 'Explicit recovery required';
   await assert.rejects(refresh(), /Explicit recovery required/);
 });
@@ -70,7 +71,7 @@ test('awaited Toronto refresh waits in-flight approval and flushes both refreshe
 test('Toronto combines point and CAD review outside tools and leaves approval independent of model streaming', () => {
   const toronto = source('Toronto.svelte'), points = source('PointEdits.svelte'), cad = source('TorontoCad.svelte');
   assert.equal((toronto.match(/<ApprovalReview /g) ?? []).length, 1);
-  assert.ok(toronto.includes('$derived([...pointReviewItems, ...cadReviewItems])'));
+  assert.ok(toronto.includes('$derived([...pointReviewItems, ...cadReviewItems, ...objectReviewItems])'));
   assert.ok(toronto.indexOf('<ApprovalReview ') < toronto.indexOf('<aside>'));
   assert.doesNotMatch(cad, /toronto-cad-accept|toronto-cad-decline/);
   assert.match(toronto, /disabled: cadView\.busy \|\| cadView\.needsRefresh,/);
@@ -82,6 +83,6 @@ test('Toronto combines point and CAD review outside tools and leaves approval in
   assert.match(points, /data-testid="point-edit-refresh" disabled=\{view\.busy\}/);
   assert.match(cad, /data-testid="toronto-cad-refresh" disabled=\{view\.busy\}/);
   assert.match(toronto, /export async function refreshAgentAuthorities\(\): Promise<void>/);
-  assert.match(toronto, /await Promise\.all\(\[cadController\.refresh\(\), pointEditor\.refreshAuthority\(\)\]\)/);
+  assert.match(toronto, /await Promise\.all\(\[cadController\.refresh\(\), pointEditor\.refreshAuthority\(\), objectController\.refresh\(\)\]\)/);
   assert.match(points, /await controller\.refresh\(\); await tick\(\)/);
 });

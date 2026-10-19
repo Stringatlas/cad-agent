@@ -1,4 +1,5 @@
 import { assertVec3, type Vec3 } from './index';
+import { canonicalSceneObjectReference, type AuthoredObjectReference } from './scene-objects';
 import { canonicalModelVisualObservation } from './model-visual';
 import type { ModelVisualObservation } from './model-visual';
 import { SCENE_POINT_LIMIT, canonicalScenePointName, canonicalSceneContextRequest, type ScenePointName, type SceneContextRequest } from './project-edit';
@@ -24,6 +25,7 @@ export interface ModelScene {
   readonly mode: 'toronto' | 'demo' | 'pole'; readonly project: SceneContextRequest | null;
   readonly toronto: readonly ModelTorontoPoint[];
   readonly areaOfInterest?: ModelAreaOfInterest;
+  readonly objects?: readonly AuthoredObjectReference[];
 }
 export interface ModelCatalog {
   readonly mode: 'disabled' | 'api-key' | 'chatgpt'; readonly ready: boolean; readonly code: string;
@@ -40,16 +42,21 @@ export interface ModelRequestInspection {
   readonly bodyJson: string; readonly omissions: readonly ModelInspectionOmission[];
 }
 export type ModelRequestPhase = 'dispatched' | 'completed' | 'failed' | 'cancelled';
-export type ModelCaptureRequest = { readonly kind: 'current' } | { readonly kind: 'top-down' } |
-  { readonly kind: 'camera'; readonly position: Vec3; readonly target: Vec3; readonly up?: Vec3 };
+export type ModelCaptureColorMode = 'rgb' | 'type';
+export type ModelCaptureRequest = { readonly kind: 'current'; readonly colorMode?: ModelCaptureColorMode } | { readonly kind: 'top-down'; readonly colorMode?: ModelCaptureColorMode } |
+  { readonly kind: 'camera'; readonly position: Vec3; readonly target: Vec3; readonly up?: Vec3; readonly colorMode?: ModelCaptureColorMode };
 export type ModelReferenceSelection = { readonly kind: 'toronto-point'; readonly key: { readonly sourceFileId: number; readonly sourceRow: number } } |
   { readonly kind: 'project-point'; readonly entityId: string; readonly pointIndex: number };
 export type ModelBrowserAction = { readonly kind: 'capture'; readonly request: ModelCaptureRequest } | { readonly kind: 'select-reference'; readonly reference: ModelReferenceSelection };
-export type ModelProposalAuthority = 'project' | 'points' | 'cad';
+export type ModelProposalAuthority = 'project' | 'points' | 'cad' | 'objects';
 export function canonicalModelCaptureRequest(value: unknown): ModelCaptureRequest {
   const r = protocolRecord(value);
-  if (r.kind === 'current' || r.kind === 'top-down') { protocolKeys(r, ['kind']); return { kind: r.kind }; }
-  protocolKeys(r, ['kind', 'position', 'target'], ['up']);
+  if (r.colorMode !== undefined && r.colorMode !== 'rgb' && r.colorMode !== 'type') throw new TypeError('Invalid capture color mode');
+  if (r.kind === 'current' || r.kind === 'top-down') {
+    protocolKeys(r, ['kind'], ['colorMode']);
+    return { kind: r.kind, ...(r.colorMode === undefined ? {} : { colorMode: r.colorMode }) };
+  }
+  protocolKeys(r, ['kind', 'position', 'target'], ['up', 'colorMode']);
   if (r.kind !== 'camera') throw new TypeError('Invalid camera kind');
   assertVec3(r.position); assertVec3(r.target); if (r.up !== undefined) assertVec3(r.up);
   if ([...r.position, ...r.target, ...(r.up as Vec3 | undefined ?? [])].some(n => Math.abs(n) > 1e7) ||
@@ -85,7 +92,7 @@ export type ModelChatEvent =
   | { readonly kind: 'approval-result'; readonly requestId: string; readonly proposalId: string; readonly authority: ModelProposalAuthority; readonly outcome: 'accepted' | 'declined' | 'invalidated'; readonly scene: ModelScene }
   | { readonly kind: 'start'; readonly requestId: string; readonly conversationId: string; readonly model: string }
   | { readonly kind: 'delta'; readonly requestId: string; readonly text: string }
-  | { readonly kind: 'tool'; readonly requestId: string; readonly name: 'inspect_scene' | 'capture_scene' | 'select_reference' | 'resolve_visual_pixel' | 'nearest_label' | 'propose_box_create' | 'propose_box_update' | 'propose_point_move' | 'propose_point_move_to_nearest_label' | 'propose_cad_box' | 'propose_cad_cylinder' | 'assess_utility_box' | 'propose_utility_box'; readonly context: unknown }
+  | { readonly kind: 'tool'; readonly requestId: string; readonly name: 'query_aoi_points' | 'list_objects' | 'get_object' | 'propose_point_create' | 'inspect_scene' | 'capture_scene' | 'select_reference' | 'resolve_visual_pixel' | 'nearest_label' | 'propose_box_create' | 'propose_box_update' | 'propose_point_move' | 'propose_point_move_to_nearest_label' | 'propose_cad_box' | 'propose_cad_cylinder' | 'assess_utility_box' | 'propose_utility_box'; readonly context: unknown }
   | { readonly kind: 'tool-request'; readonly requestId: string; readonly toolCallId: string; readonly nonce: string; readonly observationId: string; readonly x: number; readonly y: number }
   | { readonly kind: 'done'; readonly requestId: string; readonly conversationId: string }
   | { readonly kind: 'error'; readonly requestId: string; readonly code: string };
@@ -93,7 +100,7 @@ function boundedText(value: unknown, max: number): asserts value is string {
   if (typeof value !== 'string' || !value.length || value.length > max || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)) throw new TypeError('Invalid bounded text');
 }
 export function canonicalModelScene(value: unknown): ModelScene {
-  const r = protocolRecord(value); protocolKeys(r, ['mode', 'project', 'toronto'], ['areaOfInterest']);
+  const r = protocolRecord(value); protocolKeys(r, ['mode', 'project', 'toronto'], ['areaOfInterest', 'objects']);
   if (typeof r.mode !== 'string' || !['demo', 'toronto', 'pole'].includes(r.mode) || !Array.isArray(r.toronto) || r.toronto.length > SCENE_POINT_LIMIT) throw new TypeError('Invalid scene');
   const project = r.project === null ? null : canonicalSceneContextRequest(r.project);
   // Non-demo scenes may carry an empty authoritative revision binding, never hidden synthetic selections.
@@ -114,6 +121,12 @@ export function canonicalModelScene(value: unknown): ModelScene {
       frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] } as const;
   });
   if (new Set(toronto.map(p => p.name)).size !== toronto.length || new Set(toronto.map(p => p.artifactRevision)).size > 1) throw new TypeError('Conflicting Toronto selections');
+  let objects: AuthoredObjectReference[] | undefined;
+  if (r.objects !== undefined) {
+    if (r.mode !== 'toronto' || !Array.isArray(r.objects) || r.objects.length > SCENE_POINT_LIMIT) throw new TypeError('Invalid authored selections');
+    objects = r.objects.map(value => { const ref = canonicalSceneObjectReference(value); if (ref.kind !== 'authored-object') throw new TypeError('Expected authored reference'); return ref; });
+    if (new Set(objects.map(ref => ref.objectId)).size !== objects.length || new Set(objects.map(ref => `${ref.sessionId}:${ref.revision}`)).size > 1) throw new TypeError('Conflicting authored selections');
+  }
   let areaOfInterest: ModelAreaOfInterest | undefined;
   if (r.areaOfInterest !== undefined) {
     const a = protocolRecord(r.areaOfInterest);
@@ -132,7 +145,7 @@ export function canonicalModelScene(value: unknown): ModelScene {
     areaOfInterest = { datasetId: 'toronto3d', artifactRevision: a.artifactRevision, frameId: 'toronto3d-local-v1', units: 'm',
       localOrigin: [627285, 4841948, 0], corners: corners as unknown as ModelAreaOfInterest['corners'] };
   }
-  return { mode: r.mode as ModelScene['mode'], project, toronto, ...(areaOfInterest ? { areaOfInterest } : {}) };
+  return { mode: r.mode as ModelScene['mode'], project, toronto, ...(areaOfInterest ? { areaOfInterest } : {}), ...(objects ? { objects } : {}) };
 }
 export function canonicalModelTurnRequest(value: unknown): ModelTurnRequest {
   const r = protocolRecord(value); protocolKeys(r, ['requestId', 'conversationId', 'generation', 'model', 'text', 'scene'], ['visualObservation']);
@@ -173,11 +186,11 @@ export function canonicalModelChatEvent(value: unknown): ModelChatEvent {
       protocolToken(r.nonce); canonicalModelBrowserAction(r.action); break;
     case 'approval-wait': case 'approval-result':
       protocolKeys(r, ['kind', 'requestId', 'proposalId', 'authority', ...(r.kind === 'approval-result' ? ['outcome', 'scene'] : [])]);
-      protocolToken(r.proposalId); if (typeof r.authority !== 'string' || !['project', 'points', 'cad'].includes(r.authority)) throw new TypeError('Invalid authority');
+      protocolToken(r.proposalId); if (typeof r.authority !== 'string' || !['project', 'points', 'cad', 'objects'].includes(r.authority)) throw new TypeError('Invalid authority');
       if (r.kind === 'approval-result') { if (typeof r.outcome !== 'string' || !['accepted', 'declined', 'invalidated'].includes(r.outcome)) throw new TypeError('Invalid approval outcome'); canonicalModelScene(r.scene); } break;
     case 'start': protocolKeys(r, ['kind', 'requestId', 'conversationId', 'model']); protocolToken(r.conversationId); boundedText(r.model, 256); break;
     case 'delta': protocolKeys(r, ['kind', 'requestId', 'text']); boundedText(r.text, MODEL_CHAT_LIMITS.outputChars); break;
-    case 'tool': protocolKeys(r, ['kind', 'requestId', 'name', 'context']); if (typeof r.name !== 'string' || !['inspect_scene', 'capture_scene', 'select_reference', 'resolve_visual_pixel', 'nearest_label', 'propose_box_create', 'propose_box_update', 'propose_point_move', 'propose_point_move_to_nearest_label', 'propose_cad_box', 'propose_cad_cylinder', 'assess_utility_box', 'propose_utility_box'].includes(String(r.name)) || canonicalProtocolJson(r.context).length > MODEL_CHAT_LIMITS.frameBytes / 2) throw new TypeError('Invalid tool context'); break;
+    case 'tool': protocolKeys(r, ['kind', 'requestId', 'name', 'context']); if (typeof r.name !== 'string' || !['query_aoi_points', 'list_objects', 'get_object', 'propose_point_create', 'inspect_scene', 'capture_scene', 'select_reference', 'resolve_visual_pixel', 'nearest_label', 'propose_box_create', 'propose_box_update', 'propose_point_move', 'propose_point_move_to_nearest_label', 'propose_cad_box', 'propose_cad_cylinder', 'assess_utility_box', 'propose_utility_box'].includes(String(r.name)) || canonicalProtocolJson(r.context).length > MODEL_CHAT_LIMITS.frameBytes / 2) throw new TypeError('Invalid tool context'); break;
     case 'tool-request': protocolKeys(r, ['kind', 'requestId', 'toolCallId', 'nonce', 'observationId', 'x', 'y']);
       if (typeof r.toolCallId !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/u.test(r.toolCallId)) throw new TypeError('Invalid tool call ID');
       protocolToken(r.nonce); protocolToken(r.observationId); protocolInteger(r.x, 4095); protocolInteger(r.y, 4095); break;

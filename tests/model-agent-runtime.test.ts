@@ -110,8 +110,8 @@ test('current/top-down/arbitrary screenshots, then model-selected reference, flo
   const f = await fixture(t, (body, round) => {
     if (round > 1 && round <= 4) {
       const imageInputs = body.input.filter((i: any) => Array.isArray(i.content)).flatMap((i: any) => i.content).filter((i: any) => i.type === 'input_image');
-      assert.equal(imageInputs.length, 1);
-      assert.equal(imageInputs[0].image_url, visual().image.dataUrl);
+      assert.equal(imageInputs.length, round - 1); // Every earlier capture remains historical input.
+      for (const image of imageInputs) assert.equal(image.image_url, visual().image.dataUrl);
     }
     if (round <= 3) return [tool('capture_scene', captures[round - 1], round)];
     if (round === 4) return [tool('select_reference', { kind: 'project-point', entityId: f.authority.snapshot().project.entities.find(e => e.kind === 'point-cloud')!.id, pointIndex: 0 }, round)];
@@ -140,7 +140,7 @@ test('initial image proposal is visible and human-acceptable before EOF', async 
     onauthorityrefresh: async () => ({ ...f.scene, project: { ...f.scene.project!, ...f.authority.binding() } }),
   });
   controller.bind(f.scene); await controller.refreshModels(); await controller.send('Inspect this screenshot, propose and wait.', image);
-  assert.ok(proposed); assert.equal(controller.view.phase, 'completed'); assert.equal(controller.view.continuationActive, false); controller.dispose();
+  assert.ok(proposed); assert.equal(controller.view.phase, 'completed'); assert.equal(controller.view.continuationActive, true); controller.dispose();
 });
 
 test('agent-selected reference bind does not cancel its own streaming controller', async t => {

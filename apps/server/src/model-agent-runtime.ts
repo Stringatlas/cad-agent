@@ -1,6 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { canonicalModelScene, canonicalProtocolJson, type ModelScene, type ModelReferenceSelection, type ModelProposalAuthority,
   type ModelTurnRequest, type ModelVisualObservation, type PointOverrideSnapshot, type TorontoCadSnapshot } from '@spatial/contracts';
+import type { SceneObjectSnapshot } from '../../../packages/contracts/src/scene-objects';
 import { bindModelScene, type ModelEditingAuthorities } from './model-scene';
 import { ModelError, type BoundModelScene } from './provider-model';
 import { ProjectSession } from './project-session';
@@ -30,11 +31,12 @@ export function createModelAgentRuntime(call: ModelTurnRequest, initial: BoundMo
     const old = current; current = bound; scene = next; await old.close();
   };
   const approval = async (kind: ModelProposalAuthority, proposalId: string): Promise<ApprovalObservation> => {
-    const baseline = current.context as { torontoEditing?: { points: Pick<PointOverrideSnapshot, 'sessionId' | 'revision' | 'artifactRevision'>; cad: Pick<TorontoCadSnapshot, 'sessionId' | 'revision' | 'artifactRevision'> } };
+    const baseline = current.context as { torontoEditing?: { points: Pick<PointOverrideSnapshot, 'sessionId' | 'revision' | 'artifactRevision'>; cad: Pick<TorontoCadSnapshot, 'sessionId' | 'revision' | 'artifactRevision'>; objects?: Pick<SceneObjectSnapshot, 'sessionId' | 'revision' | 'artifactRevision'> } };
     const projectBefore = scene.project ?? authority.binding();
     const pointBefore = baseline.torontoEditing?.points;
     const cadBefore = baseline.torontoEditing?.cad;
-    const owner = kind === 'project' ? authority : kind === 'points' ? editing?.points : editing?.cad;
+    const objectBefore = baseline.torontoEditing?.objects;
+    const owner = kind === 'project' ? authority : kind === 'points' ? editing?.points : kind === 'objects' ? editing?.objects : editing?.cad;
     if (!owner) throw new ModelError('invalid-scene');
     // The authority owns these receipts; a client cannot forge or inject them via chat callbacks.
     const decisionOwner = owner as typeof owner & { proposalDecision(id: string): 'accepted' | 'declined' | undefined };
@@ -46,18 +48,21 @@ export function createModelAgentRuntime(call: ModelTurnRequest, initial: BoundMo
         const project = authority.binding();
         const points = editing && await retryModelSceneRead(() => editing.points.execute('snapshot', undefined, signal), signal) as PointOverrideSnapshot | undefined;
         const cad = editing && await retryModelSceneRead(() => editing.cad.execute('snapshot', undefined, signal), signal) as TorontoCadSnapshot | undefined;
+        const objects = editing?.objects && await retryModelSceneRead(() => editing.objects!.execute('snapshot', undefined, signal), signal) as SceneObjectSnapshot | undefined;
         const increment = (target: ModelProposalAuthority) => decision === 'accepted' && kind === target ? 1 : 0;
-        const verify = (project: ReturnType<ProjectSession['binding']>, points: typeof pointBefore, cad: typeof cadBefore) => {
+        const verify = (project: ReturnType<ProjectSession['binding']>, points: typeof pointBefore, cad: typeof cadBefore, objects: typeof objectBefore) => {
           if (project.sessionId !== projectBefore.sessionId || project.projectRevision !== projectBefore.projectRevision + increment('project') ||
             pointBefore && (!points || points.sessionId !== pointBefore.sessionId || points.artifactRevision !== pointBefore.artifactRevision || points.revision !== pointBefore.revision + increment('points')) ||
-            cadBefore && (!cad || cad.sessionId !== cadBefore.sessionId || cad.artifactRevision !== cadBefore.artifactRevision || cad.revision !== cadBefore.revision + increment('cad'))) throw new ModelError('stale-scene');
+            cadBefore && (!cad || cad.sessionId !== cadBefore.sessionId || cad.artifactRevision !== cadBefore.artifactRevision || cad.revision !== cadBefore.revision + increment('cad')) ||
+            objectBefore && (!objects || objects.sessionId !== objectBefore.sessionId || objects.artifactRevision !== objectBefore.artifactRevision || objects.revision !== objectBefore.revision + increment('objects')))  throw new ModelError('stale-scene');
         };
-        verify(project, points, cad);
-        const next = canonicalModelScene({ ...scene, project: scene.project ? { ...scene.project, ...project } : null });
+        verify(project, points, cad, objects);
+        const next = canonicalModelScene({ ...scene, project: scene.project ? { ...scene.project, ...project } : null,
+          ...(scene.objects ? { objects: scene.objects.map(ref => ({ ...ref, revision: objects?.revision ?? ref.revision })) } : {}) });
         await rebind(next);
         // A contended rebind must not silently adopt another edit after the receipt check.
         const rebound = current.context as typeof baseline;
-        verify(authority.binding(), rebound.torontoEditing?.points, rebound.torontoEditing?.cad);
+        verify(authority.binding(), rebound.torontoEditing?.points, rebound.torontoEditing?.cad, rebound.torontoEditing?.objects);
         return { outcome: decision, scene, context: current.context };
       }
       try { await current.check(); }
