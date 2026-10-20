@@ -27,6 +27,16 @@ export class TorontoCadSession {
     if (this.decisions.size > 256) this.decisions.delete(this.decisions.keys().next().value!);
   }
   constructor(private readonly directory: string) {}
+  /** Composition-only synchronous barrier, after async native/source validation; no I/O. */
+  assertOriginalBinding(expected: { sessionId: string; revision: number; artifactRevision: string }, rejectPending = false): void {
+    this.ready();
+    if (!this.artifact) throw new TorontoCadError('unavailable');
+    if (this.active) throw new TorontoCadError('busy');
+    if (rejectPending && this.proposals.size) throw new TorontoCadError('stale-revision');
+    if (expected.sessionId !== this.sessionId) throw new TorontoCadError('stale-session');
+    if (expected.revision !== this.revision || this.bodies.size) throw new TorontoCadError('stale-revision');
+    if (expected.artifactRevision !== this.artifact.dataset.revision) throw new TorontoCadError('stale-artifact');
+  }
   private ready(signal?: AbortSignal) { signal?.throwIfAborted(); if (this.closed || this.invalid) throw new TorontoCadError('unavailable'); }
   private binding() { return { sessionId: this.sessionId, revision: this.revision, artifactRevision: this.artifact!.dataset.revision, datasetId: 'toronto3d' as const, frameId: 'toronto3d-local-v1' as const, units: 'm' as const }; }
   private snapshot(): TorontoCadSnapshot { return copy({ ...this.binding(), bodies: [...this.bodies.values()], proposals: [...this.proposals.values()], nextUndoTransactionId: this.history.at(-1)?.transactionId ?? null }); }

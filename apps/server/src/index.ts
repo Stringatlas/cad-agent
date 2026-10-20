@@ -16,6 +16,8 @@ import { TorontoCadSession } from './toronto-cad-session';
 import { createTorontoCadRoutes } from './toronto-cad-routes';
 import { SceneObjectSession } from './scene-object-session';
 import { createSceneObjectRoutes } from './scene-object-routes';
+import { PlacementSearchSession } from './placement-search-session';
+import { createPlacementSearchRoutes } from './placement-search-routes';
 
 /** One single-user authority. View selections are disposable; CAD remains a separate sandbox. */
 export function createDemoServer(options: { datasetRoot?: string; projectPath?: string; provider?: ProviderAuthOptions; modelTransport?: ModelTransport } = {}): Server {
@@ -27,9 +29,11 @@ export function createDemoServer(options: { datasetRoot?: string; projectPath?: 
   const directory = options.datasetRoot ?? DEFAULT_DATASET_ROOT;
   const points = new PointOverrideSession(directory);
   const cad = new TorontoCadSession(directory);
+  const placement = new PlacementSearchSession(directory, points, cad);
+  const placementRoutes = createPlacementSearchRoutes(placement);
   const objects = new SceneObjectSession(directory, points);
   const objectRoutes = createSceneObjectRoutes(directory, points, objects);
-  const modelRoutes = createModelChatRoutes(auth, authority, directory, options.modelTransport, { points, cad, objects });
+  const modelRoutes = createModelChatRoutes(auth, authority, directory, options.modelTransport, { points, cad, objects, placement });
   const datasetRoutes = createDatasetRoutes(options.datasetRoot);
   const pointOverrideRoutes = createPointOverrideRoutes(directory, points);
   const torontoCadRoutes = createTorontoCadRoutes(directory, cad);
@@ -59,6 +63,7 @@ export function createDemoServer(options: { datasetRoot?: string; projectPath?: 
       if (await pointOverrideRoutes.handle(request, response)) return;
       if (await torontoCadRoutes.handle(request, response)) return;
       if (await objectRoutes.handle(request, response)) return;
+      if (await placementRoutes.handle(request, response)) return;
       if (await datasetRoutes(request, response)) return;
       if (request.method === 'GET' && pathname === '/health') {
         response.end(JSON.stringify({ status: 'ok' }));
@@ -79,7 +84,12 @@ export function createDemoServer(options: { datasetRoot?: string; projectPath?: 
   });
   // Abort streaming requests when shutdown STARTS, not only after all sockets drain.
   const close = server.close.bind(server);
-  server.close = (...args: Parameters<Server['close']>) => { modelRoutes.close(); void pointOverrideRoutes.close(); void torontoCadRoutes.close(); void objectRoutes.close(); return close(...args); };
+  server.close = (...args: Parameters<Server['close']>) => {
+    // Abort/drain placement before closing the point and CAD authorities it uses.
+    const placementClosed = placementRoutes.close(); modelRoutes.close();
+    void placementClosed.then(() => { void pointOverrideRoutes.close(); void torontoCadRoutes.close(); void objectRoutes.close(); });
+    return close(...args);
+  };
   server.once('close', () => { modelRoutes.close(); auth.close(); void cadRoutes.close(); });
   return server;
 }

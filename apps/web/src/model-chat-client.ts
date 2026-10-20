@@ -59,7 +59,8 @@ export function validateModelEvent(value: unknown, request: ModelTurnRequest): M
   if (r.kind === 'delta' && (typeof r.text !== 'string' || !r.text.length || r.text.length > MODEL_CLIENT_LIMITS.outputChars)) throw new Error('Invalid text delta');
   if (r.kind === 'tool') {
     if (!['inspect_scene', 'capture_scene', 'select_reference'].includes(String(r.name)) &&
-      !(r.name === 'query_aoi_points' && request.scene.mode === 'toronto' && request.scene.areaOfInterest) && !(r.name === 'resolve_visual_pixel' && request.visualObservation) &&
+      !(['query_aoi_points', 'search_placement_sites', 'scan_area_candidates', 'finalize_area_candidates'].includes(String(r.name)) && request.scene.mode === 'toronto' && request.scene.areaOfInterest) &&
+      !(r.name === 'propose_placement_site' && request.scene.mode === 'toronto') && !(r.name === 'resolve_visual_pixel' && request.visualObservation) &&
       !(['nearest_label', 'assess_utility_box', 'propose_utility_box'].includes(String(r.name)) && request.scene.mode === 'toronto' && request.scene.toronto.length > 0) &&
       !(['list_objects', 'get_object', 'propose_point_create', 'propose_point_move', 'propose_point_move_to_nearest_label', 'propose_cad_box', 'propose_cad_cylinder'].includes(String(r.name)) && request.scene.mode === 'toronto' && (!String(r.name).startsWith('propose_point_move') || request.scene.toronto.length > 0)) &&
       !((r.name === 'propose_box_create' || r.name === 'propose_box_update') && request.scene.mode === 'demo' && request.scene.project)) throw new Error('Unsupported tool');
@@ -120,6 +121,9 @@ export async function fetchModelCatalog(signal: AbortSignal, fetcher: typeof fet
   return validateModelCatalog(JSON.parse(text));
 }
 export interface ModelAgentCallbacks {
+  /** Current shared-session shortlist; validate before rendering. Never re-search to display it. */
+  onplacementsearch?: (result: unknown, isCurrent: () => boolean) => void | Promise<void>;
+  onareacandidates?: (result: unknown, isCurrent: () => boolean) => void | Promise<void>;
   oncapture?: (request: ModelCaptureRequest, isCurrent: () => boolean) => Promise<VisualModelAttachment>;
   onselectreference?: (reference: ModelReferenceSelection, isCurrent: () => boolean) => Promise<ModelScene>;
   onapprovalwait?: (waiting: boolean) => void;
@@ -419,7 +423,7 @@ export class ModelChatController {
     try {
       const catalog = await fetchModelCatalog(controller.signal, this.fetcher);
       if (this.disposed || sequence !== this.catalogSequence) return;
-      const model = catalog.ready ? (catalog.models.some(m => m.id === this.view.model) ? this.view.model : catalog.models[0]?.id ?? '') : '';
+      const model = catalog.ready ? (catalog.models.some(m => m.id === this.view.model) ? this.view.model : catalog.models.find(m => m.id === 'gpt-6-luna')?.id ?? catalog.models[0]?.id ?? '') : '';
       if (previous && (previous.generation !== catalog.generation || previous.mode !== catalog.mode || !catalog.ready || model !== this.view.model)) {
         this.contextReset('Account or available model changed');
       }
@@ -488,7 +492,19 @@ export class ModelChatController {
         if (event.kind === 'tool' && request.scene.mode === 'toronto') {
           if (event.name === 'propose_point_create' && protocolRecord(event.context).kind === 'scene-object-proposal') this.proposalEvents.onauthorityproposal?.('objects');
           if (event.name === 'propose_point_move' || (event.name === 'propose_point_move_to_nearest_label' && protocolRecord(event.context).status === 'pending')) this.proposalEvents.onauthorityproposal?.('points');
-          if (event.name === 'propose_cad_box' || event.name === 'propose_cad_cylinder' || event.name === 'propose_utility_box') this.proposalEvents.onauthorityproposal?.('cad');
+          if (event.name === 'propose_cad_box' || event.name === 'propose_cad_cylinder' || event.name === 'propose_utility_box' || event.name === 'propose_placement_site') this.proposalEvents.onauthorityproposal?.('cad');
+          if (event.name === 'scan_area_candidates' || event.name === 'finalize_area_candidates') {
+            const context = protocolRecord(event.context); protocolKeys(context, ['kind', 'result'], ['candidateAssessmentCapture']);
+            if (context.kind !== 'area-candidate-result' || !this.proposalEvents.onareacandidates) throw new ModelTurnFailure('invalid-or-unavailable-stream');
+            await abortable(Promise.resolve(this.proposalEvents.onareacandidates(context.result, () => current() && !controller.signal.aborted)), controller.signal);
+            if (!current()) throw new ModelTurnFailure('scene-changed');
+          }
+          if (event.name === 'search_placement_sites') {
+            const context = protocolRecord(event.context); protocolKeys(context, ['kind', 'result']);
+            if (context.kind !== 'placement-search-result') throw new ModelTurnFailure('invalid-or-unavailable-stream');
+            await abortable(Promise.resolve(this.proposalEvents.onplacementsearch?.(context.result, () => current() && !controller.signal.aborted)), controller.signal);
+            if (!current()) throw new ModelTurnFailure('scene-changed');
+          }
         }
         if (event.kind === 'tool' && (event.name === 'propose_box_create' || event.name === 'propose_box_update') && request.scene.mode === 'demo') {
           const context = protocolRecord(event.context);

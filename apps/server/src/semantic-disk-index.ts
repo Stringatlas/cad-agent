@@ -1,5 +1,5 @@
 import { constants, type Stats } from 'node:fs';
-import { lstat, mkdir, mkdtemp, open, realpath, rename, rm, type FileHandle } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, open, opendir, realpath, rename, rm, type FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -76,6 +76,10 @@ async function writeAll(file: FileHandle, bytes: Buffer) {
   while (at < bytes.length) { const { bytesWritten } = await file.write(bytes, at, bytes.length - at); requireData(bytesWritten > 0, 'Incomplete cache write'); at += bytesWritten; }
 }
 
+class IncompleteSemanticCache extends SemanticFailure {
+  constructor() { super('corrupt-data', 'Incomplete semantic cache'); }
+}
+
 /** A manifest-only cache. Record and lookup buffers are always bounded, request-owned reads. */
 export class SemanticDiskIndex {
   readonly directory: string; readonly hash: string; readonly totalPoints: number; readonly counts: readonly number[];
@@ -90,9 +94,11 @@ export class SemanticDiskIndex {
     let stat: Stats;
     try { stat = await lstat(join(directory, 'index.json')); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      // Only a missing directory is a cache miss; an incomplete published cache is corruption.
-      try { await lstat(directory); } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return; throw e; }
-      throw new SemanticFailure('corrupt-data', 'Incomplete semantic cache');
+      // Recovery is explicit in locateCache, never an implicit acceptance of partial data.
+      let directoryStat: Stats;
+      try { directoryStat = await lstat(directory); } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return; throw e; }
+      requireData(directoryStat.isDirectory() && !directoryStat.isSymbolicLink() && await realpath(directory) === directory, 'Symlinked semantic cache directory');
+      throw new IncompleteSemanticCache();
     } throw error; }
     requireData(await realpath(directory) === directory && (await lstat(directory)).isDirectory(), 'Symlinked semantic cache directory');
     requireData(stat.size > 0 && stat.size <= HEADER_BYTES, 'Invalid semantic manifest size');
@@ -302,6 +308,45 @@ async function build(directory: string, identity: string, snapshot: SemanticArti
     signal?.throwIfAborted();
   } finally { await rm(staging, { recursive: true, force: true }); }
 }
+/** Preserve incomplete publications in place. Never rename/delete a directory another reader may own.
+ * Cooperating processes pick the same bounded generation and use build's atomic publication race.
+ * A manifest that exists but fails validation is still corruption, not a recoverable cache miss. */
+async function locateCache(base: string, identity: string, snapshot: SemanticArtifact, signal?: AbortSignal): Promise<{ directory: string; index: SemanticDiskIndex | undefined }> {
+  requireData(validHash(identity), 'Invalid semantic cache identity');
+  const names = new Set(['records.bin', 'pages.bin', 'source-1.bin', 'source-2.bin', 'source-3.bin', 'source-4.bin']);
+  let available: string | undefined;
+  for (let generation = 0; generation < 8; generation++) {
+    signal?.throwIfAborted();
+    const directory = join(base, generation === 0 ? identity : `${identity}-recovery-${generation}`);
+    try {
+      const index = await SemanticDiskIndex.load(directory, identity, snapshot, signal);
+      if (index) return { directory, index };
+      // Temp cleanup may remove an earlier generation while a valid recovery survives.
+      // Discover existing publications before selecting the first absent build slot.
+      available ??= directory;
+    }
+    catch (error) {
+      if (!(error instanceof IncompleteSemanticCache)) throw error;
+      // Only expected regular disposable files qualify. Inspect incrementally (bounded entries),
+      // reject symlinks/unknown files/locks, and leave every existing byte untouched.
+      const before = await lstat(directory);
+      requireData(before.isDirectory() && await realpath(directory) === directory, 'Unsafe semantic cache recovery directory');
+      const entries = await opendir(directory); let hasManifest = false;
+      for await (const entry of entries) {
+        signal?.throwIfAborted();
+        if (entry.name === 'index.json') { hasManifest = true; continue; }
+        requireData(names.has(entry.name), 'Unexpected file in incomplete semantic cache; recovery refused');
+        const path = join(directory, entry.name), stat = await lstat(path);
+        requireData(stat.isFile() && !stat.isSymbolicLink() && await realpath(path) === path, 'Unsafe incomplete semantic cache file');
+      }
+      // A competing atomic publication may have completed since load's missing-manifest check.
+      if (hasManifest) return { directory, index: await SemanticDiskIndex.load(directory, identity, snapshot, signal) };
+      requireData(sameStat(before, await lstat(directory)) && await realpath(directory) === directory, 'Incomplete semantic cache changed during recovery');
+    }
+  }
+  if (available) return { directory: available, index: undefined };
+  throw new SemanticFailure('corrupt-data', 'Semantic cache recovery generations exhausted; operator inspection required');
+}
 let cached: SemanticDiskIndex | undefined;
 let gate: Promise<void> = Promise.resolve();
 export function dropSemanticDiskIndexMemoryCache() { cached = undefined; }
@@ -311,7 +356,7 @@ export async function loadPreparedSemanticDiskIndex(snapshot: SemanticArtifact, 
   requireData(Object.entries(TORONTO_SEMANTIC_LABELS).every(([label, name]) => manifest.semantic_classes?.[label] === name), 'Unsupported semantic schema');
   const identity = await binding(snapshot, signal);
   const resident = cached;
-  const index = resident?.identity === identity ? resident : await SemanticDiskIndex.load(join(await cacheBase(), identity), identity, snapshot, signal);
+  const index = resident?.identity === identity ? resident : (await locateCache(await cacheBase(), identity, snapshot, signal)).index;
   if (index) { await index.check(signal); await snapshot.check(signal); }
   return index;
 }
@@ -327,11 +372,12 @@ export async function getSemanticDiskIndex(snapshot: SemanticArtifact, signal?: 
     if (signal) await Promise.race([previous, new Promise<never>((_resolve, reject) => {
       onAbort = () => reject(signal.reason); signal.addEventListener('abort', onAbort, { once: true }); if (signal.aborted) onAbort();
     })]); else await previous;
-    signal?.throwIfAborted(); const identity = await binding(snapshot, signal), directory = join(await cacheBase(), identity);
+    signal?.throwIfAborted(); const identity = await binding(snapshot, signal), base = await cacheBase();
     if (cached?.identity === identity) { await cached.check(signal); await snapshot.check(signal); return { index: cached, cache: 'memory' }; }
     // One resident manifest only, including during another snapshot's load/build.
     cached = undefined;
-    let index = await SemanticDiskIndex.load(directory, identity, snapshot, signal), cache: 'loaded' | 'built' = 'loaded';
+    const located = await locateCache(base, identity, snapshot, signal), directory = located.directory;
+    let index = located.index, cache: 'loaded' | 'built' = 'loaded';
     if (!index) { await build(directory, identity, snapshot, signal, progress); cache = 'built'; index = await SemanticDiskIndex.load(directory, identity, snapshot, signal); }
     requireData(index, 'Semantic cache publication missing'); await snapshot.check(signal); await index.check(signal); cached = index;
     return { index, cache };

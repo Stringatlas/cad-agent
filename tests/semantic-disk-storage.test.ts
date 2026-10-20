@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, mkdir, writeFile, rm, readFile, open, readdir, rename, symlink } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdtemp, mkdir, writeFile, rm, readFile, open, readdir, rename, symlink, lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { TORONTO_SEMANTIC_LABELS } from '@spatial/contracts';
 import { SemanticArtifact, digest, SEMANTIC_LIMITS } from '../apps/server/src/semantic-artifact';
-import { getSemanticDiskIndex, dropSemanticDiskIndexMemoryCache, recordBytes, pagePoints, cacheRoot,
+import { getSemanticDiskIndex, loadPreparedSemanticDiskIndex, dropSemanticDiskIndexMemoryCache, recordBytes, pagePoints, cacheRoot,
   semanticDiskMemoryBudget, type SemanticDiskIndex } from '../apps/server/src/semantic-disk-index';
 
 type Point = { xyz: [number, number, number]; file: number; row: number; label: number };
@@ -205,4 +206,143 @@ test('source revision replacement aborts active snapshot and new revision gets d
     assert.notEqual(first.index.hash, second.index.hash); assert.notEqual(first.index.directory, second.index.directory);
     assert.equal(second.index.sourceHash, digest(f.payload));
   } finally { await f.clean(); }
+});
+
+test('missing manifest reproduces incomplete cache; preparation recovers without deleting original bytes', async () => {
+  for (const mode of ['empty', 'source-only', 'missing-manifest']) {
+    const f = await fixture();
+    try {
+      const s = await f.snapshot(), original = (await f.index(s)).index;
+      dropSemanticDiskIndexMemoryCache();
+      for (const name of await readdir(original.directory)) {
+        if (name === 'index.json' || mode === 'empty' || (mode === 'source-only' && name !== 'source-1.bin')) await rm(join(original.directory, name));
+      }
+      const names = await readdir(original.directory), before = await Promise.all(names.map(name => readFile(join(original.directory, name))));
+      const reads = s.sourceReads.payloadBytes;
+      assert.equal(await loadPreparedSemanticDiskIndex(s), undefined, 'selection-only lookup never scans/rebuilds');
+      assert.equal(s.sourceReads.payloadBytes, reads);
+      const recovered = await f.index(s);
+      assert.equal(recovered.cache, 'built'); assert.equal(recovered.index.hash, original.hash);
+      assert.equal(recovered.index.directory, original.directory + '-recovery-1');
+      assert.equal(s.sourceReads.payloadBytes, reads + f.payload.length, 'recovery validates the whole source');
+      assert.deepEqual(await readdir(original.directory), names);
+      assert.deepEqual(await Promise.all(names.map(name => readFile(join(original.directory, name)))), before);
+      dropSemanticDiskIndexMemoryCache();
+      assert.equal((await loadPreparedSemanticDiskIndex(s))?.directory, recovered.index.directory);
+      const warm = await f.index(s); assert.equal(warm.cache, 'loaded');
+      assert.deepEqual(await warm.index.readPage(warm.index.pages[0]), await recovered.index.readPage(recovered.index.pages[0]));
+    } finally { await f.clean(); }
+  }
+});
+
+test('missing earlier generations do not hide a valid recovered publication or rebuild source', async () => {
+  for (const generation of [1, 3]) {
+    const f = await fixture();
+    let recoveredDirectory: string | undefined;
+    try {
+      const s = await f.snapshot(), original = (await f.index(s)).index;
+      recoveredDirectory = `${original.directory}-recovery-${generation}`;
+      await rename(original.directory, recoveredDirectory);
+      dropSemanticDiskIndexMemoryCache();
+      const reads = s.sourceReads.payloadBytes;
+      const selected = await loadPreparedSemanticDiskIndex(s);
+      assert.equal(selected?.directory, recoveredDirectory);
+      const prepared = await f.index(s);
+      assert.equal(prepared.cache, 'loaded');
+      assert.equal(prepared.index.directory, recoveredDirectory);
+      assert.equal(s.sourceReads.payloadBytes, reads, 'surviving recovery avoids a whole-source rebuild');
+      assert.deepEqual(await prepared.index.readPage(prepared.index.pages[0]), await selected!.readPage(selected!.pages[0]));
+    } finally {
+      await f.clean();
+      if (recoveredDirectory) await rm(recoveredDirectory, { recursive: true, force: true });
+    }
+  }
+});
+
+test('concurrent preparation and selection lookup preserve incomplete cache; cancelled waiter cannot poison recovery', async () => {
+  const f = await fixture(pagePoints * 3);
+  try {
+    const s = await f.snapshot(), original = (await f.index(s)).index;
+    await rm(join(original.directory, 'index.json')); dropSemanticDiskIndexMemoryCache();
+    const a = await f.snapshot(), b = await f.snapshot(), c = await f.snapshot(), cancelled = new AbortController();
+    let lookup: Promise<SemanticDiskIndex | undefined> | undefined;
+    const first = getSemanticDiskIndex(a, undefined, () => {
+      cancelled.abort(); lookup ??= loadPreparedSemanticDiskIndex(c);
+    });
+    const waiter = getSemanticDiskIndex(b, cancelled.signal), second = f.index(c);
+    const [one, rejected, two] = await Promise.allSettled([first, waiter, second]);
+    assert.equal(one.status, 'fulfilled'); assert.equal(rejected.status, 'rejected'); assert.equal(two.status, 'fulfilled');
+    const built = await f.index(a); assert.equal(built.index.directory, original.directory + '-recovery-1');
+    assert.equal(b.sourceReads.payloadBytes, 0); assert.equal(c.sourceReads.payloadBytes, 0);
+    assert.equal(await lookup, undefined, 'private staging is never visible to selection');
+    assert.equal((await readdir(original.directory)).length, 6);
+  } finally { await f.clean(); }
+});
+
+test('recovery never bypasses symlinks, unknown files, nested directories or lock markers', async () => {
+  for (const mode of ['directory-symlink', 'file-symlink', 'unknown', 'nested', 'lock']) {
+    const f = await fixture(); let moved: string | undefined;
+    try {
+      const s = await f.snapshot(), original = (await f.index(s)).index;
+      await rm(join(original.directory, 'index.json')); dropSemanticDiskIndexMemoryCache();
+      if (mode === 'directory-symlink') { moved = original.directory + '.held'; await rename(original.directory, moved); await symlink(moved, original.directory); }
+      if (mode === 'file-symlink') { await rm(join(original.directory, 'source-1.bin')); await symlink(join(f.root, 'manifest.json'), join(original.directory, 'source-1.bin')); }
+      if (mode === 'unknown' || mode === 'lock') await writeFile(join(original.directory, mode === 'lock' ? '.lock' : 'operator-data'), 'preserve');
+      if (mode === 'nested') await mkdir(join(original.directory, 'records-extra'));
+      const source = await readFile(join(f.root, 'manifest.json'));
+      await assert.rejects(f.index(s), corrupt, mode);
+      await assert.rejects(loadPreparedSemanticDiskIndex(s), corrupt, mode);
+      assert.deepEqual(await readFile(join(f.root, 'manifest.json')), source);
+      await assert.rejects(lstat(original.directory + '-recovery-1'), { code: 'ENOENT' });
+    } finally { await f.clean(); if (moved) await rm(moved, { recursive: true, force: true }); }
+  }
+});
+
+test('cancelled recovery leaves no partial publication and retry succeeds', async () => {
+  const f = await fixture(pagePoints * 2);
+  try {
+    const s = await f.snapshot(), original = (await f.index(s)).index;
+    await rm(join(original.directory, 'index.json')); dropSemanticDiskIndexMemoryCache();
+    const controller = new AbortController();
+    await assert.rejects(getSemanticDiskIndex(s, controller.signal, () => controller.abort()), { name: 'AbortError' });
+    await assert.rejects(lstat(original.directory + '-recovery-1'), { code: 'ENOENT' });
+    const recovered = await f.index(s); assert.equal(recovered.cache, 'built');
+  } finally { await f.clean(); }
+});
+
+test('cross-process recovery publication race reuses winner without replacing its files', async () => {
+  const f = await fixture();
+  try {
+    const s = await f.snapshot(), original = (await f.index(s)).index;
+    await rm(join(original.directory, 'index.json')); dropSemanticDiskIndexMemoryCache();
+    const before = await lstat(original.directory); let winner: { directory: string; inode: number } | undefined;
+    const result = await getSemanticDiskIndex(s, undefined, () => {
+      if (winner) return;
+      const script = `import {SemanticArtifact} from './apps/server/src/semantic-artifact.ts';
+        import {getSemanticDiskIndex} from './apps/server/src/semantic-disk-index.ts';
+        import {lstat} from 'node:fs/promises'; import {join} from 'node:path';
+        const s=await SemanticArtifact.open(process.argv[1]);
+        try { const {index}=await getSemanticDiskIndex(s); console.log(JSON.stringify({directory:index.directory,inode:(await lstat(join(index.directory,'records.bin'))).ino})); }
+        finally {await s.close();}`;
+      winner = JSON.parse(execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script, f.root], { encoding: 'utf8', timeout: 30000 }));
+    });
+    const tracked = await f.index(s);
+    assert.equal(result.index.directory, winner!.directory); assert.equal(tracked.index.directory, winner!.directory);
+    assert.equal((await lstat(join(result.index.directory, 'records.bin'))).ino, winner!.inode, 'losing builder did not overwrite published winner');
+    assert.equal((await lstat(original.directory)).ino, before.ino, 'original incomplete directory is untouched');
+    assert.equal((await readdir(original.directory)).length, 6);
+  } finally { await f.clean(); }
+});
+
+test('recovery is bounded and refuses to silently discard eight incomplete generations', async () => {
+  const f = await fixture(); const extra: string[] = [];
+  try {
+    const s = await f.snapshot(), original = (await f.index(s)).index;
+    await rm(join(original.directory, 'index.json')); dropSemanticDiskIndexMemoryCache();
+    for (let n = 1; n < 8; n++) { const directory = original.directory + `-recovery-${n}`; extra.push(directory); await mkdir(directory); }
+    const reads = s.sourceReads.payloadBytes;
+    await assert.rejects(f.index(s), /recovery generations exhausted/);
+    assert.equal(s.sourceReads.payloadBytes, reads);
+    for (const directory of extra) assert.deepEqual(await readdir(directory), []);
+  } finally { await f.clean(); await Promise.all(extra.map(path => rm(path, { recursive: true, force: true }))); }
 });

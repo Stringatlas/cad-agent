@@ -29,6 +29,12 @@ Libraries are allowed when useful. Keep implementation YAGNI: task037 starts clu
 | Exact approval and checked edits | Synthetic box parameters [task015](tasks/015-approved-box-edits.md), verified Toronto point overrides [task031](tasks/031-verified-point-overrides.md), synthetic ghosts [task033](tasks/033-ai-ghost-proposals.md), Toronto-native point/CAD proposals [task034](tasks/034-toronto-cad-workspace.md). Latest point-move UX and small fixes: [task035](tasks/035-chat-point-move-review.md), [task036](tasks/036-small-workspace-fixes.md). |
 | Concrete CAD and postconditions | Real OpenCascade sandbox [task013](tasks/013-cad-engine.md); Toronto-native box/cylinder workflow [task034](tasks/034-toronto-cad-workspace.md). Channels, broader modification/booleans in the workspace, durable CAD bodies and approval-gated use of fitted estimates remain separately scoped. |
 
+## Scan-grounded placement search — ordered checklist
+
+[Persistent vision, rationale and feature checklist](plans/2026-10-19-scan-grounded-placement-search.md): turn a selected street AOI and design intent into five ranked, numbered, evidence-backed placement previews; let the human compare, choose and approve one exact CAD proposal. This closes the gap between inspecting scan points and making a spatial design decision, without model-owned measurements or automatic edits.
+
+Start with **item 1: typed placement specification**. Search, ranking, scene shortlist, annotated visual assessment, product-agent workflow, ground/effective-scene support and benchmarks remain individually tracked in that checklist. Implementation is not review approval.
+
 ## Next checkpoint
 
 Fresh-session review remains pending for task037 and [task038](tasks/038-street-testing-preprocessing.md), including their actual untracked additions. Do not equate membership validation with object-separation quality or implementation with review approval. Next assess the visible street chunk with the operator: tune instance separation/fit quality, ground support/outliers and page-query latency before adding model tools or approval-gated fitted CAD proposals. Initial full-resolution view and eye-toggle browser evidence belong to task038.

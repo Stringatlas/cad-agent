@@ -2,6 +2,8 @@ import { canonicalBoxProposalRequest, canonicalPoleRequest, canonicalPointMovePr
   type TorontoCadSnapshot, type TorontoCadProposal, type ModelScene, type ModelVisualObservation, type Vec3 } from '@spatial/contracts';
 import { canonicalSceneObjectProposalRequest, type SceneObjectSnapshot, type SceneObjectProposal, type AuthoredObjectReference } from '../../../packages/contracts/src/scene-objects';
 import type { SceneObjectSession } from './scene-object-session';
+import { searchAreaCandidates } from './area-candidate-search';
+import type { PlacementSearchSession } from './placement-search-session';
 import type { PointOverrideSession } from './point-overrides';
 import { TorontoCadError, type TorontoCadSession } from './toronto-cad-session';
 import { randomUUID } from 'node:crypto';
@@ -14,7 +16,10 @@ import { SemanticArtifact } from './semantic-artifact';
 import { ModelError, type BoundModelScene } from './provider-model';
 import { assessUtilityBox, checkPlacementTerrain, UTILITY_BOX_PRESET, type UtilityBoxAssessment } from './utility-box-placement';
 
-export interface ModelEditingAuthorities { readonly points: PointOverrideSession; readonly cad: TorontoCadSession; readonly objects?: SceneObjectSession }
+// One source reduction per authority, including across simultaneous chat sessions.
+const activeAreaScans = new WeakSet<PointOverrideSession>();
+
+export interface ModelEditingAuthorities { readonly points: PointOverrideSession; readonly cad: TorontoCadSession; readonly objects?: SceneObjectSession; readonly placement?: PlacementSearchSession }
 
 /** Attachment metadata remains unverified; nearestLabel separately resolves original records and independently verifies its indexed result. */
 export async function bindModelScene(scene: ModelScene, authority: ProjectSession, directory: string, signal: AbortSignal, visual?: ModelVisualObservation, editing?: ModelEditingAuthorities): Promise<BoundModelScene> {
@@ -93,7 +98,7 @@ export async function bindModelScene(scene: ModelScene, authority: ProjectSessio
           bodies: cadState!.bodies.map(({ bodyId, operation }) => ({ bodyId, operation })),
           proposals: cadState!.proposals.map(({ proposalId, operation }) => ({ proposalId, operation })) },
         ...(objectState ? { objects: { sessionId: objectState.sessionId, revision: objectState.revision, artifactRevision: objectState.artifactRevision, count: objectState.objects.length } } : {}), volatile: true } } : {}),
-      capabilities: { queryAoiPoints: scene.mode === 'toronto' && !!scene.areaOfInterest && !!retained, inspectScene: true, listObjects: !!objectState, getObject: !!objectState, pointCreateProposals: !!objectState, authoredObjectKinds: objectState ? ['datum-point'] : [], authoredReferenceConsumers: objectState ? ['get_object', 'propose_point_create'] : [], nearestLabel: scene.mode === 'toronto' && scene.toronto.length > 0 && !!retained, boxParameterProposals: canPropose,
+      capabilities: { scanAreaCandidates: !!torontoEditing && !!scene.areaOfInterest && !!retained, searchPlacementSites: !!torontoEditing?.placement && !!scene.areaOfInterest, proposePlacementSite: !!torontoEditing?.placement, queryAoiPoints: scene.mode === 'toronto' && !!scene.areaOfInterest && !!retained, inspectScene: true, listObjects: !!objectState, getObject: !!objectState, pointCreateProposals: !!objectState, authoredObjectKinds: objectState ? ['datum-point'] : [], authoredReferenceConsumers: objectState ? ['get_object', 'propose_point_create'] : [], nearestLabel: scene.mode === 'toronto' && scene.toronto.length > 0 && !!retained, boxParameterProposals: canPropose,
         utilityBoxAssessment: !!torontoEditing && scene.toronto.length > 0, pointMoveProposals: !!torontoEditing && scene.toronto.length > 0, cadSolidProposals: !!torontoEditing, geometryMutation: false, cadVerification: !!torontoEditing },
       nearestLabelSearchGeometry: 'original-prepared-dataset',
       limitations: ['Toronto original point record/position is not independently verified by this chat attachment boundary.',
@@ -101,6 +106,62 @@ export async function bindModelScene(scene: ModelScene, authority: ProjectSessio
         'Synthetic box proposals are parameter-postconditions-not-cad candidates only. Toronto CAD tools, when available, retain kernel-validated pending solids, never publish. Human acceptance of each change is required.',
         'Toronto point proposals independently reread original records and check effective-position preconditions. Overrides do not change original-source nearest-label searches. All Toronto edits are volatile; restart clears them.',
         'Images may show past edits or ghosts and never grant current tool authority; rendering and publication are distinct from kernel validation. No model approval, decline or Undo tools exist.'] },
+      ...(torontoEditing && pointState && cadState && retained && scene.areaOfInterest ? {
+        async checkAreaCandidates(querySignal) {
+          const combined = AbortSignal.any([signal, querySignal]);
+          combined.throwIfAborted(); if (closed) throw new ModelError('stale-scene');
+          await checkEditing(combined); await retained.check(combined);
+          torontoEditing.points.assertOriginalBinding(pointState, true);
+          torontoEditing.cad.assertOriginalBinding(cadState, true);
+        },
+        async scanAreaCandidates(settings, querySignal) {
+          const combined = AbortSignal.any([signal, querySignal]);
+          if (closed) throw new ModelError('stale-scene');
+          if (activeAreaScans.has(torontoEditing.points)) throw new ModelError('area-scan-busy');
+          activeAreaScans.add(torontoEditing.points);
+          const assertOriginal = () => {
+            torontoEditing.points.assertOriginalBinding(pointState, true);
+            torontoEditing.cad.assertOriginalBinding(cadState, true);
+          };
+          try {
+            await checkEditing(combined); await retained.check(combined); assertOriginal();
+            const result = await searchAreaCandidates(retained, scene.areaOfInterest!, settings, {
+              pointAuthority: { sessionId: pointState.sessionId, revision: pointState.revision },
+              cadAuthority: { sessionId: cadState.sessionId, revision: cadState.revision },
+            }, combined);
+            await checkEditing(combined); await retained.check(combined);
+            combined.throwIfAborted(); if (closed) throw new ModelError('stale-scene');
+            // Synchronous barriers close the gap between the two awaited authority reads.
+            assertOriginal();
+            return result;
+          } finally { activeAreaScans.delete(torontoEditing.points); }
+        },
+      } satisfies Pick<BoundModelScene, 'scanAreaCandidates' | 'checkAreaCandidates'> : {}),
+      ...(torontoEditing?.placement ? {
+        ...(scene.areaOfInterest ? {
+          async searchPlacementSites(settings, querySignal) {
+            const combined = AbortSignal.any([signal, querySignal]);
+            if (closed) throw new ModelError('stale-scene');
+            await checkEditing(combined); await retained!.check(combined);
+            // Never accept model-supplied corners or authority bindings.
+            const result = await torontoEditing.placement!.search({ area: scene.areaOfInterest, settings }, combined);
+            await checkEditing(combined); await retained!.check(combined);
+            return result;
+          },
+        } satisfies Pick<BoundModelScene, 'searchPlacementSites'> : {}),
+        async proposePlacementSite(args, querySignal) {
+          const combined = AbortSignal.any([signal, querySignal]);
+          if (closed) throw new ModelError('stale-scene');
+          await checkEditing(combined); await retained!.check(combined);
+          // Shared retained session performs exact-candidate allowlisting and replay;
+          // its independent approval guard outlives this model turn.
+          const proposal = await torontoEditing.placement!.propose(args, combined);
+          await checkEditing(combined); await retained!.check(combined);
+          return { sessionId: proposal.sessionId, revision: proposal.revision, artifactRevision: proposal.artifactRevision,
+            datasetId: proposal.datasetId, frameId: proposal.frameId, units: proposal.units, proposalId: proposal.proposalId,
+            bodyId: proposal.bodyId, operation: proposal.operation, validation: proposal.validation };
+        },
+      } satisfies Pick<BoundModelScene, 'proposePlacementSite'> : {}),
       ...(torontoEditing?.objects && objectState && pointState ? {
         async listObjects(args, querySignal) {
           const combined = AbortSignal.any([signal, querySignal]);

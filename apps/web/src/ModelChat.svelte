@@ -12,9 +12,11 @@
   import type { TorontoDraftPoint } from './draft-context';
   import { canonicalPoleRequest } from '@spatial/contracts';
   import { validatePoleResult } from './pole-client';
-  let { areaInput, scene, visualSource, points = [], onverifiedresult = () => {}, onauthorityproposal = () => {}, onproposal = () => {}, oninvalidateproposals = () => {}, onstreamingchange = () => {}, onselectreference, onauthorityrefresh, proposalsBlocked = false }: {
+  let { areaInput, scene, visualSource, points = [], onverifiedresult = () => {}, onplacementsearch, onareacandidates, onauthorityproposal = () => {}, onproposal = () => {}, oninvalidateproposals = () => {}, onstreamingchange = () => {}, onselectreference, onauthorityrefresh, proposalsBlocked = false }: {
     areaInput?: AreaOfInterestInput;
     scene: ModelScene; visualSource?: VisualModelSource; points?: readonly TorontoDraftPoint[]; onverifiedresult?: (context: unknown) => void;
+    onplacementsearch?: (result: unknown, current: () => boolean) => Promise<void>;
+    onareacandidates?: (result: unknown, current: () => boolean) => Promise<void>;
     onauthorityproposal?: (kind: 'points' | 'cad' | 'objects') => void;
     onproposal?: (proposal: unknown, isCurrent: () => boolean) => void; oninvalidateproposals?: () => void;
     onstreamingchange?: (streaming: boolean) => void; proposalsBlocked?: boolean;
@@ -98,6 +100,8 @@
   const controller = new ModelChatController(value => { view = value; onstreamingchange(value.phase === 'streaming'); }, undefined, undefined, undefined,
     { onproposal: (proposal, current) => onproposal(proposal, current), oninvalidate: () => oninvalidateproposals(), onauthorityproposal: kind => onauthorityproposal(kind),
       oncapture: captureForAgent,
+      onareacandidates: (result, current) => { if (!onareacandidates) throw new Error('Candidate display unavailable.'); return onareacandidates(result, current); },
+      onplacementsearch: (result, current) => { if (!onplacementsearch) throw new Error('Placement display unavailable.'); return onplacementsearch(result, current); },
       onselectreference: (reference, current) => { if (!onselectreference) throw new Error('Reference selection unavailable.'); return onselectreference(reference, current); },
       onauthorityrefresh: () => { if (!onauthorityrefresh) throw new Error('Authority refresh unavailable.'); return onauthorityrefresh(); },
       onapprovalwait: waiting => approvalWaiting = waiting });

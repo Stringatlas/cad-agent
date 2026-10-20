@@ -72,7 +72,9 @@ test('Toronto combines point and CAD review outside tools and leaves approval in
   const toronto = source('Toronto.svelte'), points = source('PointEdits.svelte'), cad = source('TorontoCad.svelte');
   assert.equal((toronto.match(/<ApprovalReview /g) ?? []).length, 1);
   assert.ok(toronto.includes('$derived([...pointReviewItems, ...cadReviewItems, ...objectReviewItems])'));
-  assert.ok(toronto.indexOf('<ApprovalReview ') < toronto.indexOf('<aside>'));
+  const toolsAside = toronto.search(/<aside(?:\s|>)/);
+  assert.ok(toolsAside >= 0, 'Scene tools aside remains present');
+  assert.ok(toronto.indexOf('<ApprovalReview ') < toolsAside);
   assert.doesNotMatch(cad, /toronto-cad-accept|toronto-cad-decline/);
   assert.match(toronto, /disabled: cadView\.busy \|\| cadView\.needsRefresh,/);
   assert.match(points, /disabled: view\.busy \|\| view\.needsRefresh,/);

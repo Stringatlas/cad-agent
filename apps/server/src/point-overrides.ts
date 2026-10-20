@@ -30,6 +30,16 @@ export class PointOverrideSession {
   }
   constructor(private readonly directory: string) {}
 
+  /** Composition-only synchronous barrier, after async source validation; performs no I/O. */
+  assertOriginalBinding(expected: { sessionId: string; revision: number; artifactRevision: string }, rejectPending = false): void {
+    this.ready();
+    if (!this.artifact) throw new PointOverrideError('unavailable');
+    if (this.active) throw new PointOverrideError('busy');
+    if (rejectPending && this.proposals.size) throw new PointOverrideError('stale-revision');
+    this.binding(expected);
+    if (this.entries.size) throw new PointOverrideError('stale-revision');
+    if (this.artifact.dataset.revision !== expected.artifactRevision) throw new PointOverrideError('stale-artifact');
+  }
   private binding(value: { sessionId: string; revision: number }) {
     if (value.sessionId !== this.sessionId) throw new PointOverrideError('stale-session');
     if (value.revision !== this.revision) throw new PointOverrideError('stale-revision');

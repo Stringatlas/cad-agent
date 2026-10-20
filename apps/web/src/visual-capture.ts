@@ -8,7 +8,7 @@ export interface VisualCaptureOptions {
   /** Local-meter orbit focus; read only and never changed by capture. */
   target?: () => Vec3;
   binding: () => VisualBinding;
-  coverage: () => VisualCoverage;
+  coverage: (captureCamera?: THREE.PerspectiveCamera) => VisualCoverage;
   /** Synchronous render-only recoloring; must not invalidate captures or change UI state. */
   pointColorMode?: { get: () => ModelCaptureColorMode; set: (mode: ModelCaptureColorMode) => void };
   /** Displayed point layers; blocking scene meshes are included automatically. */
@@ -115,7 +115,7 @@ export function createVisualCapture(options: VisualCaptureOptions) {
       let dataUrl: string, coverage = before.coverage;
       try {
         if (recolor) options.pointColorMode!.set(view.colorMode!);
-        coverage = detached(options.coverage());
+        coverage = detached(options.coverage(frozenCamera));
         renderer.render(scene, frozenCamera);
         dataUrl = renderer.domElement.toDataURL('image/png');
       } finally {

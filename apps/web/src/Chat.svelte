@@ -13,7 +13,7 @@
   import type { VisualModelSource } from './visual-model-source';
   import type { AreaOfInterestInput } from './area-of-interest';
   import { modelScene } from './model-chat-client';
-  let { objectReferences = [], selectedObject, onclearobject = () => {}, objectBlocked = true, onobjectproposal = () => {}, areaInput, snapshot, view, controller: projectController, sceneMode, points, pointStatus, onclearpoint, visualSource, pointOverrides, onverifiedresult, pointBlocked = true, onpointproposal = () => {}, oncadproposal = () => {}, ontorontostreaming = () => {}, onselectreference, onauthorityrefresh, torontoCadBlocked = true }: {
+  let { objectReferences = [], selectedObject, onclearobject = () => {}, objectBlocked = true, onobjectproposal = () => {}, areaInput, snapshot, view, controller: projectController, sceneMode, points, pointStatus, onclearpoint, visualSource, pointOverrides, onverifiedresult, onplacementsearch, onareacandidates, pointBlocked = true, onpointproposal = () => {}, oncadproposal = () => {}, ontorontostreaming = () => {}, onselectreference, onauthorityrefresh, torontoCadBlocked = true }: {
     objectReferences?: readonly AuthoredObjectReference[]; selectedObject?: DatumPoint; onclearobject?: () => void; objectBlocked?: boolean; onobjectproposal?: () => void;
     areaInput?: AreaOfInterestInput;
     onselectreference: (reference: ModelReferenceSelection, isCurrent: () => boolean) => Promise<void>;
@@ -23,6 +23,8 @@
     pointBlocked?: boolean; onpointproposal?: () => void;
     pointOverrides?: PointOverrideSnapshot;
     onverifiedresult: (context: unknown) => void;
+    onplacementsearch: (result: unknown, current: () => boolean) => Promise<void>;
+    onareacandidates: (result: unknown, current: () => boolean) => Promise<void>;
     visualSource?: VisualModelSource;
     snapshot?: ProjectSnapshot; view: ProjectView; controller: ProjectController; sceneMode: string;
     points: readonly TorontoDraftPoint[]; pointStatus: string; onclearpoint: (name: PointName) => void;
@@ -81,6 +83,8 @@
     {/if}
   </details>
   <ModelChat {scene} {visualSource} points={activePoints} {onverifiedresult} areaInput={sceneMode === 'toronto' ? areaInput : undefined}
+    onareacandidates={(result, current) => { if (sceneMode !== 'toronto' || !current()) throw new Error('Toronto candidates unavailable.'); return onareacandidates(result, () => sceneMode === 'toronto' && current()); }}
+    onplacementsearch={(result, current) => { if (sceneMode !== 'toronto' || !current()) throw new Error('Toronto placement unavailable.'); return onplacementsearch(result, () => sceneMode === 'toronto' && current()); }}
     onselectreference={async (reference, current) => { await onselectreference(reference, current); await tick(); return scene; }}
     onauthorityrefresh={async () => { await onauthorityrefresh(); await tick(); return scene; }}
     proposalsBlocked={sceneMode === 'demo' ? (!!view.pending || view.needsRefresh) : sceneMode === 'toronto' && (torontoCadBlocked || pointBlocked || objectBlocked)}

@@ -2,6 +2,11 @@
   import { onMount, tick, untrack } from 'svelte';
   import ApprovalReview, { type ApprovalReviewItem } from './ApprovalReview.svelte';
   import TorontoCad from './TorontoCad.svelte';
+  import PlacementSearch from './PlacementSearch.svelte';
+  import AreaCandidates from './AreaCandidates.svelte';
+  import { areaCandidatesMatchScene, validateAreaCandidateResult } from './area-candidate-client';
+  import type { AreaCandidateResult } from '@spatial/contracts';
+  import { validatePlacementShortlist, placementMatchesScene } from './placement-search-client';
   import SceneObjects from './SceneObjects.svelte';
   import { SceneObjectController, type SceneObjectView } from './scene-object-client';
   import type { SceneObjectSnapshot } from '@spatial/contracts';
@@ -93,6 +98,9 @@
   let retainedProposals = $state<readonly PointMoveProposal[]>([]);
   const sceneSnapshot = $derived(retainedSnapshot ?? pointOverrides);
   const sceneProposals = $derived(retainedProposals);
+  let pointAuthorityBlocked = $state(true);
+  const placementAuthorityKey = $derived(JSON.stringify([cadArtifact, sceneSnapshot?.sessionId, sceneSnapshot?.revision,
+    cadView.snapshot?.sessionId, cadView.snapshot?.revision, objectView.snapshot?.sessionId, objectView.snapshot?.revision, pointRefresh, cadRefresh, objectRefresh]));
   const effectiveMarkers = $derived([
     ...points.map(point => {
       let position = point.position;
@@ -211,6 +219,50 @@
   async function loadCrop() { changeBox(); try { await loadSelection(currentBox()); } catch (error) { cropPhase = nextCropPhase(cropPhase, 'fail'); cropStatus = String(error); } }
   function retryCrop() { if (projected) void loadSelection(projected); else void loadCrop(); }
   let areaInput = $state<AreaOfInterestInput>();
+  let placementSearch = $state<PlacementSearch>();
+  let areaCandidates = $state<AreaCandidateResult>();
+  let selectedCandidate = $state<string>();
+  let candidateAuthority = $state('');
+  const candidatesInvalidated = $derived(!!viewerError || !mounted || !!areaInput?.pending || !!areaInput?.error ||
+    !!sceneProposals.length || !!pointPreview || cadView.needsRefresh || !!cadView.snapshot?.proposals.length ||
+    objectView.needsRefresh || !!objectView.snapshot?.proposals.length || pointAuthorityBlocked || cadView.busy || objectView.busy ||
+    !!sceneSnapshot?.entries.length || !!cadView.snapshot?.bodies.length);
+  export async function receiveAreaCandidates(value: unknown, current: () => boolean): Promise<void> {
+    if (!alive || !current()) throw new Error('Candidate context changed.');
+    const authority = placementAuthorityKey, result = validateAreaCandidateResult(value);
+    const matches = () => alive && current() && authority === placementAuthorityKey && !candidatesInvalidated &&
+      areaCandidatesMatchScene(result, areaInput?.area, sceneSnapshot, cadView.snapshot);
+    await tick();
+    if (!matches()) throw new Error('Candidate result no longer matches the active area or source-only scene. Scan again.');
+    areaCandidates = result; candidateAuthority = authority; selectedCandidate = undefined;
+    viewer?.setAreaCandidates(result);
+    await tick();
+    if (!matches()) { areaCandidates = undefined; viewer?.setAreaCandidates(); throw new Error('Candidate context changed.'); }
+  }
+  $effect(() => {
+    if (areaCandidates && (candidatesInvalidated || candidateAuthority !== placementAuthorityKey ||
+      !areaCandidatesMatchScene(areaCandidates, areaInput?.area, sceneSnapshot, cadView.snapshot))) {
+      areaCandidates = undefined; selectedCandidate = undefined; viewer?.setAreaCandidates();
+    }
+  });
+  const placementInvalidated = $derived(!!viewerError || !mounted || !!areaInput?.pending ||
+    !!sceneProposals.length || !!pointPreview || cadView.needsRefresh || !!cadView.snapshot?.proposals.length ||
+    objectView.needsRefresh || !!objectView.snapshot?.proposals.length);
+  export async function receivePlacementSearch(value: unknown, current: () => boolean): Promise<void> {
+    if (!alive || !current()) throw new Error('Placement context changed.');
+    const authority = placementAuthorityKey, area = JSON.stringify(areaInput?.area);
+    const result = validatePlacementShortlist(value);
+    await tick();
+    const matches = () => alive && current() && authority === placementAuthorityKey && area === JSON.stringify(areaInput?.area) &&
+      !placementInvalidated && !!areaInput?.area && placementMatchesScene(result, areaInput.area, sceneSnapshot, cadView.snapshot);
+    if (!placementSearch || !matches()) throw new Error('Placement result does not match the active area or scene authority.');
+    await placementSearch.receivePlacementSearch(result, matches);
+    await tick();
+    if (!matches()) throw new Error('Placement context changed.');
+  }
+  const placementBlocked = $derived(modelStreaming || !!viewerError || !mounted || !!areaInput?.pending ||
+    pointAuthorityBlocked || !!sceneProposals.length || !!pointPreview || cadView.busy || cadView.needsRefresh ||
+    !!cadView.snapshot?.proposals.length || objectView.busy || objectView.needsRefresh || !!objectView.snapshot?.proposals.length);
   let areaError = $state('');
   let areaTicket = 0;
   function clearArea() {
@@ -311,7 +363,7 @@
       {#if viewerError}<p role="alert">Viewer unavailable: {viewerError}</p>{/if}
       {#if adaptiveEnabled && adaptiveStats.error && !viewerError}<div class="scene-feedback" role="status"><p class="crop-summary">Detail unavailable. <button data-testid="quick-retry-display" onclick={() => viewer?.retryAdaptive()}>Retry</button></p></div>{/if}
       <div class="point-confirmation" data-testid="scene-point-confirmation">
-        <PointEdits {points} toolsHost={pointToolsHost} artifactRevision={display?.dataset.revision} refreshToken={pointRefresh} streaming={modelStreaming} bind:this={pointEditor} onreview={items => pointReviewItems = items} onselect={selection => pinPoint(selection)} onstate={(snapshot, proposal, blocked, proposals) => { retainedSnapshot = snapshot; retainedProposals = proposals ?? []; onpointstate(snapshot, proposal, blocked); }} />
+        <PointEdits {points} toolsHost={pointToolsHost} artifactRevision={display?.dataset.revision} refreshToken={pointRefresh} streaming={modelStreaming} bind:this={pointEditor} onreview={items => pointReviewItems = items} onselect={selection => pinPoint(selection)} onstate={(snapshot, proposal, blocked, proposals) => { retainedSnapshot = snapshot; retainedProposals = proposals ?? []; pointAuthorityBlocked = !!blocked; onpointstate(snapshot, proposal, blocked); }} />
         {#if cadArtifact && (cadView.needsRefresh || /^(Error|TypeError|RangeError|CadError):/.test(cadView.status))}
           <section class="cad-recovery" aria-label="Toronto CAD recovery">
             <p role="alert">{cadView.status}</p>
@@ -327,7 +379,17 @@
         {:else if feedback.canRetry}<div class="inline-crop-actions"><button data-testid="quick-retry-crop" onclick={retryCrop} disabled={!!viewerError}>Retry street detail</button></div>{/if}
       </div>
     </section>
-    <aside>
+    <aside class:has-placement={!!areaInput?.area}>
+      {#if areaCandidates}
+        <AreaCandidates result={areaCandidates} selected={selectedCandidate} onselect={(id, position) => { selectedCandidate = id; viewer?.setAreaCandidates(areaCandidates ? $state.snapshot(areaCandidates) : undefined, id); viewer?.focusPosition(position); }} />
+      {/if}
+      {#if areaInput?.area}
+        <details class="technical"><summary>Equipment placement tools</summary>
+        <PlacementSearch bind:this={placementSearch} area={areaInput.area} authorityKey={placementAuthorityKey} blocked={placementBlocked} invalidated={placementInvalidated}
+          onpreview={preview => viewer?.setPlacementPreview(preview)}
+          onproposed={async () => { await cadController.refresh(); }} onfocus={position => viewer?.focusPosition(position)} />
+        </details>
+      {/if}
       <details class="technical" data-testid="toronto-technical" bind:open={cadToolsOpen}><summary>Scene tools</summary>
       <div class="tools-content">
       <div bind:this={pointToolsHost}></div>
@@ -417,7 +479,8 @@
   .scene-panel .area-error { position: absolute; z-index: 2; left: 16px; top: 140px; max-width: calc(100% - 32px); border-radius: 8px; background: #202124ed; font-size: 12px; padding: 0 12px; color: #ffd1a3; }
   .crop-summary { font-size: 11px; color: #b9bac1; padding: 9px 12px; margin: 0; overflow-wrap: anywhere; }
   .inline-crop-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 0 12px 8px; font-size: 11px; color: #b9bac1; }
-  aside { position: absolute; z-index: 2; top: 16px; right: 16px; max-width: calc(100% - 32px); }
+  aside { position: absolute; z-index: 2; top: 16px; right: 16px; max-width: calc(100% - 32px); max-height: calc(100% - 32px); overflow-y: auto; overscroll-behavior: contain; }
+  aside.has-placement { width: 360px; }
   .technical { border: 1px solid #ffffff18; border-radius: 12px; background: #202124f5; box-shadow: 0 8px 32px #0003; }
   .technical > summary { padding: 10px 14px; }
   .technical[open] { width: 360px; max-width: 100%; }
@@ -438,6 +501,6 @@
   dt, .note { font-size: 11px; color: #a8a9b0; line-height: 1.5; } dd { margin: 0 0 8px; font-size: 11px; overflow-wrap: anywhere; } p { font-size: 12px; overflow-wrap: anywhere; }
   a { color: #a8caff; }
   [role="alert"] { position: absolute; z-index: 1; left: 16px; right: 16px; top: 64px; max-height: 25%; overflow-y: auto; margin: 0; color: #ffb2aa; background: #202124f5; border: 1px solid #ffb2aa44; border-radius: 10px; padding: 10px 14px; overflow-wrap: anywhere; }
-  @media (max-width: 600px) { .toolbar { top: 12px; left: 12px; gap: 4px; padding: 5px 8px; flex-wrap: wrap; max-width: calc(100% - 150px); } .toolbar .color-mode { font-size: 11px; } .scene-panel .area-error { top: 180px; } .toolbar button { font-size: 11px; } aside { top: 12px; right: 12px; max-width: calc(100% - 24px); } .scene-feedback { left: 12px; bottom: 12px; max-width: calc(100% - 24px); } }
+  @media (max-width: 600px) { .toolbar { top: 12px; left: 12px; gap: 4px; padding: 5px 8px; flex-wrap: wrap; max-width: calc(100% - 150px); } .toolbar .color-mode { font-size: 11px; } .scene-panel .area-error { top: 180px; } .toolbar button { font-size: 11px; } aside { top: auto; bottom: 12px; right: 12px; max-width: calc(100% - 24px); max-height: 45%; } .scene-feedback { left: 12px; bottom: 12px; max-width: calc(100% - 24px); } }
 
 </style>

@@ -13,6 +13,9 @@ import { createAdaptiveRender } from './adaptive-render';
 import { createCropLayer } from './crop-render';
 import { pointColors, POINT_TYPE_KEY, UNKNOWN_POINT_COLOR, type PointColorMode } from './point-colors';
 import { createTorontoCadRender } from './toronto-cad-render';
+import { createAreaCandidateRender } from './area-candidate-render';
+import type { AreaCandidateResult } from '@spatial/contracts';
+import { createPlacementSearchRender, type PlacementPreview } from './placement-search-render';
 import { createPreprocessingLayer, type PreprocessingSummary } from './preprocessing-overlays';
 import { createPointOverrideRender } from './point-override-render';
 import { projectCropRectangle } from './crop-projection';
@@ -54,6 +57,19 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
   };
   const pointOverrides = createPointOverrideRender(scene);
   const cad = createTorontoCadRender(scene);
+  const placement = createPlacementSearchRender(scene);
+  const areaCandidates = createAreaCandidateRender(scene);
+  let candidateEvidence: AreaCandidateResult | undefined;
+  // Covers both live frames and visual-capture's temporary camera synchronously.
+  const annotationSize = new THREE.Vector2();
+  scene.onBeforeRender = (_renderer, _scene, renderCamera) => {
+    renderer.getSize(annotationSize);
+    const canvasBounds = renderer.domElement.getBoundingClientRect();
+    const shortlist = host.parentElement?.parentElement?.querySelector('[data-testid="area-candidate-shortlist"]')?.closest('aside')?.getBoundingClientRect();
+    const excluded = shortlist ? [{ x: shortlist.left - canvasBounds.left, y: shortlist.top - canvasBounds.top, width: shortlist.width, height: shortlist.height }] : [];
+    areaCandidates.update(renderCamera as THREE.PerspectiveCamera, annotationSize.x, annotationSize.y, excluded);
+    host.dataset.areaCandidateLabels = JSON.stringify(areaCandidates.layout);
+  };
   const authoredObjects = createSceneObjectRender(scene);
   const preprocessing = createPreprocessingLayer(scene);
   const overlay = document.createElement('div'); overlay.className = 'selection-window';
@@ -102,7 +118,8 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       return { sourceId: dataset.id, sourceRevision: dataset.revision, frameId: 'toronto3d-local-v1', units: dataset.coordinates.units,
         origin: dataset.coordinates.localOrigin, upAxis: dataset.coordinates.upAxis, handedness: dataset.coordinates.handedness };
     },
-    coverage: () => ({ kind: 'sampled-overview-with-adaptive-and-manual-detail', complete: false,
+    coverage: captureCamera => ({ kind: 'sampled-overview-with-adaptive-and-manual-detail', complete: false,
+      ...(captureCamera && candidateEvidence?.assessment ? { areaCandidateEvidence: candidateCaptureEvidence(captureCamera) } : {}),
       displayedPointCount: (points.visible ? overview?.count ?? 0 : 0) + cropLayer.count + adaptiveStats.loadedPoints,
       // Keep capture metadata bounded even after hundreds of native nodes settle.
       // Actual geometry participates in the capture signature independently of this sample.
@@ -115,7 +132,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       pointColorMode: colorMode,
       ...(colorMode === 'type' ? { pointTypeKey: [...POINT_TYPE_KEY, { label: null, name: 'Unknown', color: UNKNOWN_POINT_COLOR }] } : {}),
       observation: 'capture-time-rendered-scene-not-current-geometry',
-      layers: { areaOfInterest: areaOverlay.visible, cadSolidsOrGhosts: cad.captureBlocked, pointEditsOrPreview: pointOverrides.captureBlocked, derivedOverlays: preprocessing.count, authoredDatumsOrGhosts: authoredObjects.count },
+      layers: { areaCandidatePoints: areaCandidates.count, placementPreviewRenderObjects: placement.count, areaOfInterest: areaOverlay.visible, cadSolidsOrGhosts: cad.captureBlocked, pointEditsOrPreview: pointOverrides.captureBlocked, derivedOverlays: preprocessing.count, authoredDatumsOrGhosts: authoredObjects.count },
       pointProvenance: pointOverrides.captureBlocked || authoredObjects.count ? 'unavailable-for-edited-imagery' : 'original-source-records-only',
       pointCountScope: 'overview-adaptive-manual-detail-only-excludes-edit-preview-and-fallback-markers',
       scope: 'Displayed scene including CAD solids, pending ghosts, point edits and overlays when present; not whole-dataset or authoritative geometry evidence' }),
@@ -132,6 +149,27 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
         layer: object === points ? 'overview' : 'detail' };
     },
   });
+  // A bounded sample of ACTUALLY displayed source geometry in the requested view,
+  // not pins, full-source counts or a promise that the current crop covers the AOI.
+  function candidateCaptureEvidence(view: THREE.PerspectiveCamera) {
+    const nearby = (candidateEvidence?.candidates ?? []).map(c => ({ id: c.id, count: 0 }));
+    const layers = [...(points.visible ? [points] : []), ...native.objects, ...cropLayer.group.children].filter(o => o.visible && o instanceof THREE.Points) as THREE.Points[];
+    const total = layers.reduce((n, o) => n + (o.geometry.getAttribute('position')?.count ?? 0), 0);
+    const stride = Math.max(1, Math.ceil(total / 100_000));
+    const point = new THREE.Vector3(), projected = new THREE.Vector3();
+    for (const layer of layers) {
+      const positions = layer.geometry.getAttribute('position'); if (!positions) continue;
+      for (let i = 0; i < positions.count; i += stride) {
+        point.fromBufferAttribute(positions, i).applyMatrix4(layer.matrixWorld);
+        projected.copy(point).project(view);
+        if (![projected.x, projected.y, projected.z].every(n => Number.isFinite(n) && Math.abs(n) < 1)) continue;
+        candidateEvidence?.candidates.forEach((candidate, j) => {
+          if (Math.hypot(point.x - candidate.position[0], point.y - candidate.position[1]) <= 8 && Math.abs(point.z - candidate.position[2]) <= 15) nearby[j].count++;
+        });
+      }
+    }
+    return { scanId: candidateEvidence!.assessment!.scanId, nearby, sampleStride: stride, radiusMeters: 8, scope: 'displayed-source-sample-in-capture-not-complete-source' };
+  }
   const visual = { ...captureSource, invalidate() { renderDirty = true; captureSource.invalidate(); } };
   const viewport = createViewportSizer(host, renderer, camera, () => visual.invalidate());
   let adaptiveSettings: Partial<AdaptiveSettings> = {};
@@ -438,6 +476,17 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
     },
     isCaptureCurrent: visual.isCurrent,
     resolvePixel: visual.resolvePixel,
+    setAreaCandidates(result?: AreaCandidateResult, selected?: string) {
+      if (disposed || gpuFailed) return;
+      candidateEvidence = result;
+      areaCandidates.set(result, selected);
+      host.dataset.areaCandidates = JSON.stringify(result?.candidates.map(c => ({ rank: c.rank, position: c.position })) ?? []);
+      visual.invalidate();
+    },
+    setPlacementPreview(preview?: PlacementPreview) {
+      if (disposed) return;
+      placement.set(preview); visual.invalidate();
+    },
     setCad(snapshot?: TorontoCadSnapshot) {
       if (disposed) return;
       visual.invalidate(); cad.set(snapshot);
@@ -564,7 +613,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       flight.dispose(); visual.dispose(); areaOverlay.dispose();
       controls.removeEventListener('change', controlsChanged);
       disposed = true; clearDetail(); pickCache?.dispose(); pickCache = undefined; finishGesture();
-      pointOverrides.dispose(); cad.dispose(); preprocessing.dispose(); authoredObjects.dispose();
+      pointOverrides.dispose(); cad.dispose(); placement.dispose(); areaCandidates.dispose(); delete host.dataset.areaCandidates; delete host.dataset.areaCandidateLabels; preprocessing.dispose(); authoredObjects.dispose();
       markerGeometry.dispose(); markerMaterial.dispose(); winnerGeometry.dispose(); winnerMaterial.dispose(); lineGeometry.dispose(); lineMaterial.dispose();
       for (const name of draftMarkers.keys()) removeDraftMarker(name);
       delete host.dataset.draftMarkers;
