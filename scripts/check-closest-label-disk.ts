@@ -7,12 +7,12 @@ import { mkdir, readFile, writeFile, readdir, stat, realpath } from 'node:fs/pro
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { TORONTO_SEMANTIC_LABELS, type TorontoSemanticLabel, type NearestPoleRequest } from '@spatial/contracts';
-import { SemanticArtifact } from '../apps/server/src/semantic-artifact';
-import { getSemanticDiskIndex, cacheRoot } from '../apps/server/src/semantic-disk-index';
-import { preparePoleIndex } from '../apps/server/src/pole-index';
+import { SemanticArtifact } from '../apps/server/src/spatial/semantic-artifact';
+import { getSemanticDiskIndex, cacheRoot } from '../apps/server/src/spatial/semantic-disk-index';
+import { preparePoleIndex } from '../apps/server/src/spatial/pole-index';
 import { createIsolatedDemoServer as createDemoServer } from './isolated-demo-server';
-import { DEFAULT_DATASET_ROOT } from '../apps/server/src/dataset-routes';
-import { fetchClosestPole } from '../apps/web/src/pole-client';
+import { DEFAULT_DATASET_ROOT } from '../apps/server/src/datasets/dataset-routes';
+import { fetchClosestPole } from '../apps/web/src/scenes/toronto/inspection/pole-client';
 
 const mode = process.argv[2], output = resolve(process.argv[3] ?? join(tmpdir(), 'spatial-task010-actual'));
 assert.ok(mode === '--prepare' || mode === '--http');

@@ -18,7 +18,13 @@ Example end-state: select Point 1 and Point 2, ask “build a channel between th
 
 Follow the standing [UX principles](ux-principles.md): **YAGNI, Apple-style restraint, clear information hierarchy and progressive disclosure**. The scene, selected object/type, chat intent and per-change approval are primary. Session IDs, revisions, provenance narration, routine status and methodological caveats remain accessible on demand—not permanent paragraphs/panels over the scene. Selected points expose semantic types; derived clusters/layers have compact accessible meaning through a key or contextual inspection. Preserve actionable failures/recovery and truthful estimate labels without turning safety into repetitive engineering copy. Validate the idle workspace as carefully as pending/error states, on desktop and mobile. Every future agent must follow this guidance, not merely copy the current UI.
 
-## Toronto is the product workspace
+## Dataset workspace
+[Task077](tasks/077-dales2-scene.md) makes DALES-2 the default scene: 29 separately
+normalized local tiles with native semantics and read-only sampled inspection.
+DALES agent chat and editing are not yet integrated; Toronto tools must never
+operate on DALES references or implicitly map its frames. Toronto remains an
+explicit alternative and the currently implemented approval-gated editing workspace.
+
 Toronto3D is the actual editing workspace. Synthetic geometry is a development/test fixture, not the destination for CAD product features. [Task034](tasks/034-toronto-cad-workspace.md) implements the authorized first Toronto slice: AI-proposed source-point translations and real OpenCascade box/cylinder solid candidates, visible in place with individual human Accept/Decline and checked Undo. Implementation and verification status live in that task. Toronto geometry uses its own local-meter frame directly; no synthetic-project mapping is implied. Volatile state and unsupported broader modeling must remain explicit.
 
 ## Model-directed scene interaction

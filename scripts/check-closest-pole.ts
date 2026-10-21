@@ -6,9 +6,9 @@ import { readFile, writeFile, mkdir, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import type { NearestPoleRequest, Vec3 } from '@spatial/contracts';
-import { queryClosestPole } from '../apps/server/src/semantic-query';
-import { PotreeDataset } from '../apps/server/src/potree';
-import { DEFAULT_DATASET_ROOT } from '../apps/server/src/dataset-routes';
+import { queryClosestPole } from '../apps/server/src/spatial/semantic-query';
+import { PotreeDataset } from '../apps/server/src/datasets/potree';
+import { DEFAULT_DATASET_ROOT } from '../apps/server/src/datasets/dataset-routes';
 
 const output = 'artifacts/closest-pole/actual-data.json';
 const report: Record<string, unknown> = { status: 'failed', command: 'pnpm exec tsx scripts/check-closest-pole.ts', scope: 'one inclusive 5m AABB; whole-payload scans for search and independent verification' };
@@ -66,7 +66,7 @@ try {
   for (const asset of ['manifest.json', 'octree/metadata.json', 'octree/hierarchy.bin', 'octree/octree.bin']) digests[asset] = await hashFile(join(DEFAULT_DATASET_ROOT, asset));
   digests['validation-report.json'] = await hashFile(join(DEFAULT_DATASET_ROOT, '../validation-report.json')); report.artifactDigests = digests;
   const owned = ['packages/contracts/src/index.ts', 'packages/contracts/src/semantic-query.ts', 'packages/agent-harness/src/index.ts', 'packages/agent-harness/src/semantic-query.ts',
-    'apps/server/src/semantic-artifact.ts', 'apps/server/src/semantic-query.ts', 'apps/server/src/semantic-verifier.ts', 'tests/semantic-query.test.ts', 'scripts/check-closest-pole.ts'];
+    'apps/server/src/spatial/semantic-artifact.ts', 'apps/server/src/spatial/semantic-query.ts', 'apps/server/src/spatial/semantic-verifier.ts', 'tests/spatial/semantic-query.test.ts', 'scripts/check-closest-pole.ts'];
   const code = createHash('sha256'); for (const path of owned.sort()) code.update(path).update(await readFile(path));
   report.code = { head: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), ownedFiles: owned, ownedSourceHash: code.digest('hex'),
     node: process.version, pnpm: execFileSync('pnpm', ['--version'], { encoding: 'utf8' }).trim() };

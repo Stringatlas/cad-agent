@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import * as THREE from 'three';
-import { PotreeDataset } from '../apps/server/src/potree';
-import { CROP_LIMITS } from '../apps/server/src/crop';
-import { DEFAULT_DATASET_ROOT } from '../apps/server/src/dataset-routes';
+import { PotreeDataset } from '../apps/server/src/datasets/potree';
+import { CROP_LIMITS } from '../apps/server/src/datasets/crop';
+import { DEFAULT_DATASET_ROOT } from '../apps/server/src/datasets/dataset-routes';
 import { createIsolatedDemoServer as createDemoServer } from './isolated-demo-server';
-import { projectCropRectangle } from '../apps/web/src/crop-projection';
+import { projectCropRectangle } from '../apps/web/src/scenes/toronto/display/crop-projection';
 import { containsCropPoint, type CropBox, type CropSelection, type CropEvent, type CropStats, type Vec3 } from '@spatial/contracts';
 
 const directory = new URL('../artifacts/projected-full-resolution/', import.meta.url);

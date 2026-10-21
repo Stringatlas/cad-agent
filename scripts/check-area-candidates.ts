@@ -1,8 +1,8 @@
 import { fileURLToPath } from 'node:url';
 import type { AreaCandidateSettings, ModelAreaOfInterest } from '@spatial/contracts';
-import { SemanticArtifact } from '../apps/server/src/semantic-artifact';
-import { getSemanticDiskIndex } from '../apps/server/src/semantic-disk-index';
-import { searchAreaCandidates } from '../apps/server/src/area-candidate-search';
+import { SemanticArtifact } from '../apps/server/src/spatial/semantic-artifact';
+import { getSemanticDiskIndex } from '../apps/server/src/spatial/semantic-disk-index';
+import { searchAreaCandidates } from '../apps/server/src/placement/area-candidate-search';
 import { candidateSource, denseGround } from '../tests/fixtures/area-candidate-source';
 
 const settings: AreaCandidateSettings = { spacingMeters: 2, clearanceRadiusMeters: 1, maxGroundReliefMeters: .2, minPoleDistanceMeters: 1, ranking: 'flat-ground' };

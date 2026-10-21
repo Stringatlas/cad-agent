@@ -1,12 +1,12 @@
 // Read-only actual-data assessment plus independent exhaustive page oracle. No provider calls or edits.
 // node --import tsx scripts/check-utility-box-placement.ts [prepared-dataset-directory]
 import assert from 'node:assert/strict';
-import { DEFAULT_DATASET_ROOT } from '../apps/server/src/dataset-routes';
-import { SemanticArtifact } from '../apps/server/src/semantic-artifact';
-import { loadPreparedSemanticDiskIndex, recordBytes } from '../apps/server/src/semantic-disk-index';
-import { SpatialPageIndex } from '../apps/server/src/spatial-page-index';
-import { readPreprocessing } from '../apps/server/src/preprocessing-summary';
-import { assessUtilityBox, type UtilityBoxAssessment } from '../apps/server/src/utility-box-placement';
+import { DEFAULT_DATASET_ROOT } from '../apps/server/src/datasets/dataset-routes';
+import { SemanticArtifact } from '../apps/server/src/spatial/semantic-artifact';
+import { loadPreparedSemanticDiskIndex, recordBytes } from '../apps/server/src/spatial/semantic-disk-index';
+import { SpatialPageIndex } from '../apps/server/src/spatial/spatial-page-index';
+import { readPreprocessing } from '../apps/server/src/preprocessing/preprocessing-summary';
+import { assessUtilityBox, type UtilityBoxAssessment } from '../apps/server/src/placement/utility-box-placement';
 async function main() {
   const signal = AbortSignal.timeout(180000), snapshot = await SemanticArtifact.open(process.argv[2] ?? DEFAULT_DATASET_ROOT, signal);
   try {

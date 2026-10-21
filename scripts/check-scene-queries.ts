@@ -4,12 +4,12 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import type { DatasetInfo, Vec3 } from '@spatial/contracts';
-import { createDatasetRoutes, DEFAULT_DATASET_ROOT } from '../apps/server/src/dataset-routes';
-import { readPreprocessing } from '../apps/server/src/preprocessing-summary';
-import { createGroundSurface } from '../apps/server/src/ground-surface';
-import { SemanticArtifact } from '../apps/server/src/semantic-artifact';
-import { getSemanticDiskIndex, recordBytes } from '../apps/server/src/semantic-disk-index';
-import type { SpatialNearestResult, SpatialRadiusResult, SpatialPoint } from '../apps/server/src/spatial-page-index';
+import { createDatasetRoutes, DEFAULT_DATASET_ROOT } from '../apps/server/src/datasets/dataset-routes';
+import { readPreprocessing } from '../apps/server/src/preprocessing/preprocessing-summary';
+import { createGroundSurface } from '../apps/server/src/spatial/ground-surface';
+import { SemanticArtifact } from '../apps/server/src/spatial/semantic-artifact';
+import { getSemanticDiskIndex, recordBytes } from '../apps/server/src/spatial/semantic-disk-index';
+import type { SpatialNearestResult, SpatialRadiusResult, SpatialPoint } from '../apps/server/src/spatial/spatial-page-index';
 
 type HttpResult = { domain: string; independentVerification: boolean; cadVerification: boolean; operation: string };
 

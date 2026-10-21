@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import type { NearestPoleRequest, NearestPoleToolOutcome } from '@spatial/contracts';
-import { SemanticArtifact } from '../apps/server/src/semantic-artifact';
-import { preparePoleIndex, queryIndexedClosestPole } from '../apps/server/src/pole-index';
+import { SemanticArtifact } from '../apps/server/src/spatial/semantic-artifact';
+import { preparePoleIndex, queryIndexedClosestPole } from '../apps/server/src/spatial/pole-index';
 
 const root = fileURLToPath(new URL('../data/processed/toronto3d/prepared/', import.meta.url));
 const controller = new AbortController(), abort = () => controller.abort();

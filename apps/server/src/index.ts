@@ -1,22 +1,23 @@
 import { createServer, type Server } from 'node:http';
 import { pathToFileURL } from 'node:url';
-import { createDatasetRoutes, DEFAULT_DATASET_ROOT } from './dataset-routes';
-import { ProviderAuth, type ProviderAuthOptions } from './provider-auth';
-import { createAuthRoutes } from './auth-routes';
-import { loadServerConfiguration } from './provider-config';
-import { createModelChatRoutes } from './model-chat-routes';
-import type { ModelTransport } from './provider-model';
-import { createPointOverrideRoutes } from './point-override-routes';
-import { PointOverrideSession } from './point-overrides';
-import { TorontoCadSession } from './toronto-cad-session';
-import { createTorontoCadRoutes } from './toronto-cad-routes';
-import { SceneObjectSession } from './scene-object-session';
-import { createSceneObjectRoutes } from './scene-object-routes';
-import { PlacementSearchSession } from './placement-search-session';
-import { createPlacementSearchRoutes } from './placement-search-routes';
+import { createDatasetRoutes, DEFAULT_DATASET_ROOT } from './datasets/dataset-routes';
+import { ProviderAuth, type ProviderAuthOptions } from './auth/provider-auth';
+import { createAuthRoutes } from './auth/auth-routes';
+import { loadServerConfiguration } from './auth/provider-config';
+import { createModelChatRoutes } from './agent/model-chat-routes';
+import type { ModelTransport } from './agent/provider-model';
+import { createPointOverrideRoutes } from './scene/point-override-routes';
+import { PointOverrideSession } from './scene/point-overrides';
+import { TorontoCadSession } from './cad/toronto-cad-session';
+import { createTorontoCadRoutes } from './cad/toronto-cad-routes';
+import { SceneObjectSession } from './scene/scene-object-session';
+import { createSceneObjectRoutes } from './scene/scene-object-routes';
+import { PlacementSearchSession } from './placement/placement-search-session';
+import { createPlacementSearchRoutes } from './placement/placement-search-routes';
+import { createPreparedCloudRoutes } from './datasets/prepared-cloud-routes';
 
 /** Toronto dataset, point, authored-object and CAD authorities. */
-export function createDemoServer(options: { datasetRoot?: string; provider?: ProviderAuthOptions; modelTransport?: ModelTransport } = {}): Server {
+export function createDemoServer(options: { datasetRoot?: string; preparedClouds?: Readonly<Record<string, string>>; provider?: ProviderAuthOptions; modelTransport?: ModelTransport } = {}): Server {
   // Factory callers/tests never load the operator's .env or authentication store implicitly.
   const auth = new ProviderAuth(options.provider ?? { mode: 'disabled' });
   const authRoutes = createAuthRoutes(auth, options.provider?.redirectUri);
@@ -29,6 +30,7 @@ export function createDemoServer(options: { datasetRoot?: string; provider?: Pro
   const objectRoutes = createSceneObjectRoutes(directory, points, objects);
   const modelRoutes = createModelChatRoutes(auth, directory, options.modelTransport, { points, cad, objects, placement });
   const datasetRoutes = createDatasetRoutes(options.datasetRoot);
+  const preparedRoutes = createPreparedCloudRoutes(options.preparedClouds);
   const pointOverrideRoutes = createPointOverrideRoutes(directory, points);
   const torontoCadRoutes = createTorontoCadRoutes(directory, cad);
   const server = createServer((request, response) => {
@@ -45,6 +47,7 @@ export function createDemoServer(options: { datasetRoot?: string; provider?: Pro
       return;
     }
     const dispatch = async () => {
+      if (await preparedRoutes(request, response)) return;
       if (await authRoutes(request, response)) return;
       if (await modelRoutes.handle(request, response)) return;
       if (await pointOverrideRoutes.handle(request, response)) return;

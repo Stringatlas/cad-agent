@@ -1,8 +1,8 @@
 // Bounded actual-artifact integration check; never preprocesses or rewrites dataset files.
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { PotreeDataset, READ_LIMITS } from '../apps/server/src/potree';
-import { DEFAULT_DATASET_ROOT } from '../apps/server/src/dataset-routes';
+import { PotreeDataset, READ_LIMITS } from '../apps/server/src/datasets/potree';
+import { DEFAULT_DATASET_ROOT } from '../apps/server/src/datasets/dataset-routes';
 import { createIsolatedDemoServer as createDemoServer } from './isolated-demo-server';
 import { once } from 'node:events';
 

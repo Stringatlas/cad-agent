@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
-import { prepareSemanticInstances, DEFAULT_INSTANCE_CLASSES, type InstanceClass, type InstanceOptions } from '../apps/server/src/semantic-instances';
+import { prepareSemanticInstances, DEFAULT_INSTANCE_CLASSES, type InstanceClass, type InstanceOptions } from '../apps/server/src/preprocessing/semantic-instances';
 
 export function parseInstanceArguments(args: readonly string[]) {
   if (args.length < 2 || (args.length - 2) % 2) throw new Error('Usage: cluster-semantic-instances.ts DATASET_ROOT NEW_OUTPUT_DIR [--classes 6:0.25,7:0.5,8:0.35] [--max-cells N] [--max-output-bytes N] [--max-manifest-bytes N] [--max-ms N]');

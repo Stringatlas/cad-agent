@@ -85,7 +85,7 @@ one-command provisioning, byte-identical conversion or new dataset editing suppo
 
 ## Generic read-only adapter
 
-`apps/server/src/prepared-cloud.ts` exposes an operator-owned registry and
+`apps/server/src/datasets/prepared-cloud.ts` exposes an operator-owned registry and
 revision-bound reader. The underlying bounded metadata, hierarchy and asset I/O
 in `potree-core.ts` are shared with Toronto's existing strict adapter. Toronto
 retains its own origin, class and provenance validation; loading another cloud
@@ -148,7 +148,7 @@ readable merely because metadata loads. The revision binds descriptor/metadata,
 first hierarchy chunk and asset identities; it is **not** a whole-file integrity
 hash. Source checksums and full offline validation remain separate requirements.
 
-`tests/prepared-cloud.test.ts` constructs a real on-disk second-cloud fixture
+`tests/datasets/prepared-cloud.test.ts` constructs a real on-disk second-cloud fixture
 with different source IDs, origin and optional non-Toronto semantics. The adapter
 is a callable server module, **not yet wired to HTTP, the viewer, chat, picking,
 full-resolution streaming or editing**. Product wiring must bind every reference,
@@ -158,8 +158,8 @@ adding `cloud.json` alone does not convert it.
 
 ## Verification levels
 
-1. `python3 tests/dataset-recipe.test.py`: small fixtures, no data/dependencies.
-2. Venv Python `tests/toronto3d-preprocessing.test.py`: small conversion fixtures,
+1. `python3 tests/preprocessing/dataset-recipe.test.py`: small fixtures, no data/dependencies.
+2. Venv Python `tests/preprocessing/toronto3d-preprocessing.test.py`: small conversion fixtures,
    real LAS encoding, mocked converter subprocess; no production conversion.
 3. `python3 scripts/dataset_recipe.py`: all source/sidecar hashes on real inputs;
    no output payload correctness claim.

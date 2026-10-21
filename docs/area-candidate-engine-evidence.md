@@ -2,7 +2,7 @@
 
 ## Algorithm and contract
 
-`apps/server/src/area-candidate-search.ts` exports `searchAreaCandidates(snapshot, area, settings, authorities, signal)` and `validateAreaCandidateSettings(value)`. It does not create or retain CAD/point proposals. The authority caller must reject effective source edits and compare both live authorities after the await before publishing.
+`apps/server/src/placement/area-candidate-search.ts` exports `searchAreaCandidates(snapshot, area, settings, authorities, signal)` and `validateAreaCandidateSettings(value)`. It does not create or retain CAD/point proposals. The authority caller must reject effective source edits and compare both live authorities after the await before publishing.
 
 One request-local pass visits **each relevant physical original-source semantic page at most once**. Exact validated per-label page XY bounds can exclude only pages with neither AOI observations nor Pole observations. Every pole-bearing page globally is included, even outside the AOI. Every record in each visited page is examined; there is no witness/sample cap or per-candidate page query. The semantic cache preserves original records and provenance; `getSemanticDiskIndex` can prepare it if missing. No terrain preprocessing, equipment box or CAD proposal is required.
 
@@ -63,7 +63,7 @@ A preliminary real run on XY `[100,200]×[100,200]` completed in 1019.528833ms, 
 
 ## Focused verification
 
-- `pnpm exec tsx --test tests/area-candidate-search.test.ts`: **8/8 passed**. Covers 100×100m exhaustive counts and no page rereads, IDs/ranks/diversity, insufficient/missing support, full relief, unknown/high obstacles, rotated rectangle, conservative global pole bounds/rankings, disk clearance, pre/mid-pass cancellation, grid budget, source mutation, strict settings/frame validation.
+- `pnpm exec tsx --test tests/placement/area-candidate-search.test.ts`: **8/8 passed**. Covers 100×100m exhaustive counts and no page rereads, IDs/ranks/diversity, insufficient/missing support, full relief, unknown/high obstacles, rotated rectangle, conservative global pole bounds/rankings, disk clearance, pre/mid-pass cancellation, grid budget, source mutation, strict settings/frame validation.
 - `git diff --check`: passed for the current shared workspace at the checkpoint.
 - LSP diagnostics run after source/test/script edits. Initial child-checkpoint missing contract exports were resolved by parent integration. Final workspace typecheck/build pass; see task065 for current checks rather than the superseded intermediate compiler state.
 - GitNexus concept query inspected original-source page/index flow. Impact on new engine/helper was `UNKNOWN` (not indexed); source search confirmed only new engine/tests/script references, with no existing server edits by this child. Index is two commits behind. No commit was attempted.

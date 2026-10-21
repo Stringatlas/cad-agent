@@ -4,8 +4,8 @@ import { createHash } from 'node:crypto';
 import { open, readFile, stat } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SemanticArtifact, SEMANTIC_LIMITS } from '../apps/server/src/semantic-artifact';
-import type { InstanceManifest } from '../apps/server/src/semantic-instances';
+import { SemanticArtifact, SEMANTIC_LIMITS } from '../apps/server/src/spatial/semantic-artifact';
+import type { InstanceManifest } from '../apps/server/src/preprocessing/semantic-instances';
 
 export async function checkSemanticInstances(datasetRoot: string, directory: string, signal?: AbortSignal) {
   assert.ok((await stat(join(directory, 'manifest.json'))).size <= 64 * 1024 * 1024, 'Audit manifest budget exceeded');

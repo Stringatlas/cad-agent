@@ -19,7 +19,7 @@ Output directory must not exist. Successful publication atomically renames a com
 
 ## Derived artifact
 
-`apps/server/src/scene-preprocessing.ts` owns the versioned `ScenePreprocessing` TypeScript schema, not contracts/UI/CAD authority. The output `manifest.json` binds source revision, index/source hashes, original instance manifest/membership hashes, Toronto local frame/origin and meters. Preparation independently hashes the original payload, streams three checksummed disk-page passes and validates original membership/source keys, checksums and counts. Memory is O(instances + occupied ground cells), not O(78M points).
+`apps/server/src/preprocessing/scene-preprocessing.ts` owns the versioned `ScenePreprocessing` TypeScript schema, not contracts/UI/CAD authority. The output `manifest.json` binds source revision, index/source hashes, original instance manifest/membership hashes, Toronto local frame/origin and meters. Preparation independently hashes the original payload, streams three checksummed disk-page passes and validates original membership/source keys, checksums and counts. Memory is O(instances + occupied ground cells), not O(78M points).
 
 - **Ground:** labels 1 Ground and 2 Road_markings only; 2m sparse grid with origin `[0,0]`, exact observed minimum Z, point count and maximum Z per cell. At least three points support an elevation/visible tile. `groundElevation(ground,x,y)` returns the observed minimum or `undefined`; no hole interpolation/extrapolation. The lower envelope is sensitive to low outliers and is not a smoothed terrain certification. The legacy helper scans the cell array; task042 adds an indexed interpolated query described below.
 - **Poles:** vertical cylinder using mean XY, RMS radial distance and observed height. Partial/asymmetric scans can bias center/radius.
@@ -33,7 +33,7 @@ Output directory must not exist. Successful publication atomically renames a com
 
 ## Full-dataset spatial library
 
-`SpatialPageIndex.create(snapshot,disk)` in `apps/server/src/spatial-page-index.ts` builds a median-split **page KD-tree/BVH** whose leaves cover every physical disk page. It does not allocate 78M point nodes or replace production verified label tools. Reuse the tree with the caller-owned snapshot.
+`SpatialPageIndex.create(snapshot,disk)` in `apps/server/src/spatial/spatial-page-index.ts` builds a median-split **page KD-tree/BVH** whose leaves cover every physical disk page. It does not allocate 78M point nodes or replace production verified label tools. Reuse the tree with the caller-owned snapshot.
 
 - `nearest(position,{label?,signal?,maxPages?,maxMilliseconds?})`: exact original-point Euclidean nearest, deterministic physical/source-key ties, bound provenance and checked-page/time stats.
 - `radius(position,radiusMeters,{maxResults?,...})`: exact total count, capped deterministic subset (not closest-k), explicit truncation. Default 1000/max10000 retained points.

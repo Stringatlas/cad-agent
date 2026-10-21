@@ -1,5 +1,5 @@
 {
   "extends": "../tsconfig.base.json",
   "compilerOptions": { "types": ["node"], "lib": ["ES2022", "DOM"] },
-  "include": ["*.test.ts", "../scripts/check-toronto-preview.ts", "../scripts/check-closest-pole.ts", "../scripts/check-closest-pole-http.ts", "../scripts/check-pole-index.ts", "../scripts/check-closest-pole-performance-http.ts", "../scripts/check-closest-label-disk.ts"]
+  "include": ["**/*.test.ts", "../scripts/check-toronto-preview.ts", "../scripts/check-closest-pole.ts", "../scripts/check-closest-pole-http.ts", "../scripts/check-pole-index.ts", "../scripts/check-closest-pole-performance-http.ts", "../scripts/check-closest-label-disk.ts"]
 }

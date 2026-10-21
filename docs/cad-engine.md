@@ -108,4 +108,4 @@ Normal validation/resource rejections preserve existing bodies. Cancelling an **
 
 ## Verification
 
-`pnpm exec tsx --test tests/cad-engine.test.ts tests/cad-http.test.ts` exercises actual OCCT and public HTTP transport. `pnpm verify` passes138/138 tests, typechecks and builds. Fresh source review and independent failure probes found no actionable defect; task013 lists artifacts, exact commands and graph/LSP limitations. Browser checks were not rerun for this non-UI slice.
+`pnpm exec tsx --test "tests/cad/*.test.ts"` exercises actual OCCT and public HTTP transport. Task013 records the historical 138/138 verification, typecheck/build results, fresh source review and independent failure probes, along with graph/LSP limitations. Current suite verification is recorded in [task079](tasks/079-test-suite-cleanup.md). Browser checks were not rerun for this non-UI slice.

@@ -2,8 +2,8 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TORONTO_SEMANTIC_LABELS, type Vec3, type ModelAreaOfInterest } from '@spatial/contracts';
-import { SemanticArtifact } from '../../apps/server/src/semantic-artifact';
-import { getSemanticDiskIndex, dropSemanticDiskIndexMemoryCache } from '../../apps/server/src/semantic-disk-index';
+import { SemanticArtifact } from '../../apps/server/src/spatial/semantic-artifact';
+import { getSemanticDiskIndex, dropSemanticDiskIndexMemoryCache } from '../../apps/server/src/spatial/semantic-disk-index';
 export type SourcePoint = { xyz: Vec3; label: number };
 export function denseGround(size: number, cell = .5): SourcePoint[] {
   const points: SourcePoint[] = [];

@@ -1,20 +1,21 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { resolveAgentTorontoPoint } from './agent-reference';
-  import Toronto from './Toronto.svelte';
-  import ClosestPole from './ClosestPole.svelte';
-  import Chat from './Chat.svelte';
-  import ProviderAccount from './ProviderAccount.svelte';
-  import { createPointSequence, replaceDraftPoint, type TorontoDraftPoint } from './draft-context';
+  import { resolveAgentTorontoPoint } from './chat/agent-reference';
+  import Toronto from './scenes/toronto/Toronto.svelte';
+  import Dales from './scenes/dales/Dales.svelte';
+  import ClosestPole from './scenes/toronto/inspection/ClosestPole.svelte';
+  import Chat from './chat/Chat.svelte';
+  import ProviderAccount from './auth/ProviderAccount.svelte';
+  import { createPointSequence, replaceDraftPoint, type TorontoDraftPoint } from './chat/draft-context';
   import type { PointOverrideSnapshot, PointMoveProposal, ModelReferenceSelection } from '@spatial/contracts';
-  import { authoredReference } from './scene-object-client';
+  import { authoredReference } from './scenes/toronto/objects/scene-object-client';
   import type { SceneObjectSnapshot, AuthoredObjectReference } from '@spatial/contracts';
   let objectRefresh = $state(0), objectBlocked = $state(true);
   let objectSnapshot = $state<SceneObjectSnapshot>(), selectedObjectId = $state<string>();
   const selectedObject = $derived(objectSnapshot?.objects.find(object => object.id === selectedObjectId));
   const objectReferences = $derived<AuthoredObjectReference[]>(selectedObject && objectSnapshot ? [authoredReference(objectSnapshot, selectedObject)] : []);
-  import { verifiedNearestSelection } from './point-override-client';
-  import { placementWitnessSelection, type PlacementWitnessSelection } from './utility-box-evidence';
+  import { verifiedNearestSelection } from './scenes/toronto/points/point-override-client';
+  import { placementWitnessSelection, type PlacementWitnessSelection } from './scenes/toronto/placement/utility-box-evidence';
   let pointOverrides = $state<PointOverrideSnapshot>();
   let pointPreview = $state<PointMoveProposal>();
   let torontoRevision = $state<string>();
@@ -57,11 +58,11 @@
     if (mode !== 'toronto' || point.artifactRevision !== torontoRevision) { pointStatus = 'Stale query result; select a fresh source.'; return; }
     pinToronto({ ...point, name: pointSequence.allocate() });
   }
-  import type { VisualModelSource } from './visual-model-source';
-  import type { AreaOfInterestInput } from './area-of-interest';
+  import type { VisualModelSource } from './chat/visual/visual-model-source';
+  import type { AreaOfInterestInput } from './scenes/toronto/placement/area-of-interest';
   let areaInput = $state<AreaOfInterestInput>();
   let visualSource = $state<VisualModelSource>();
-  let mode = $state<'toronto' | 'pole'>('toronto');
+  let mode = $state<'dales' | 'toronto' | 'pole'>('dales');
   let chatOpen = $state(true);
   let points = $state<readonly TorontoDraftPoint[]>([]);
   const pointSequence = createPointSequence();
@@ -74,22 +75,25 @@
   onMount(() => { if (window.matchMedia('(max-width: 640px)').matches) chatOpen = false;  });
 </script>
 
-<svelte:head><title>Spatial · Scene workspace</title></svelte:head>
+<svelte:head><title>Spatial</title></svelte:head>
 <header class="workspace-header">
   <a class="brand" href="#workspace"><span class="brand-icon" aria-hidden="true">◇</span><span>Spatial</span></a>
   <select class="workspace-select" aria-label="Scene source" value={mode} onchange={event => switchSource(event.currentTarget.value as typeof mode)}>
+    <option value="dales">DALES-2</option>
     <option value="toronto">Toronto3D</option>
     <option value="pole">Find nearest</option>
   </select>
   <div class="header-actions"><a class="tools-link" href="/tools">Tools</a><button class="chat-toggle" aria-label="Toggle chat" aria-pressed={chatOpen} onclick={() => chatOpen = !chatOpen}>Chat</button><ProviderAccount /></div>
 </header>
-<div id="workspace" class="integrated-workspace" class:chat-closed={!chatOpen} data-testid="shared-workspace">
+<div id="workspace" class="integrated-workspace" class:chat-closed={!chatOpen} class:dales={mode === 'dales'} data-testid="shared-workspace">
   <div class="scene-source">
-    {#if mode === 'toronto'}
+    {#if mode === 'dales'}
+      <Dales />
+    {:else if mode === 'toronto'}
       <Toronto bind:this={toronto} {objectRefresh} onobjectstate={(snapshot, selectedId, blocked) => { objectSnapshot = snapshot; selectedObjectId = selectedId; objectBlocked = blocked; }} onarea={value => areaInput = value} {pointOverrides} {pointPreview} {pointRefresh} onpointstate={(snapshot, proposal, blocked) => { pointOverrides = snapshot; pointPreview = proposal; pointBlocked = !!blocked; }} {cadRefresh} modelStreaming={torontoStreaming} oncadblocked={value => torontoCadBlocked = value} onrevision={value => { if (torontoRevision && torontoRevision !== value) { sourceGeneration++; pointOverrides = undefined; pointPreview = undefined; points = []; } torontoRevision = value; }} onvisualsource={value => visualSource = value} {points} allocatePointName={() => pointSequence.allocate()} onpoint={pinToronto} onpoints={value => { points = value; pointStatus = ''; }} />
     {:else}<ClosestPole />{/if}
   </div>
-  <div class="chat-shell" class:mobile-open={chatOpen}><Chat {objectReferences} {selectedObject} onclearobject={() => toronto?.clearObjectSelection()} {objectBlocked} onobjectproposal={() => objectRefresh++} onscenemarks={snapshot => { if (mode !== 'toronto' || !toronto) throw new Error('Location annotations unavailable.'); toronto.receiveSceneMarks(snapshot); }} onareacandidates={async (result, current) => { const source = toronto, generation = sourceGeneration; if (mode !== 'toronto' || !source || !current()) throw new Error('Toronto candidates unavailable.'); await source.receiveAreaCandidates(result, () => mode === 'toronto' && source === toronto && generation === sourceGeneration && current()); }} onplacementsearch={async (result, current) => { const source = toronto, generation = sourceGeneration; if (mode !== 'toronto' || !source || !current()) throw new Error('Toronto placement unavailable.'); await source.receivePlacementSearch(result, () => mode === 'toronto' && source === toronto && generation === sourceGeneration && current()); }} onselectreference={selectAgentReference} onauthorityrefresh={refreshAgentAuthorities} {areaInput} {pointBlocked} onpointproposal={() => pointRefresh++} {torontoCadBlocked} oncadproposal={() => cadRefresh++} ontorontostreaming={value => torontoStreaming = value} {pointOverrides} onverifiedresult={selectVerified} {visualSource} sceneMode={mode} {points} {pointStatus} onclearpoint={name => { points = points.filter(point => point.name !== name); pointStatus = ''; }} /></div>
+  <div class="chat-shell" class:mobile-open={chatOpen}>{#if mode === 'dales'}<p class="chat-unavailable">Agent chat is not available for DALES-2 yet.</p>{:else}<Chat {objectReferences} {selectedObject} onclearobject={() => toronto?.clearObjectSelection()} {objectBlocked} onobjectproposal={() => objectRefresh++} onscenemarks={snapshot => { if (mode !== 'toronto' || !toronto) throw new Error('Location annotations unavailable.'); toronto.receiveSceneMarks(snapshot); }} onareacandidates={async (result, current) => { const source = toronto, generation = sourceGeneration; if (mode !== 'toronto' || !source || !current()) throw new Error('Toronto candidates unavailable.'); await source.receiveAreaCandidates(result, () => mode === 'toronto' && source === toronto && generation === sourceGeneration && current()); }} onplacementsearch={async (result, current) => { const source = toronto, generation = sourceGeneration; if (mode !== 'toronto' || !source || !current()) throw new Error('Toronto placement unavailable.'); await source.receivePlacementSearch(result, () => mode === 'toronto' && source === toronto && generation === sourceGeneration && current()); }} onselectreference={selectAgentReference} onauthorityrefresh={refreshAgentAuthorities} {areaInput} {pointBlocked} onpointproposal={() => pointRefresh++} {torontoCadBlocked} oncadproposal={() => cadRefresh++} ontorontostreaming={value => torontoStreaming = value} {pointOverrides} onverifiedresult={selectVerified} {visualSource} sceneMode={mode} {points} {pointStatus} onclearpoint={name => { points = points.filter(point => point.name !== name); pointStatus = ''; }} />{/if}</div>
 </div>
 <style>
   :global(*) { box-sizing: border-box; }
@@ -108,11 +112,17 @@
   .header-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
   .tools-link { display: inline-flex; align-items: center; min-height: 44px; padding: 5px 8px; color: #b4b5be; text-decoration: none; }
   .tools-link:hover { color: #fff; }
+  .chat-toggle { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 5px 12px; color: #d7d9df; background: transparent; border: 1px solid transparent; border-radius: 7px; cursor: pointer; }
+  .chat-toggle:hover { color: #fff; background: #ffffff0d; }
+  .chat-toggle[aria-pressed='true'] { color: #f2f2f5; background: #ffffff12; border-color: #ffffff18; }
   .integrated-workspace { position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 360px; overflow: hidden; }
   .integrated-workspace.chat-closed { grid-template-columns: minmax(0, 1fr); }
   .chat-closed .chat-shell { display: none; }
   .scene-source, .chat-shell { min-width: 0; min-height: 0; height: 100%; overflow: hidden; }
   .chat-shell { border-left: 1px solid #ffffff12; }
+  .chat-unavailable { color: #b4b5be; margin: 12px; }
+  .integrated-workspace.dales { grid-template-columns: minmax(0, 1fr); }
+  .integrated-workspace.dales .chat-shell { position: absolute; z-index: 4; top: auto; right: 12px; bottom: 12px; width: min(280px, calc(100% - 24px)); height: auto; border: 1px solid #ffffff20; border-radius: 10px; background: #202124f0; }
   .scene-source { position: relative; background: #151619; }
   @media (min-width: 1600px) { .integrated-workspace { grid-template-columns: minmax(0, 1fr) 390px; } }
   @media (max-width: 900px) { .workspace-header { gap: 12px; padding: 0 12px; } .brand > span:last-child { display: none; } .header-actions { gap: 5px; } .workspace-select { max-width: 170px; font-size: 12px; } }

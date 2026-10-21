@@ -13,9 +13,9 @@ and [product vision](../product-vision.md).
 - `packages/contracts/src/point-overrides.ts`: point moves require an existing
   source `PointKey`. They cannot create a new point.
 - `packages/contracts/src/toronto-cad.ts` and
-  `apps/server/src/toronto-cad-session.ts`: separate volatile Toronto authority
+  `apps/server/src/cad/toronto-cad-session.ts`: separate volatile Toronto authority
   retains real box/cylinder candidates and publishes exact bodies on acceptance.
-- `apps/server/src/model-scene.ts`: model access binds these separate authorities;
+- `apps/server/src/agent/model-scene.ts`: model access binds these separate authorities;
   there is no shared authored-object identity/reference model.
 
 Adding fake source records or another renderer-only point tool would perpetuate

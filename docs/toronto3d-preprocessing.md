@@ -44,8 +44,8 @@ new output such as `prepared-reproduction/` and pass it to `--prepared` below.
 
 ```sh
 PY=data/processed/toronto3d/tooling/venv/bin/python
-"$PY" tests/dataset-recipe.test.py
-"$PY" tests/toronto3d-preprocessing.test.py
+"$PY" tests/preprocessing/dataset-recipe.test.py
+"$PY" tests/preprocessing/toronto3d-preprocessing.test.py
 "$PY" scripts/preprocess-toronto3d.py \
   --out data/processed/toronto3d/prepared \
   --converter data/processed/toronto3d/tooling/PotreeConverter/build-gcc/PotreeConverter

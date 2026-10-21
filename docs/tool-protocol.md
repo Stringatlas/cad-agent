@@ -7,8 +7,8 @@ This additive, headless slice implements [task011](tasks/011-tool-protocol-evide
 - `packages/contracts/src/tool-protocol.ts`: versioned envelopes, fixed bindings, canonical/detached arguments and small runtime validators; no framework or Node imports.
 - `packages/agent-harness/src/tool-protocol.ts`: allowlist, returned-data/evidence validation, admission, cancellation and semantic projection through an injected `ReadonlyToolAdapter` and SHA-256 function. No concrete Node/server/Pi/render/kernel types.
 - `packages/agent-harness/src/run-evidence.ts`: redacted bounded export, strict loading and executing replay.
-- `apps/server/src/tool-adapter.ts`: trusted composition of `PotreeDataset.info/observe` and `queryIndexedClosestPole`. The historical query name supports all nine scalar labels and still independently verifies every complete result.
-- `apps/server/src/tool-evidence.ts`: fixed prepared-asset digests and operator-only evidence persistence.
+- `apps/server/src/agent/tool-adapter.ts`: trusted composition of `PotreeDataset.info/observe` and `queryIndexedClosestPole`. The historical query name supports all nine scalar labels and still independently verifies every complete result.
+- `apps/server/src/agent/tool-evidence.ts`: fixed prepared-asset digests and operator-only evidence persistence.
 
 The adapter and hasher are trusted dependencies, not request fields. Structural checks reject wrong bindings, unknown statuses, forged request/configuration hashes, inconsistent witnesses/counts/coverage and mismatched search/verifier evidence. They do **not** turn an arbitrary malicious implementation with fabricated, internally consistent proof strings into an independently verified source. The concrete adapter's existing independent verifier remains the authority. Hashes are integrity/comparison values, not signatures or proof of authorship.
 
@@ -103,6 +103,6 @@ const replay = await prepared.replay(await store.load('inspection-1'));
 
 ## Verification boundary
 
-`tests/tool-protocol.test.ts` covers validation, all-label/domain forwarding, returned data/evidence tampering, budgets, rejection/resource/errors, cancellation/deadline/late work and semantic-vs-read-work hashing. `tests/run-evidence.test.ts` exercises real tiny prepared assets and independent indexed verification for all nine labels, streamed content identities, persisted replay, redaction/export limits, schema/tool/code/config/outcome/artifact tampering and constrained storage.
+`tests/agent/tool-protocol.test.ts` covers validation, all-label/domain forwarding, returned data/evidence tampering, budgets, rejection/resource/errors, cancellation/deadline/late work and semantic-vs-read-work hashing. `tests/agent/run-evidence.test.ts` exercises real tiny prepared assets and independent indexed verification for all nine labels, streamed content identities, persisted replay, redaction/export limits, schema/tool/code/config/outcome/artifact tampering and constrained storage.
 
 No browser verification is applicable to these headless-only additions. Exact check results and unresolved graph/fresh-review gates belong to task011; this document does not declare the task complete or independently reviewed.

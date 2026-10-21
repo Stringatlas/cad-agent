@@ -12,6 +12,10 @@ coverage/
 *.key
 data/
 datasets/
+# Server dataset adapters are source code.
+!/apps/server/src/datasets/
+# Dataset behavior tests are source code.
+!/tests/datasets/
 *.las
 *.laz
 *.pcd

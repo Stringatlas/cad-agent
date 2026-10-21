@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { prepareScenePreprocessing } from '../apps/server/src/scene-preprocessing';
+import { prepareScenePreprocessing } from '../apps/server/src/preprocessing/scene-preprocessing';
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const controller = new AbortController();

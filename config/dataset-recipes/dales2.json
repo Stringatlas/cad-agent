@@ -1,0 +1,4505 @@
+{
+  "schema": "spatial-dataset-recipe-v1",
+  "id": "dales2",
+  "adapter": "dales2-local-laz-v1",
+  "upstream": "https://huggingface.co/datasets/mbendjilali/DALES-2",
+  "revision": "5a5e39237a28e2315ae0cc5dad1230cc5dd8ba4f",
+  "acquisition": "huggingface_hub.snapshot_download(repo_id=\"mbendjilali/DALES-2\", repo_type=\"dataset\", revision=\"5a5e39237a28e2315ae0cc5dad1230cc5dd8ba4f\", allow_patterns=\"train/*.laz\", local_dir=\"data/raw/DALES-2\"). Only the 29 locally available train tiles are certified by this recipe.",
+  "license": {
+    "spdx": "MIT",
+    "url": "https://huggingface.co/datasets/mbendjilali/DALES-2/blob/5a5e39237a28e2315ae0cc5dad1230cc5dd8ba4f/README.md",
+    "notice": "Release README declares MIT; cite Bendjilali et al., DALES 2, CVPR Workshops 2026 and original DALES / DALES Objects. Upstream license declaration is not an independent legal audit."
+  },
+  "units": "m",
+  "frame": "right-handed Z-up; independent normalized frame per tile",
+  "local_origin_world": [
+    0,
+    0,
+    0
+  ],
+  "crs": "Unknown; no projection VLR; do not infer georeferencing from filenames",
+  "checksum_provenance": "SHA256 computed from every local raw LAZ; every hash matches the cached Hugging Face download metadata at pinned revision. Not upstream-signed.",
+  "readme_sha256": "bf5fbf0703935c02a534452aaaf965624cc92584c6faf8c3e52b3374e50885aa",
+  "semantic_classes": {
+    "0": "Ground",
+    "1": "Vegetation",
+    "2": "Car",
+    "3": "Powerline",
+    "4": "Fence",
+    "5": "Tree",
+    "6": "Pick-up",
+    "7": "Van & Truck",
+    "8": "Heavy-duty",
+    "9": "Utility pole",
+    "10": "Light pole",
+    "11": "Traffic pole",
+    "12": "Habitat",
+    "13": "Complex",
+    "14": "Annex"
+  },
+  "semantic_attribute": "classification",
+  "sources": [
+    {
+      "file": "5080_54435.laz",
+      "source_file_id": 1,
+      "points": 11153689,
+      "bytes": 60283242,
+      "sha256": "b64aad816f123016dfefc547e089a0b026938709b821a0faa502102991a6ec23",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.05,
+          500.04,
+          36.93
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 5506161,
+        "1": 565567,
+        "2": 121653,
+        "3": 13078,
+        "4": 87545,
+        "5": 1938432,
+        "6": 10782,
+        "7": 14004,
+        "8": 550,
+        "9": 2032,
+        "10": 616,
+        "11": 2264,
+        "12": 2171615,
+        "13": 674309,
+        "14": 45081
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5085_54320.laz",
+      "source_file_id": 2,
+      "points": 14181372,
+      "bytes": 82646978,
+      "sha256": "6a393e6060157e6592e549901bf22fae0d1e15b856389ee4e7ea9e22b0c965bc",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.04,
+          500.04,
+          88.9
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 4926289,
+        "1": 956909,
+        "2": 47702,
+        "3": 2803,
+        "4": 32523,
+        "5": 5964429,
+        "6": 7428,
+        "7": 9556,
+        "8": 1707,
+        "9": 820,
+        "10": 1633,
+        "11": 114,
+        "12": 2119536,
+        "13": 54930,
+        "14": 54993
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5095_54440.laz",
+      "source_file_id": 3,
+      "points": 11496317,
+      "bytes": 63438041,
+      "sha256": "d74c69a73870fbdd2516fd5aeda9470bb5e63852ae7a54c4f2ae2f774e89db83",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.03000000000003,
+          500.04,
+          47.95
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 4974996,
+        "1": 850596,
+        "2": 49098,
+        "3": 55534,
+        "4": 11732,
+        "5": 2037412,
+        "6": 16082,
+        "7": 51311,
+        "8": 13168,
+        "9": 6992,
+        "10": 2009,
+        "11": 3113,
+        "13": 3424274
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5095_54455.laz",
+      "source_file_id": 4,
+      "points": 13367451,
+      "bytes": 72617264,
+      "sha256": "eae7eabdef409373b7460c07593d590b84c8f7e01c6372755f7dfa136fab6f5d",
+      "point_format": 6,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.05,
+          500.03000000000003,
+          49.13
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": ""
+        }
+      ],
+      "creation_date": "2026-03-17",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 6153508,
+        "1": 1424824,
+        "2": 64115,
+        "3": 85888,
+        "4": 78830,
+        "5": 3673852,
+        "6": 8596,
+        "7": 13517,
+        "8": 3392,
+        "9": 7533,
+        "10": 1951,
+        "11": 2475,
+        "12": 1633627,
+        "13": 164015,
+        "14": 51328
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5100_54495.laz",
+      "source_file_id": 5,
+      "points": 11872445,
+      "bytes": 65057368,
+      "sha256": "6bd5538df62eba2c2ba0827e82a512b8dcfe6f9e06cf1a786ac7575963d29967",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.03000000000003,
+          500.04,
+          55.660000000000004
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 6261260,
+        "1": 694908,
+        "2": 120883,
+        "3": 14010,
+        "4": 119639,
+        "5": 2328958,
+        "6": 22459,
+        "7": 22152,
+        "8": 3240,
+        "9": 1819,
+        "10": 5425,
+        "11": 509,
+        "12": 1990272,
+        "13": 140141,
+        "14": 146770
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5105_54405.laz",
+      "source_file_id": 6,
+      "points": 11699759,
+      "bytes": 64244798,
+      "sha256": "cebe5ab516076b5d89af8a584ff3917e1a7a6e5ea2278d678e58542adbfe9edb",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.04,
+          500.03000000000003,
+          54.47
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 6236060,
+        "1": 576407,
+        "2": 93213,
+        "3": 12523,
+        "4": 94517,
+        "5": 2580610,
+        "6": 14298,
+        "7": 18575,
+        "8": 1438,
+        "9": 1526,
+        "10": 1430,
+        "11": 1652,
+        "12": 1606018,
+        "13": 412280,
+        "14": 49212
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5105_54460.laz",
+      "source_file_id": 7,
+      "points": 12752749,
+      "bytes": 70153297,
+      "sha256": "2b1438db7e17d2bd905a1488196e9d319fd7dd2024df81ce2e1f32cb0951fbb2",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.04,
+          500.02000000000004,
+          60.480000000000004
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 6343539,
+        "1": 1212358,
+        "2": 92619,
+        "3": 75151,
+        "4": 75947,
+        "5": 3198219,
+        "6": 15107,
+        "7": 14916,
+        "8": 1139,
+        "9": 7164,
+        "10": 83,
+        "12": 1509510,
+        "13": 144598,
+        "14": 62399
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5110_54320.laz",
+      "source_file_id": 8,
+      "points": 17560116,
+      "bytes": 105218187,
+      "sha256": "491c3e461fac2d5e2b3a83ec9d7cd9423e73a8a56aa66ccd7544b41797b5a039",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.01,
+          500.03000000000003,
+          67.66
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 5832476,
+        "1": 1088499,
+        "2": 8675,
+        "4": 12575,
+        "5": 9105732,
+        "6": 3674,
+        "7": 1226,
+        "9": 139,
+        "12": 1061843,
+        "13": 422425,
+        "14": 22852
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5110_54460.laz",
+      "source_file_id": 9,
+      "points": 13555370,
+      "bytes": 77720677,
+      "sha256": "48700ffc97ef33f931ce39f01defb44d4372e16affab03a883b385884e852ff2",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.03000000000003,
+          500.02000000000004,
+          53.11
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 6352425,
+        "1": 989414,
+        "2": 92439,
+        "3": 63765,
+        "4": 73682,
+        "5": 4260818,
+        "6": 823,
+        "7": 2980,
+        "9": 10428,
+        "10": 1320,
+        "11": 1115,
+        "12": 1403460,
+        "13": 242925,
+        "14": 59776
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5110_54475.laz",
+      "source_file_id": 10,
+      "points": 11498181,
+      "bytes": 63882107,
+      "sha256": "c89547854e8fdb638fd7b661b5120f0707ede88e8d84785ee4a55688abcc4e21",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.04,
+          500.03000000000003,
+          136.74
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 6877184,
+        "1": 577357,
+        "2": 23241,
+        "3": 7917,
+        "4": 48253,
+        "5": 2403788,
+        "6": 3381,
+        "7": 4196,
+        "8": 10200,
+        "9": 1076,
+        "10": 3544,
+        "11": 3521,
+        "12": 381665,
+        "13": 1111946,
+        "14": 40912
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5110_54495.laz",
+      "source_file_id": 11,
+      "points": 11771043,
+      "bytes": 64990961,
+      "sha256": "61816ac1921b0c92df40d85fe4aca09120bd3c731d83b0adc3dbee15f71a1bd4",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.03000000000003,
+          500.04,
+          64.83
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 6468153,
+        "1": 399825,
+        "2": 134739,
+        "3": 25086,
+        "4": 30693,
+        "5": 2429434,
+        "6": 17394,
+        "7": 18879,
+        "8": 4343,
+        "9": 5525,
+        "10": 9087,
+        "11": 2125,
+        "12": 463284,
+        "13": 1711497,
+        "14": 50979
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5115_54480.laz",
+      "source_file_id": 12,
+      "points": 13525852,
+      "bytes": 76879311,
+      "sha256": "d875a5a44bfe150088201bad04bfc6f1dc816693c2b9924d7480649a36a5d78e",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.03000000000003,
+          500.04,
+          93.3
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 5071173,
+        "1": 673988,
+        "2": 91061,
+        "3": 69951,
+        "4": 45393,
+        "5": 4480998,
+        "6": 8905,
+        "7": 13725,
+        "8": 1053,
+        "9": 6690,
+        "10": 1901,
+        "11": 760,
+        "12": 1164175,
+        "13": 1876458,
+        "14": 19621
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5130_54355.laz",
+      "source_file_id": 13,
+      "points": 12023503,
+      "bytes": 66206444,
+      "sha256": "b3dd9e9c4b70a557372e70d0d1d5ff9f5b90c92462e0fe40d0f329556900bbc4",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.03000000000003,
+          500.04,
+          42.11
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 7449604,
+        "1": 2169278,
+        "2": 50260,
+        "3": 52380,
+        "5": 1880162,
+        "6": 29288,
+        "7": 345451,
+        "8": 17904,
+        "9": 3660,
+        "12": 18037,
+        "14": 7479
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5135_54495.laz",
+      "source_file_id": 14,
+      "points": 11617334,
+      "bytes": 63877477,
+      "sha256": "a550f21e4dea104db4b0cdf6c5d5ddf7069d1b0583474190f017900fc415ac70",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.03000000000003,
+          500.04,
+          49.94
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 6210769,
+        "1": 499765,
+        "2": 69365,
+        "3": 26747,
+        "4": 53763,
+        "5": 2588449,
+        "6": 14375,
+        "7": 18198,
+        "9": 3216,
+        "10": 9212,
+        "11": 2091,
+        "12": 1040425,
+        "13": 965442,
+        "14": 115517
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5140_54445.laz",
+      "source_file_id": 15,
+      "points": 12063052,
+      "bytes": 66585206,
+      "sha256": "c357bdd89a61f2af226e3ef50e6692c4bc0be59df898614598d63f093210fd83",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.03000000000003,
+          500.03000000000003,
+          69.27
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 6424590,
+        "1": 583736,
+        "2": 137609,
+        "3": 22879,
+        "4": 107472,
+        "5": 2469167,
+        "6": 20234,
+        "7": 17066,
+        "8": 1172,
+        "9": 649,
+        "10": 4762,
+        "11": 788,
+        "12": 2241076,
+        "14": 31852
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5145_54340.laz",
+      "source_file_id": 16,
+      "points": 11807976,
+      "bytes": 65711357,
+      "sha256": "dde74ec6105b97c46efac2fb7e4ea1e2e90162d278b5d32cab708ac575b31076",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.04,
+          500.03000000000003,
+          54.42
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 6595533,
+        "1": 758584,
+        "2": 20110,
+        "3": 69312,
+        "4": 29401,
+        "5": 2200551,
+        "6": 3628,
+        "7": 3814,
+        "8": 587,
+        "9": 11949,
+        "10": 1441,
+        "11": 4566,
+        "12": 1379819,
+        "13": 696301,
+        "14": 32380
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5145_54405.laz",
+      "source_file_id": 17,
+      "points": 12064535,
+      "bytes": 69205563,
+      "sha256": "a5883063ec7912fee9aa7185fae0248ea4f5f57232a3cb7af1749c4be192b3ba",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.04,
+          500.04,
+          50.04
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 6733242,
+        "1": 2447344,
+        "2": 8104,
+        "3": 16462,
+        "4": 34455,
+        "5": 2546944,
+        "6": 2394,
+        "7": 50393,
+        "8": 12772,
+        "9": 2083,
+        "10": 2494,
+        "11": 1479,
+        "12": 174624,
+        "14": 31745
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5145_54460.laz",
+      "source_file_id": 18,
+      "points": 12191052,
+      "bytes": 67182879,
+      "sha256": "4bbb68baa2fa8402be7d6d8e37e3c78abde349db702e639a4aeb4b78d740f876",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.03000000000003,
+          500.03000000000003,
+          48.39
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 6152966,
+        "1": 492329,
+        "2": 64431,
+        "3": 351,
+        "4": 47356,
+        "5": 2707749,
+        "6": 8802,
+        "7": 13011,
+        "8": 1530,
+        "11": 248,
+        "12": 1915086,
+        "13": 661755,
+        "14": 125438
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5145_54470.laz",
+      "source_file_id": 19,
+      "points": 11898373,
+      "bytes": 65108821,
+      "sha256": "eec44b7da87993806caf2a679d5d290305e5a2b24b6166efa9366de601df7a52",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.03000000000003,
+          500.03000000000003,
+          35.54
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 6053645,
+        "1": 550235,
+        "2": 130903,
+        "3": 10776,
+        "4": 95846,
+        "5": 2596046,
+        "6": 12158,
+        "7": 14903,
+        "8": 1459,
+        "9": 3776,
+        "10": 3142,
+        "11": 1476,
+        "12": 2287562,
+        "13": 78895,
+        "14": 57551
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5145_54480.laz",
+      "source_file_id": 20,
+      "points": 12566988,
+      "bytes": 69871323,
+      "sha256": "2876eb1ec3a66220a4a7c5a60b6b78637eb066811b7e807c479712276286e86f",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.02000000000004,
+          500.03000000000003,
+          41.54
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 5911903,
+        "1": 561568,
+        "2": 52097,
+        "3": 9153,
+        "4": 19471,
+        "5": 3134576,
+        "6": 4977,
+        "7": 7597,
+        "8": 125,
+        "9": 4148,
+        "10": 796,
+        "11": 2719,
+        "12": 764468,
+        "13": 2068762,
+        "14": 24628
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5150_54340.laz",
+      "source_file_id": 21,
+      "points": 13483881,
+      "bytes": 78338640,
+      "sha256": "6c2aeae056a1256fadbc49dc4d29baaa56af58962ba9370c39dcf1caadd1a162",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.03000000000003,
+          500.03000000000003,
+          60.0
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 5898692,
+        "1": 896304,
+        "2": 23860,
+        "3": 31328,
+        "4": 14129,
+        "5": 4404442,
+        "6": 1553,
+        "7": 2554,
+        "8": 223,
+        "9": 2962,
+        "10": 170,
+        "11": 1319,
+        "12": 1723696,
+        "13": 469148,
+        "14": 13501
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5160_54330.laz",
+      "source_file_id": 22,
+      "points": 11814747,
+      "bytes": 66100569,
+      "sha256": "ca0e93068cec44590d0f079371e6cbd26c347c3eb99997a93da3a32a0e9b604b",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.03000000000003,
+          500.05,
+          71.8
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 5806428,
+        "1": 767313,
+        "2": 36156,
+        "3": 26788,
+        "4": 40402,
+        "5": 2662212,
+        "6": 6723,
+        "7": 4129,
+        "9": 1007,
+        "10": 1888,
+        "11": 1235,
+        "12": 1810019,
+        "13": 626868,
+        "14": 23579
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5165_54390.laz",
+      "source_file_id": 23,
+      "points": 6582632,
+      "bytes": 35134954,
+      "sha256": "6a4b11fa8e1051b75aef95089012db7456dc56e774abc50e93313b27f9b74a71",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.05,
+          500.03000000000003,
+          25.830000000000002
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 6217689,
+        "1": 33406,
+        "2": 10815,
+        "3": 22009,
+        "4": 30259,
+        "6": 1359,
+        "7": 5183,
+        "8": 1130,
+        "9": 4580,
+        "10": 1757,
+        "11": 1769,
+        "12": 117853,
+        "13": 129198,
+        "14": 5625
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5165_54395.laz",
+      "source_file_id": 24,
+      "points": 13558873,
+      "bytes": 79720665,
+      "sha256": "824b476da64c7daf64ba65e3f5c207e39c409556297d73874b546e28f225dc9e",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.06,
+          500.04,
+          84.42
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 5669160,
+        "1": 1509874,
+        "2": 72403,
+        "3": 395,
+        "4": 40943,
+        "5": 4320791,
+        "6": 20061,
+        "7": 6203,
+        "10": 123,
+        "12": 1887618,
+        "14": 31302
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5180_54435.laz",
+      "source_file_id": 25,
+      "points": 11887488,
+      "bytes": 68058461,
+      "sha256": "a8196039103b754476f7796babb431eabff772624b91ce8501b8114534812a5f",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.03000000000003,
+          500.04,
+          54.57
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 6604885,
+        "1": 1118410,
+        "2": 54579,
+        "3": 16029,
+        "4": 40449,
+        "5": 2560808,
+        "6": 9590,
+        "7": 16597,
+        "9": 1537,
+        "10": 1224,
+        "11": 457,
+        "12": 1399704,
+        "13": 35393,
+        "14": 27826
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5180_54485.laz",
+      "source_file_id": 26,
+      "points": 11793658,
+      "bytes": 67771790,
+      "sha256": "db2f8561bebef408d035f05ca1f808c476817671ed7e506ad44d89fa190a6f52",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.03000000000003,
+          500.03000000000003,
+          72.05
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 5470158,
+        "1": 1059277,
+        "2": 55612,
+        "3": 8070,
+        "4": 51249,
+        "5": 3237934,
+        "6": 13274,
+        "7": 9734,
+        "9": 717,
+        "10": 676,
+        "12": 1827036,
+        "13": 31045,
+        "14": 28876
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5185_54390.laz",
+      "source_file_id": 27,
+      "points": 11743016,
+      "bytes": 65007702,
+      "sha256": "ce1e759b5c8203270db602095c3241205642f690d1771cc2e75673398cb81544",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.04,
+          500.02000000000004,
+          42.13
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": "Extra Bytes Record"
+        }
+      ],
+      "creation_date": "2026-03-14",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 6860548,
+        "1": 1252569,
+        "2": 46598,
+        "3": 16322,
+        "4": 45985,
+        "5": 2229881,
+        "6": 16346,
+        "7": 11159,
+        "8": 1120,
+        "9": 2114,
+        "10": 4010,
+        "11": 973,
+        "12": 972779,
+        "13": 190502,
+        "14": 92110
+      },
+      "nonblack_rgb_points": 0
+    },
+    {
+      "file": "5185_54485.laz",
+      "source_file_id": 28,
+      "points": 14253406,
+      "bytes": 89038569,
+      "sha256": "10032094b4c5bd6736e482e6683df485a32b97e8019eddc836f11e3ac7983199",
+      "point_format": 7,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "red",
+          "dtype": "uint16"
+        },
+        {
+          "name": "green",
+          "dtype": "uint16"
+        },
+        {
+          "name": "blue",
+          "dtype": "uint16"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.03000000000003,
+          500.04,
+          95.16
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": ""
+        }
+      ],
+      "creation_date": "2026-03-23",
+      "generating_software": "LASzip DLL 3.4 r4 (231020)",
+      "classification_counts": {
+        "0": 5988558,
+        "1": 1244862,
+        "2": 39454,
+        "3": 7046,
+        "4": 26662,
+        "5": 5695992,
+        "6": 9966,
+        "7": 33648,
+        "8": 7597,
+        "9": 131,
+        "10": 1595,
+        "11": 572,
+        "12": 676955,
+        "13": 508803,
+        "14": 11565
+      },
+      "nonblack_rgb_points": 14253406
+    },
+    {
+      "file": "5190_54400.laz",
+      "source_file_id": 29,
+      "points": 11836465,
+      "bytes": 63826361,
+      "sha256": "5d78e758d722297292ca57fd8bb0a668768c53b92ab7f1b2461fb825014232dc",
+      "point_format": 6,
+      "dimensions": [
+        {
+          "name": "X",
+          "dtype": "int32"
+        },
+        {
+          "name": "Y",
+          "dtype": "int32"
+        },
+        {
+          "name": "Z",
+          "dtype": "int32"
+        },
+        {
+          "name": "intensity",
+          "dtype": "uint16"
+        },
+        {
+          "name": "return_number",
+          "dtype": "None"
+        },
+        {
+          "name": "number_of_returns",
+          "dtype": "None"
+        },
+        {
+          "name": "synthetic",
+          "dtype": "None"
+        },
+        {
+          "name": "key_point",
+          "dtype": "None"
+        },
+        {
+          "name": "withheld",
+          "dtype": "None"
+        },
+        {
+          "name": "overlap",
+          "dtype": "None"
+        },
+        {
+          "name": "scanner_channel",
+          "dtype": "None"
+        },
+        {
+          "name": "scan_direction_flag",
+          "dtype": "None"
+        },
+        {
+          "name": "edge_of_flight_line",
+          "dtype": "None"
+        },
+        {
+          "name": "classification",
+          "dtype": "uint8"
+        },
+        {
+          "name": "user_data",
+          "dtype": "uint8"
+        },
+        {
+          "name": "scan_angle",
+          "dtype": "int16"
+        },
+        {
+          "name": "point_source_id",
+          "dtype": "uint16"
+        },
+        {
+          "name": "gps_time",
+          "dtype": "float64"
+        },
+        {
+          "name": "legacy_semantic",
+          "dtype": "int16"
+        },
+        {
+          "name": "legacy_instance",
+          "dtype": "int16"
+        },
+        {
+          "name": "instance",
+          "dtype": "int16"
+        }
+      ],
+      "scales": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "offsets": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "bounds": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          500.03000000000003,
+          500.03000000000003,
+          41.62
+        ]
+      ],
+      "vlrs": [
+        {
+          "user_id": "LASF_Spec",
+          "record_id": 4,
+          "description": ""
+        }
+      ],
+      "creation_date": "2026-03-17",
+      "generating_software": "LASzip DLL 3.5 r0 (251017)",
+      "classification_counts": {
+        "0": 6969967,
+        "1": 450414,
+        "2": 62941,
+        "3": 13794,
+        "4": 79307,
+        "5": 2323193,
+        "6": 20647,
+        "7": 19456,
+        "8": 680,
+        "9": 5245,
+        "10": 713,
+        "11": 546,
+        "12": 1275447,
+        "13": 520907,
+        "14": 93208
+      },
+      "nonblack_rgb_points": 0
+    }
+  ],
+  "converter": {
+    "upstream": "https://github.com/potree/PotreeConverter.git",
+    "commit": "c2cb61843bf2b901e8e257874b1a6dcf67792fb2",
+    "patches": [
+      "scripts/toronto3d/01-darwin.patch",
+      "scripts/toronto3d/02-hierarchy.patch"
+    ],
+    "license": "BSD-2-Clause; scripts/toronto3d/POTREE-LICENSE",
+    "arguments": [
+      "-m",
+      "poisson",
+      "--encoding",
+      "UNCOMPRESSED"
+    ],
+    "reference_executable_sha256": "b4fc33f94acc807225510c986da27f99e778ffddd32a7a7519b7d9a2ccdf8465",
+    "binary_reproducibility": "Not claimed; compiler, linked dependencies and concurrent sampling may change binary/output ordering. Validate semantic identity instead."
+  }
+}

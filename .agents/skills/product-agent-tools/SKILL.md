@@ -49,9 +49,9 @@ File locations below describe current integration seams; verify them before rely
 
 ### 2. Bind the operation to current scene authority
 
-In `apps/server/src/provider-model.ts`, extend `BoundModelScene` with the typed callable capability as appropriate.
+In `apps/server/src/agent/provider-model.ts`, extend `BoundModelScene` with the typed callable capability as appropriate.
 
-In `apps/server/src/model-scene.ts`:
+In `apps/server/src/agent/model-scene.ts`:
 
 - Implement the capability against the bound source/state authorities.
 - Expose it only when prerequisites exist, and keep the reported capability metadata consistent.
@@ -60,7 +60,7 @@ In `apps/server/src/model-scene.ts`:
 
 ### 3. Register and dispatch the model-facing tool
 
-In `apps/server/src/provider-model.ts`:
+In `apps/server/src/agent/provider-model.ts`:
 
 - Define the `scene` tool name, honest description and strict JSON input schema. Use explicit required fields and reject additional properties.
 - Add capability/mode-gated registration inside the provider turn. Advertise only tools that the bound runtime can execute.
@@ -72,7 +72,7 @@ In `apps/server/src/provider-model.ts`:
 
 - Extend the tool-name union **and runtime allowlist** in `packages/contracts/src/model-chat.ts` (`ModelChatEvent` / `canonicalModelChatEvent`). Export new shared contracts as needed.
 - Trace the result through the actual web chat client, event handling, request inspection and conversation replay. Update name-specific handlers where required; generic results may need no custom UI.
-- For browser-backed operations, use the existing request/nonce/abort/deadline bridge in `apps/server/src/model-agent-runtime.ts` and its web counterpart. Do not invent an unbound browser authority channel.
+- For browser-backed operations, use the existing request/nonce/abort/deadline bridge in `apps/server/src/agent/model-agent-runtime.ts` and its web counterpart. Do not invent an unbound browser authority channel.
 - Add only necessary scene overlays or contextual UI. Keep routine diagnostics in Details. Selected points/derived colors need accessible semantic meaning.
 - Captures and selection are observations/interactions, not geometry edits or clearance certification. Preserve the user's viewport/display settings for automated captures.
 

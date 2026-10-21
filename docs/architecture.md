@@ -1,6 +1,23 @@
 # Architecture
 
+## Application source layout
+
+[Task078](tasks/078-source-folder-hierarchy.md) groups application implementations
+by responsibility. The [web source map](../apps/web/src/README.md) covers shared
+UI/viewer helpers and feature-local Toronto/DALES modules; the
+[server source map](../apps/server/src/README.md) covers agent, auth, CAD, dataset,
+spatial, preprocessing, placement and scene modules. Entrypoints remain at each
+source root. This is a file organization change within the existing package and
+authority boundaries; historical task records may reference the former flat paths.
+
 ## Product framing
+
+[Task077](tasks/077-dales2-scene.md) makes DALES-2 the default, read-only sampled
+scene. An operator-owned prepared-cloud registry exposes 29 independent tiles,
+revision-bound bounded samples and native semantics through separate routes and
+rendering. These normalized local frames are not merged. DALES mounts no Toronto
+chat/edit authority; generic agent and editing bindings remain unimplemented.
+Toronto is still explicit opt-in with its existing approval-gated capabilities.
 
 Task073 removes the synthetic workspace and its project persistence, parameter-box edits,
 agent interfaces and fixture-only browser checks. Toronto remains the workspace. The CAD
@@ -33,7 +50,7 @@ The product is a CAD-first scene/chat workspace with deterministic inspection, p
 | `packages/agent-harness` | Agent interfaces, independent bounded observations and headless semantic-query/verifier interfaces with deterministic tool execution. |
 | `apps/web` | Shared authority controller, Svelte scene/chat workspace, exact proposal approval and inverse validation, numbered synthetic point context; disposable Three.js caches/overlays and independent Toronto inspection channels. |
 | `apps/server` | Single-user local project authority and bounded `/project/*` context/proposal/approval/undo/Save/Load; read-only `/health`, Toronto metadata/observation/closest-label, shared disk index and backpressured full-resolution streams; live-authority-bound deterministic `/chat/inspect`; separate startup-bound `/cad/*` sandbox with isolated kernel worker. |
-| `tests/*.test.ts` | Node checks for contracts, coordinates, bounds, rendered dimensions, raycasting and HTTP routes. |
+| `tests/**/*.test.ts` | Node checks for contracts, coordinates, bounds, rendered dimensions, raycasting and HTTP routes. |
 | `scripts/browser-smoke.mjs`, `scripts/browser-toronto-smoke.mjs` | Existing-Chrome CDP checks of demo and actual Toronto preview; console/screenshot evidence. |
 | `scripts/check-toronto-preview.ts` | Bounded actual-artifact observation checks, separate from full preprocessing validation. |
 
@@ -142,7 +159,7 @@ One admission includes bounded body reading; no queue. Input/registry/boolean-co
 ## Prepared-cloud portability boundary
 
 Task074 adds a bounded read-only seam without widening Toronto's edit authority.
-`apps/server/src/potree-core.ts` owns reusable Potree 2 layout/hierarchy parsing
+`apps/server/src/datasets/potree-core.ts` owns reusable Potree 2 layout/hierarchy parsing
 and fixed-asset I/O. `potree.ts` continues to enforce Toronto-specific schema and
 bindings. `prepared-cloud.ts` separately loads an explicit `cloud.json` descriptor
 through operator-owned ID-to-directory registrations, returning revision-bound
@@ -162,7 +179,7 @@ The private pnpm 10 workspace targets Node 22 (`>=22.12.0 <23`) with TypeScript 
 
 - `pnpm dev`: web at `127.0.0.1:5173` and local server at `127.0.0.1:3001` (local project authority/editing, read-only data/inspection chat and separate CAD sandbox).
 - `pnpm typecheck`: recursive checks, including `svelte-check`.
-- `pnpm test`: `tsx --test tests/*.test.ts`.
+- `pnpm test`: `tsx --test "tests/**/*.test.ts"`.
 - `pnpm build`: Vite web distribution in `apps/web/dist`; server `build` is `tsc --noEmit`, not an emitted server package. Library packages have no build scripts.
 - `pnpm verify`: typecheck, test, build in sequence; explicitly reminds that browser checks are separate.
 - `pnpm verify:browser [CDP endpoint]`: starts a built-preview server and checks an existing Chrome; no browser download or launch.

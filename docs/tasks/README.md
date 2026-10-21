@@ -4,10 +4,12 @@ Use [TEMPLATE.md](TEMPLATE.md) for bounded work with testable acceptance criteri
 
 ## Index
 
-Latest: [062 — AI capture color mode](062-agent-capture-color-mode.md) — optional natural RGB/point-type captures with capture-time metadata and unchanged user viewport/display mode.
+Latest: [079 — Test suite cleanup](079-test-suite-cleanup.md) — remove obsolete/redundant tests and group retained behavioral coverage.
 
 | Task | Status |
 | --- | --- |
+| [079 — Test suite cleanup](079-test-suite-cleanup.md) | Deleted 19 files and 181 cases; 996 TypeScript and 24 Python tests pass; typecheck passes; fresh-session review pending. |
+| [078 — Source folder hierarchy](078-source-folder-hierarchy.md) | 118 moves; typecheck/build pass, serial suite matches 14 baseline failures; fresh-session review pending. |
 | [062 — AI capture color mode](062-agent-capture-color-mode.md) | Implemented; 134 focused tests/typecheck/build pass, actual-source desktop/mobile capture checks. Two existing broad-suite UI-copy failures; fresh review pending. |
 | [061 — Candidate-assessment prompt](061-candidate-assessment-prompt.md) | Implemented; 185 focused tests/typecheck/build pass; exact effective-instruction readback tested against outgoing payloads. Live inference and fresh review pending. |
 | [060 — Chat history and loop recovery](060-chat-history-loop-recovery.md) | Implemented; 219 focused tests/typecheck/build pass; mounted desktop/mobile fixture checks. Broad suite 956/958, two existing UI-copy checks fail. Fresh review pending. |

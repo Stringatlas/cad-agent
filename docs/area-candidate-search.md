@@ -21,7 +21,7 @@ The model may disclose other exploratory preferences derived from your intent; i
 ```sh
 pnpm typecheck
 pnpm build
-node --import tsx --test tests/area-candidate*.test.ts
+node --import tsx --test tests/placement/area-candidate*.test.ts
 node --import tsx scripts/check-area-candidates.ts --synthetic-only
 node --import tsx scripts/check-area-candidates.ts
 node --import tsx scripts/browser-area-candidates-smoke.mjs /tmp/task065-browser-local
