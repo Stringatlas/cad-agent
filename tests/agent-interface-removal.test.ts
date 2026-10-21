@@ -5,7 +5,6 @@ import type { ModelScene, ModelTurnRequest } from '@spatial/contracts';
 import { ProviderAuth } from '../apps/server/src/provider-auth';
 import { ProviderModel, ModelError, type BoundModelScene } from '../apps/server/src/provider-model';
 import { bindModelScene } from '../apps/server/src/model-scene';
-import { ProjectSession } from '../apps/server/src/project-session';
 import { PointOverrideSession } from '../apps/server/src/point-overrides';
 import { TorontoCadSession } from '../apps/server/src/toronto-cad-session';
 import { PlacementSearchSession } from '../apps/server/src/placement-search-session';
@@ -38,10 +37,10 @@ async function fixture(t: { after(fn: () => unknown): void }, selected: boolean)
   const source = await candidateSource([{ xyz: [0, 0, 0], label: 1 }, { xyz: [1, 1, 2], label: 6 }]);
   const points = new PointOverrideSession(source.root), cad = new TorontoCadSession(source.root);
   const placement = new PlacementSearchSession(source.root, points, cad);
-  const scene: ModelScene = { mode: 'toronto', project: null, toronto: selected ? [{ name: 'Point 1', datasetId: 'toronto3d', artifactRevision: source.snapshot.dataset.revision,
+  const scene: ModelScene = { mode: 'toronto', toronto: selected ? [{ name: 'Point 1', datasetId: 'toronto3d', artifactRevision: source.snapshot.dataset.revision,
     key: { sourceFileId: 1, sourceRow: 0 }, position: [0, 0, 0], frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] }] : [],
     ...(selected ? { areaOfInterest: source.area(10) } : {}) };
-  const bound = await bindModelScene(scene, new ProjectSession(join(source.root, 'project.json')), source.root, signal, undefined, { points, cad, placement });
+  const bound = await bindModelScene(scene, source.root, signal, undefined, { points, cad, placement });
   t.after(async () => { await bound.close(); await placement.close(); await points.close(); await cad.close(); await source.close(); });
   return { scene, bound };
 }

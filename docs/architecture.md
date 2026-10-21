@@ -2,6 +2,11 @@
 
 ## Product framing
 
+Task073 removes the synthetic workspace and its project persistence, parameter-box edits,
+agent interfaces and fixture-only browser checks. Toronto remains the workspace. The CAD
+kernel and Toronto approval-gated authorities remain intact. Descriptions of synthetic
+project features below are historical task records, not current interfaces.
+
 The shared [product vision](product-vision.md) is authoritative for product direction: a CAD-first interactive workspace with harness capabilities, not a headless harness with a UI layered on top. All agents may extend it while preserving explicit human approval and truthful geometry verification.
 
 [Task033](tasks/033-ai-ghost-proposals.md) connects synthetic-project model box create/update proposals to retained exact candidates, visible translucent ghosts and per-change Accept/Decline. Only human acceptance publishes a checked parameter edit; other old-revision candidates invalidate. These remain mesh/parameter operations, not project-integrated kernel solids, and never imply Toronto frame mapping. Task045 permits screenshots with ghosts as capture-time observations; they do not grant geometry authority.

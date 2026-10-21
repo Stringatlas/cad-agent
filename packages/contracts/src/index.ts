@@ -16,12 +16,10 @@ export { VISUAL_OBSERVATION_LIMITS } from './visual-observation';
 export type { VisualJson, VisualBinding, VisualCoverage, VisualPointProvenance, VisualObservation, VisualPixelResolution } from './visual-observation';
 export { canonicalModelCaptureRequest, canonicalModelReferenceSelection, canonicalModelBrowserAction, MODEL_CHAT_LIMITS, MODEL_INSPECTION_LIMITS, canonicalModelScene, canonicalModelTurnRequest, canonicalModelCatalog, canonicalModelChatEvent } from './model-chat';
 export type { ModelCaptureColorMode, ModelCaptureRequest, ModelReferenceSelection, ModelBrowserAction, ModelProposalAuthority, ModelAreaOfInterest, ModelTorontoPoint, ModelScene, ModelCatalog, ModelTurnRequest, ModelChatEvent, ModelRequestInspection, ModelRequestPhase, ModelInspectionOmission } from './model-chat';
-export { PROJECT_LIMITS, SCENE_POINT_LIMIT, canonicalScenePointName, canonicalProjectBinding, canonicalBoxProposalRequest, canonicalBoxApprovalRequest, canonicalProjectUndoRequest, canonicalSceneContextRequest, canonicalPersistentProject } from './project-edit';
-export type { ProjectBinding, ScenePointName, ScenePointReference, SceneContextRequest, SceneContext, BoxEdit, BoxProposalRequest, BoxProposal, BoxApprovalRequest, ProjectUndoRequest, ProjectCommitResult, ProjectSessionInfo, ProjectSaveResult, ProjectLoadResult, ProjectErrorCode, ProjectReply } from './project-edit';
+export { SCENE_POINT_LIMIT, canonicalScenePointName } from './scene-points';
+export type { ScenePointName } from './scene-points';
 export { CAD_OPERATIONS, CAD_LIMITS, CadError, canonicalCadBodyRef, canonicalCadOperation, canonicalCadRequest } from './cad';
 export type { CadSource, CadBodyRef, CadOperation, CadRequest, CadValidation, CadBodyResult, CadResult, CadErrorCode, CadReply, CadCapabilities } from './cad';
-export { PROJECT_FRAME_ID, CHAT_BODY_BYTES, CHAT_REPLY_BYTES, inspectionCommand, canonicalChatRequest, chatOutcomeState } from './chat';
-export type { ChatState, ProjectSnapshot, ChatRequest, ChatResponse } from './chat';
 export { TOOL_SCHEMA_VERSION, TOOL_VERSION, PREPARED_ASSETS, canonicalToolRequest, nearestRequestForTool, canonicalProtocolJson,
   detachedProtocolValue, freezeProtocolValue, assertToolBinding, assertPreparedArtifactIdentity,
   protocolRecord, protocolKeys, protocolToken, protocolHash, protocolInteger } from './tool-protocol';

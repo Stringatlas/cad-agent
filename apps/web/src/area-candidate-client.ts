@@ -11,7 +11,7 @@ export function validateAreaCandidateResult(value: unknown): AreaCandidateResult
   const count = (v: unknown): v is number => number(v) && Number.isSafeInteger(v);
   const text = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 2000 && !/[\u0000-\u001f\u007f]/.test(v);
   const hash = (v: unknown) => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
-  const area = canonicalModelScene({ mode: 'toronto', project: null, toronto: [], areaOfInterest: r.area }).areaOfInterest!;
+  const area = canonicalModelScene({ mode: 'toronto', toronto: [], areaOfInterest: r.area }).areaOfInterest!;
   const s = protocolRecord(r.settings); protocolKeys(s, ['spacingMeters', 'clearanceRadiusMeters', 'maxGroundReliefMeters', 'minPoleDistanceMeters', 'ranking'], ['maxCandidates']);
   if (s.maxCandidates !== undefined && (!count(s.maxCandidates) || s.maxCandidates < 1 || s.maxCandidates > 20)) fail();
   if (!number(s.spacingMeters, .5, 100) || !number(s.clearanceRadiusMeters, 0, 25) || !number(s.maxGroundReliefMeters, 0, 10) || !number(s.minPoleDistanceMeters, 0, 1000) || !['flat-ground', 'near-poles', 'far-from-poles'].includes(String(s.ranking))) fail();

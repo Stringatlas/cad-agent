@@ -176,11 +176,7 @@ try {
   await page.setViewportSize({ width: 680, height: 1000 });
   await page.waitForFunction(() => { const host = document.querySelector('[data-testid="toronto-viewer"]'); return host && Math.abs(host.clientWidth - host.querySelector('canvas').getBoundingClientRect().width) < 1; });
   await page.screenshot({ path: new URL('narrow.png', directory).pathname, fullPage: true }); report.screenshots.push('narrow.png');
-  await page.getByRole('button', { name: 'Synthetic demo', exact: true }).click();
-  await page.waitForSelector('[data-testid="viewer"][data-ready="true"]');
-  assert.equal(await page.getByTestId('toronto-viewer').count(), 0);
-  assert.equal(await page.getByTestId('viewer').getAttribute('data-points'), '441');
-  report.checks.push('resize and switch-back preserve synthetic demo; Toronto canvas removed');
+  report.checks.push('Toronto viewport resizes correctly on narrow screens');
   assert.deepEqual(report.messages.filter(message => ['error', 'pageerror'].includes(message.type)), []);
   report.status = 'passed';
   console.log('Toronto browser smoke passed: ' + directory.pathname);

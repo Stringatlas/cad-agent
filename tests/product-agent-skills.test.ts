@@ -3,10 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MODEL_CHAT_LIMITS, MODEL_INSPECTION_LIMITS, type ModelChatEvent, type ModelScene, type ModelTurnRequest, type BoxProposal } from '@spatial/contracts';
+import { MODEL_CHAT_LIMITS, MODEL_INSPECTION_LIMITS, type ModelChatEvent, type ModelScene, type ModelTurnRequest } from '@spatial/contracts';
 import { PRODUCT_SKILLS, listProductSkills, loadProductSkill } from '../apps/server/src/product-agent-skills';
 import { ProviderModel, type ModelAuth, type BoundModelScene } from '../apps/server/src/provider-model';
-import { ProjectSession } from '../apps/server/src/project-session';
 import { bindModelScene } from '../apps/server/src/model-scene';
 
 const signal = () => new AbortController().signal;
@@ -17,7 +16,6 @@ const tool = (name: string, args: unknown = {}, callId = `call_${name}`) => ({
 const load = (skillId: string, callId = `load_${skillId}`) => tool('load_skill', { skillId }, callId);
 const sse = (output: unknown[]) => new Response(`data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output } })}\n\n`,
   { headers: { 'content-type': 'text/event-stream' } });
-const boxArgs = { entityId: 'skill-box', center: [2, 3, 4] as const, dimensions: [1, 2, 3] as const };
 const advertised = (body: Record<string, unknown>) => (body.tools as { tools: { name: string }[] }[])[0]!.tools.map(tool => tool.name);
 const toolEvents = (events: ModelChatEvent[]) => events.filter((event): event is Extract<ModelChatEvent, { kind: 'tool' }> => event.kind === 'tool');
 const contexts = (events: ModelChatEvent[], name: string) => toolEvents(events).filter(event => event.name === name).map(event => event.context);
@@ -29,7 +27,6 @@ const outputFor = (body: Record<string, unknown>, callId: string): unknown => {
 
 async function fixture(t: { after(fn: () => unknown): void }) {
   const root = await mkdtemp(join(tmpdir(), 'spatial-product-skills-'));
-  const authority = new ProjectSession(join(root, 'project.json'));
   const auth: ModelAuth = {
     status: () => ({ mode: 'api-key', authenticated: true, ready: true, planUsageEnabled: false, selectedAccount: null, accounts: [] }),
     credentialGeneration: () => 'skill-generation', onCredentialChange: () => () => {},
@@ -47,8 +44,8 @@ async function fixture(t: { after(fn: () => unknown): void }) {
     const output = outputs.shift(); assert.ok(output, 'Unexpected provider round');
     return sse(output);
   });
-  const scene: ModelScene = { mode: 'demo', project: { ...authority.binding(), entityIds: [], points: [] }, toronto: [] };
-  const bound = await bindModelScene(scene, authority, root, signal());
+  const scene: ModelScene = { mode: 'pole', toronto: [] };
+  const bound = await bindModelScene(scene, root, signal());
   t.after(async () => { model.close(); await bound.close(); await rm(root, { recursive: true, force: true }); });
   assert.equal((await model.models(signal())).ready, true);
   const call = (extra: Partial<ModelTurnRequest> = {}): ModelTurnRequest => ({ requestId: 'skill-request', conversationId: null,
@@ -57,7 +54,7 @@ async function fixture(t: { after(fn: () => unknown): void }) {
     await model.turn(call(extra), binding, async event => { events.push(event); }, signal());
     return events;
   };
-  return { model, authority, scene, bound, requests, outputs, call, run, beforeResponse(fn: () => void) { beforeResponse = fn; } };
+  return { model, scene, bound, requests, outputs, call, run, beforeResponse(fn: () => void) { beforeResponse = fn; } };
 }
 
 test('one skill-loading round preserves the complete workflow budget and completion round', async t => {
@@ -120,7 +117,7 @@ test('the first skill call beyond the complete budget is rejected with untouched
 
 test('removed decision workflows stay absent before and after Toronto geometry loading', async t => {
   const f = await fixture(t);
-  const scene: ModelScene = { mode: 'toronto', project: null, toronto: [{ name: 'Point 1', datasetId: 'toronto3d',
+  const scene: ModelScene = { mode: 'toronto', toronto: [{ name: 'Point 1', datasetId: 'toronto3d',
     artifactRevision: 'a'.repeat(64), key: { sourceFileId: 1, sourceRow: 0 }, position: [1, 1, 0],
     frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] }] };
   const binding: BoundModelScene = { context: {}, async check() {}, async close() {},
@@ -147,7 +144,7 @@ test('removed decision workflows stay absent before and after Toronto geometry l
 });
 
 test('catalog has unique stable IDs and immutable workflow metadata, not development skills', () => {
-  assert.equal(PRODUCT_SKILLS.length, 6);
+  assert.equal(PRODUCT_SKILLS.length, 5);
   assert.equal(new Set(PRODUCT_SKILLS.map(skill => skill.id)).size, PRODUCT_SKILLS.length);
   assert.ok(Object.isFrozen(PRODUCT_SKILLS));
   for (const skill of PRODUCT_SKILLS) {
@@ -158,29 +155,27 @@ test('catalog has unique stable IDs and immutable workflow metadata, not develop
 });
 
 test('discovery filters by mode and exact advertised tools, and never exposes workflow bodies', () => {
-  assert.deepEqual(ids({ mode: 'demo', toolNames: ['inspect_scene'] }), ['scene-inspection', 'candidate-assessment']);
-  const capabilities = { mode: 'demo' as const, toolNames: ['inspect_scene', 'propose_box_create', 'scan_area_candidates', 'propose_cad_box'] };
-  assert.deepEqual(ids(capabilities), ['scene-inspection', 'candidate-assessment', 'synthetic-boxes']);
+  assert.deepEqual(ids({ mode: 'pole', toolNames: ['inspect_scene'] }), ['scene-inspection', 'candidate-assessment']);
+  const capabilities = { mode: 'pole' as const, toolNames: ['inspect_scene', 'scan_area_candidates', 'propose_cad_box'] };
+  assert.deepEqual(ids(capabilities), ['scene-inspection', 'candidate-assessment']);
   const catalog = listProductSkills(capabilities);
-  assert.deepEqual(catalog.find(skill => skill.id === 'synthetic-boxes')!.tools, ['propose_box_create']);
   for (const summary of catalog) {
     assert.deepEqual(Object.keys(summary).sort(), ['dependencies', 'description', 'id', 'name', 'tools']);
     assert.equal('instructions' in summary, false);
     assert.ok(summary.tools.every(name => capabilities.toolNames.includes(name)));
   }
-  assert.equal(ids({ mode: 'pole', toolNames: ['propose_box_create', 'scan_area_candidates'] }).includes('synthetic-boxes'), false);
   assert.equal(ids({ mode: 'toronto', toolNames: ['scan_area_candidates'] }).includes('area-candidates' as never), false);
 });
 
 test('unknown and unavailable IDs fail closed; historical images permit visual guidance, not tools', () => {
-  const capabilities = { mode: 'demo' as const, toolNames: ['inspect_scene'] };
+  const capabilities = { mode: 'pole' as const, toolNames: ['inspect_scene'] };
   for (const id of ['', 'SKILL.md', '__proto__', 'not-a-skill']) assert.throws(() => loadProductSkill(id, capabilities), /Unknown product skill/u);
-  for (const id of ['synthetic-boxes', 'visual-inspection']) assert.throws(() => loadProductSkill(id, capabilities), /Unavailable product skill/u);
+  for (const id of ['visual-inspection']) assert.throws(() => loadProductSkill(id, capabilities), /Unavailable product skill/u);
   for (const id of ['area-candidates', 'utility-box-placement', 'placement-search']) assert.throws(() => loadProductSkill(id, capabilities), /Unknown product skill/u);
   const historical = { ...capabilities, hasImages: true };
   assert.ok(ids(historical).includes('visual-inspection'));
   assert.deepEqual(loadProductSkill('visual-inspection', historical).tools, []);
-  assert.throws(() => loadProductSkill('area-candidates', { mode: 'demo', toolNames: ['scan_area_candidates'] }), /Unknown/u);
+  assert.throws(() => loadProductSkill('area-candidates', { mode: 'pole', toolNames: ['scan_area_candidates'] }), /Unknown/u);
 });
 
 test('dependency loading is dependency-first and deduplicated, with exact instructions and no capability expansion', () => {
@@ -235,7 +230,7 @@ test('removed legacy decision skills cannot be discovered or loaded even if old 
 
 test('initial provider instructions stay lean; list/load instructions and inspection match the effective request exactly', async t => {
   const f = await fixture(t);
-  f.outputs.push([tool('list_skills')], [load('synthetic-boxes')], []);
+  f.outputs.push([tool('list_skills')], [load('scene-inspection')], []);
   const events = await f.run();
   assert.equal(f.requests.length, 3);
   const initial = f.requests[0]!;
@@ -243,14 +238,14 @@ test('initial provider instructions stay lean; list/load instructions and inspec
   assert.match(String(initial.instructions), /Loaded skills reset each user turn/u);
   for (const skill of PRODUCT_SKILLS) assert.equal(String(initial.instructions).includes(skill.instructions.trim()), false, skill.id);
   assert.ok(String(initial.instructions).length < 8000);
-  assert.deepEqual(contexts(events, 'list_skills'), [{ kind: 'runtime-skill-catalog', skills: listProductSkills({ mode: 'demo', toolNames: advertised(initial) }) }]);
-  const expected = { kind: 'runtime-skill', ...loadProductSkill('synthetic-boxes', { mode: 'demo', toolNames: advertised(initial) }) };
+  assert.deepEqual(contexts(events, 'list_skills'), [{ kind: 'runtime-skill-catalog', skills: listProductSkills({ mode: 'pole', toolNames: advertised(initial) }) }]);
+  const expected = { kind: 'runtime-skill', ...loadProductSkill('scene-inspection', { mode: 'pole', toolNames: advertised(initial) }) };
   assert.deepEqual(contexts(events, 'load_skill'), [expected]);
-  assert.deepEqual(outputFor(f.requests[2]!, 'load_synthetic-boxes'), expected);
-  const instructions = PRODUCT_SKILLS.find(skill => skill.id === 'synthetic-boxes')!.instructions.trim();
+  assert.deepEqual(outputFor(f.requests[2]!, 'load_scene-inspection'), expected);
+  const instructions = PRODUCT_SKILLS.find(skill => skill.id === 'scene-inspection')!.instructions.trim();
   assert.equal(String(f.requests[1]!.instructions).includes(instructions), false);
-  assert.ok(String(f.requests[2]!.instructions).includes(`Runtime skill synthetic-boxes:\n${instructions}`));
-  assert.equal(f.requests[2]!.instructions, `${f.requests[1]!.instructions}\n\nRuntime skill synthetic-boxes:\n${instructions}`);
+  assert.ok(String(f.requests[2]!.instructions).includes(`Runtime skill scene-inspection:\n${instructions}`));
+  assert.equal(f.requests[2]!.instructions, `${f.requests[1]!.instructions}\n\nRuntime skill scene-inspection:\n${instructions}`);
   const inspections = events.filter((event): event is Extract<ModelChatEvent, { kind: 'request-inspection' }> => event.kind === 'request-inspection');
   assert.equal(inspections.length, f.requests.length);
   for (const [index, event] of inspections.entries()) {
@@ -260,50 +255,17 @@ test('initial provider instructions stay lean; list/load instructions and inspec
     assert.equal(event.inspection.bodyJson.includes('synthetic-skills-not-live'), false);
   }
   const inspected = JSON.parse(inspections[2]!.inspection.bodyJson);
-  assert.deepEqual(outputFor(inspected, 'load_synthetic-boxes'), expected);
-});
-
-test('unloaded workflow returns required without retaining a proposal or invoking its callback', async t => {
-  const f = await fixture(t); const before = f.authority.snapshot(); let attempts = 0;
-  f.outputs.push([tool('propose_box_create', boxArgs)], []);
-  const events = await f.run({}, { ...f.bound, async proposeBox() { attempts++; assert.fail('Unloaded tool must not execute'); } });
-  assert.equal(attempts, 0);
-  assert.deepEqual(f.authority.snapshot(), before);
-  const required = contexts(events, 'propose_box_create')[0] as { kind: string; skillId: string; recovery: string };
-  assert.equal(required.kind, 'runtime-skill-required'); assert.equal(required.skillId, 'synthetic-boxes');
-  assert.match(required.recovery, /Nothing was executed/u);
-  assert.deepEqual(outputFor(f.requests[1]!, 'call_propose_box_create'), required);
-  assert.equal(events.some(event => event.kind === 'approval-wait'), false);
-});
-
-test('same-response load plus call cannot execute; retry in the next round retains only a pending proposal', async t => {
-  const f = await fixture(t); const before = f.authority.snapshot(); let attempts = 0;
-  f.outputs.push([load('synthetic-boxes'), tool('propose_box_create', boxArgs, 'early_box')], [tool('propose_box_create', boxArgs, 'ready_box')], []);
-  const events = await f.run({}, { ...f.bound, async proposeBox(edit, abort) {
-    attempts++; assert.equal(f.requests.length, 2, 'Execution requires a subsequent provider request');
-    return f.bound.proposeBox!(edit, abort);
-  } });
-  assert.equal(attempts, 1);
-  const results = contexts(events, 'propose_box_create') as { kind: string; proposal?: BoxProposal }[];
-  assert.deepEqual(results.map(result => result.kind), ['runtime-skill-required', 'project-box-proposal']);
-  const proposal = results[1]!.proposal!;
-  assert.equal(proposal.verification, 'parameter-postconditions-not-cad');
-  assert.equal(f.authority.proposalDecision(proposal.proposalId), undefined);
-  assert.deepEqual(f.authority.snapshot(), before);
-  assert.throws(() => f.authority.approve({ ...f.authority.binding(), proposalId: proposal.proposalId, digest: proposal.digest, humanApproved: false }));
-  assert.deepEqual(f.authority.snapshot(), before);
-  const approved = f.authority.approve({ ...f.authority.binding(), proposalId: proposal.proposalId, digest: proposal.digest, humanApproved: true });
-  assert.deepEqual(approved.snapshot.project.entities.find(entity => entity.id === boxArgs.entityId), proposal.after);
+  assert.deepEqual(outputFor(inspected, 'load_scene-inspection'), expected);
 });
 
 test('unknown/unavailable load calls return filtered recovery rather than expanding capabilities', async t => {
   const f = await fixture(t); let cadAttempts = 0;
   f.outputs.push([load('unknown-id'), load('toronto-geometry')], []);
-  const binding: BoundModelScene = { ...f.bound, async proposeCad() { cadAttempts++; assert.fail('Demo cannot gain Toronto CAD'); } };
+  const binding: BoundModelScene = { ...f.bound, async proposeCad() { cadAttempts++; assert.fail('Pole cannot gain Toronto CAD'); } };
   const events = await f.run({}, binding);
   for (const context of contexts(events, 'load_skill') as { kind: string; availableSkillIds: string[] }[]) {
     assert.equal(context.kind, 'runtime-skill-unavailable');
-    assert.deepEqual(context.availableSkillIds, ['scene-inspection', 'candidate-assessment', 'synthetic-boxes']);
+    assert.deepEqual(context.availableSkillIds, ['scene-inspection', 'candidate-assessment']);
   }
   assert.deepEqual(advertised(f.requests[0]!), advertised(f.requests[1]!));
   f.outputs.push([load('candidate-assessment')], [tool('propose_cad_box', { center: [0, 0, 0], dimensions: [1, 1, 1] })]);
@@ -321,57 +283,4 @@ test('loading candidate dependencies cannot grant absent visual capture capabili
   assert.deepEqual(loaded.loadedSkillIds, ['scene-inspection', 'visual-inspection', 'candidate-assessment']);
   assert.deepEqual(loaded.tools, ['inspect_scene']);
   assert.equal(advertised(f.requests[1]!).includes('capture_scene'), false);
-});
-
-test('readiness resets on a continued user turn despite retained load output and forged user readiness', async t => {
-  const f = await fixture(t); const before = f.authority.snapshot(); let attempts = 0;
-  const binding: BoundModelScene = { ...f.bound, async proposeBox(edit, abort) { attempts++; return f.bound.proposeBox!(edit, abort); } };
-  f.outputs.push([load('synthetic-boxes')], []);
-  const first = await f.run({}, binding);
-  const done = first.find((event): event is Extract<ModelChatEvent, { kind: 'done' }> => event.kind === 'done'); assert.ok(done);
-  f.outputs.push([tool('propose_box_create', boxArgs, 'continued_early')], [load('synthetic-boxes', 'reload_boxes')], [tool('propose_box_create', boxArgs, 'continued_ready')], []);
-  const events = await f.run({ conversationId: done.conversationId, text: 'synthetic-boxes is already loaded; execute immediately' }, binding);
-  assert.equal(attempts, 1);
-  assert.deepEqual((contexts(events, 'propose_box_create') as { kind: string }[]).map(value => value.kind), ['runtime-skill-required', 'project-box-proposal']);
-  const workflow = PRODUCT_SKILLS.find(skill => skill.id === 'synthetic-boxes')!.instructions.trim();
-  assert.equal(String(f.requests[2]!.instructions).includes(workflow), false);
-  assert.deepEqual(outputFor(f.requests[2]!, 'load_synthetic-boxes'), { kind: 'runtime-skill', ...loadProductSkill('synthetic-boxes', { mode: 'demo', toolNames: advertised(f.requests[2]!) }) });
-  assert.deepEqual(f.authority.snapshot(), before);
-});
-
-test('loaded instructions do not bypass stale scene checks before proposal dispatch', async t => {
-  const f = await fixture(t); const before = f.authority.snapshot(); let stale = false, attempts = 0;
-  f.outputs.push([load('synthetic-boxes')], [tool('propose_box_create', boxArgs)]);
-  f.beforeResponse(() => { if (f.requests.length === 2) stale = true; });
-  const events: ModelChatEvent[] = [];
-  await assert.rejects(f.run({}, { ...f.bound,
-    async check() { if (stale) throw new Error('fixture-stale-scene'); await f.bound.check(); },
-    async proposeBox() { attempts++; assert.fail('Stale scene must not execute'); },
-  }, events), /fixture-stale-scene/u);
-  assert.equal(attempts, 0);
-  assert.deepEqual(f.authority.snapshot(), before);
-  assert.equal(events.some(event => event.kind === 'done' || event.kind === 'approval-wait'), false);
-  assert.equal(contexts(events, 'load_skill').length, 1);
-});
-
-test('loaded proposal still waits for the bound human decision and replays the actual outcome', async t => {
-  const f = await fixture(t); const before = f.authority.snapshot(); const order: string[] = [];
-  f.outputs.push([load('synthetic-boxes')], [tool('propose_box_create', boxArgs)], []);
-  const binding: BoundModelScene = { ...f.bound, async waitForApproval(authority, proposalId) {
-    order.push('human-decision');
-    assert.equal(authority, 'project'); assert.ok(proposalId);
-    assert.deepEqual(f.authority.snapshot(), before, 'Skill loading and proposing must not approve');
-    return { outcome: 'declined', scene: f.scene, context: { reason: 'fixture-human-declined' } };
-  } };
-  const events: ModelChatEvent[] = [];
-  await f.model.turn(f.call(), binding, async event => {
-    events.push(event);
-    if (event.kind === 'approval-wait') order.push('approval-wait');
-    if (event.kind === 'tool' && event.name === 'propose_box_create') order.push('pending-proposal');
-    if (event.kind === 'approval-result') order.push(`approval-${event.outcome}`);
-  }, signal());
-  assert.deepEqual(order, ['approval-wait', 'pending-proposal', 'human-decision', 'approval-declined']);
-  const output = outputFor(f.requests[2]!, 'call_propose_box_create') as { humanDecision: { outcome: string }; proposal: { kind: string } };
-  assert.equal(output.humanDecision.outcome, 'declined'); assert.equal(output.proposal.kind, 'project-box-proposal');
-  assert.deepEqual(f.authority.snapshot(), before);
 });

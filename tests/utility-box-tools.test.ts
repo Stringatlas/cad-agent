@@ -4,7 +4,7 @@ import { type ModelScene, type ModelTurnRequest } from '@spatial/contracts';
 import { ProviderAuth } from '../apps/server/src/provider-auth';
 import { ProviderModel, type BoundModelScene } from '../apps/server/src/provider-model';
 import { validateModelEvent } from '../apps/web/src/model-chat-client';
-const scene: ModelScene = { mode: 'toronto', project: null, toronto: [{ name: 'Point 1', datasetId: 'toronto3d', artifactRevision: 'a'.repeat(64), key: { sourceFileId: 1, sourceRow: 0 }, position: [1, 1, 0],
+const scene: ModelScene = { mode: 'toronto', toronto: [{ name: 'Point 1', datasetId: 'toronto3d', artifactRevision: 'a'.repeat(64), key: { sourceFileId: 1, sourceRow: 0 }, position: [1, 1, 0],
   frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] }] };
 test('utility tool dispatcher rejects missing/extra/forged arguments and model approval before authority dispatch', async t => {
   const auth = new ProviderAuth({ mode: 'api-key', apiKey: 'fixture-only' }); let output: unknown[] = [], calls = 0;
@@ -29,7 +29,7 @@ test('utility tool dispatcher rejects missing/extra/forged arguments and model a
   for (const name of ['assess_utility_box', 'propose_utility_box'] as const) {
     const event = { kind: 'tool', requestId: request.requestId, name, context: {} };
     assert.equal(validateModelEvent(event, request).kind, 'tool');
-    assert.throws(() => validateModelEvent(event, { ...request, scene: { mode: 'demo', project: null, toronto: [] } }));
+    assert.throws(() => validateModelEvent(event, { ...request, scene: { mode: 'pole', toronto: [] } }));
     assert.throws(() => validateModelEvent(event, { ...request, scene: { ...scene, toronto: [] } }));
   }
 });

@@ -134,11 +134,10 @@ test('datum render cache shows distinct ghosts, picks only committed IDs and rel
 
 test('authored model references remain typed and only enter Toronto turns', () => {
   const snapshot = canonicalSceneObjectSnapshot({ ...initial(), objects: [datum()] }); const reference = authoredReference(snapshot, snapshot.objects[0]!);
-  const view = { selectedId: null, points: [], needsRefresh: false };
-  const toronto = modelScene('toronto', undefined, view, [], undefined, [reference]);
+  const toronto = modelScene('toronto', [], undefined, [reference]);
   assert.deepEqual(toronto.objects, [reference]); assert.deepEqual(toronto.toronto, []);
-  for (const mode of ['demo', 'pole']) assert.equal(modelScene(mode, undefined, view, [], undefined, [reference]).objects, undefined);
+  assert.equal(modelScene('pole', [], undefined, [reference]).objects, undefined);
   const request = { requestId: 'request', conversationId: null, generation: 'catalog', model: 'fixture', text: 'Create a point', scene: toronto };
   assert.equal(validateModelEvent({ kind: 'tool', requestId: 'request', name: 'propose_point_create', context: { kind: 'scene-object-proposal' } }, request).kind, 'tool');
-  assert.throws(() => validateModelEvent({ kind: 'tool', requestId: 'request', name: 'propose_point_create', context: {} }, { ...request, scene: { mode: 'pole', project: null, toronto: [] } }));
+  assert.throws(() => validateModelEvent({ kind: 'tool', requestId: 'request', name: 'propose_point_create', context: {} }, { ...request, scene: { mode: 'pole', toronto: [] } }));
 });

@@ -4,7 +4,6 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { TORONTO_SEMANTIC_LABELS, type PointOverrideSnapshot, type PointMoveProposal, type TorontoCadSnapshot, type TorontoCadProposal } from '@spatial/contracts';
-import { ProjectSession } from '../apps/server/src/project-session';
 import { PointOverrideSession } from '../apps/server/src/point-overrides';
 import { TorontoCadSession } from '../apps/server/src/toronto-cad-session';
 
@@ -26,44 +25,6 @@ async function fixture() {
   await writeFile(join(root, 'octree/hierarchy.bin'), hierarchy); await writeFile(join(root, 'octree/octree.bin'), payload);
   return { root, clean: () => rm(root, { recursive: true, force: true }) };
 }
-
-test('project receipts require exact human decisions, survive Undo, evict oldest, and clear only on successful load', async () => {
-  const f = await fixture();
-  try {
-    const session = new ProjectSession(join(f.root, 'project.json'));
-    const propose = (entityId: string) => session.propose({ ...session.binding(), edit: { kind: 'create-box', entityId, center: [2, 3, 4], dimensions: [1, 2, 3] } });
-    const first = propose('first'), peer = propose('peer');
-    const call = { ...session.binding(), proposalId: first.proposalId, digest: first.digest };
-    assert.equal(session.proposalDecision(first.proposalId), undefined);
-    assert.equal(session.proposalDecision('unknown'), undefined);
-    assert.throws(() => session.approve({ ...call, humanApproved: false }));
-    assert.throws(() => session.decline({ ...call, digest: '0'.repeat(64) }));
-    assert.equal(session.proposalDecision(first.proposalId), undefined);
-    const committed = session.approve({ ...call, humanApproved: true });
-    assert.equal(session.proposalDecision(first.proposalId), 'accepted');
-    assert.equal(session.proposalDecision(peer.proposalId), undefined, 'invalidation is not a decline');
-    assert.throws(() => session.decline({ ...session.binding(), proposalId: first.proposalId, digest: first.digest }));
-    assert.equal(session.proposalDecision(first.proposalId), 'accepted');
-    session.undo({ ...session.binding(), transactionId: committed.transactionId, humanApproved: true });
-    assert.equal(session.proposalDecision(first.proposalId), 'accepted', 'receipt describes the decision, not current geometry');
-    const declined = propose('declined');
-    session.decline({ ...session.binding(), proposalId: declined.proposalId, digest: declined.digest });
-    assert.equal(session.proposalDecision(declined.proposalId), 'declined');
-    assert.throws(() => session.load(session.binding()));
-    assert.equal(session.proposalDecision(declined.proposalId), 'declined', 'failed load preserves the session');
-    const ids: string[] = [];
-    for (let i = 0; i < 257; i++) {
-      const p = propose('bounded'); ids.push(p.proposalId);
-      session.decline({ ...session.binding(), proposalId: p.proposalId, digest: p.digest });
-    }
-    assert.equal(session.proposalDecision(ids[0]), undefined);
-    for (const id of ids.slice(1)) assert.equal(session.proposalDecision(id), 'declined');
-    session.save(session.binding()); const previous = session.binding(); session.load(previous);
-    assert.notEqual(session.binding().sessionId, previous.sessionId);
-    for (const id of ids) assert.equal(session.proposalDecision(id), undefined);
-    assert.equal(new ProjectSession(session.snapshotPath).proposalDecision(declined.proposalId), undefined);
-  } finally { await f.clean(); }
-});
 
 test('point receipts distinguish approval, decline, failure and invalidation; bounded and cleared at close/replacement', async () => {
   const f = await fixture(), points = new PointOverrideSession(f.root);

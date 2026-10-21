@@ -17,7 +17,7 @@ class FakeAuth implements ModelAuth {
   credential(): Promise<ProviderCredential> { return this.credentialHook?.() ?? Promise.resolve({ mode: this.mode, bearer: 'synthetic-secret-never-live', baseUrl: 'https://should-be-ignored.invalid', constraints: { billing: this.mode === 'chatgpt' ? 'chatgpt-plan' : 'api-key', responsesOnly: this.mode === 'chatgpt' } }); }
   logout() { this.generation += '-changed'; for (const fn of this.listeners) fn(); }
 }
-const bound: BoundModelScene = { context: { mode: 'demo', project: null, toronto: [], geometryMutation: false }, async check() {}, async close() {} };
+const bound: BoundModelScene = { context: { mode: 'pole', toronto: [], geometryMutation: false }, async check() {}, async close() {} };
 const message = (text = 'Hello') => ({ type: 'message', id: 'msg_fake', role: 'assistant', status: 'completed', phase: 'final_answer', content: [{ type: 'output_text', text, annotations: [] }] });
 const event = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`;
 const complete = (output: unknown[] = [message()]) => event({ type: 'response.completed', response: { status: 'completed', output } });
@@ -39,7 +39,7 @@ function fixture(mode: 'api-key' | 'chatgpt' = 'api-key', now = Date.now) {
   };
   const model = new ProviderModel(auth, transport, now);
   const call = (extra: Partial<ModelTurnRequest> = {}): ModelTurnRequest => ({ requestId: 'request-one', conversationId: null,
-    generation: auth.generation, model: 'model-one', text: 'Inspect my scene', scene: { mode: 'demo', project: null, toronto: [] }, ...extra });
+    generation: auth.generation, model: 'model-one', text: 'Inspect my scene', scene: { mode: 'pole', toronto: [] }, ...extra });
   return { auth, model, requests, queue, call };
 }
 async function turn(f: ReturnType<typeof fixture>, call = f.call(), scene = bound) {
@@ -279,7 +279,7 @@ test('concurrency, model/scene/generation binding and TTL are enforced before in
   let now = 0; const f = fixture('api-key', () => now); await f.model.models(signal()); f.queue.push(sse(complete()));
   const events = await turn(f); const id = (events.at(-1) as Extract<ModelChatEvent, { kind: 'done' }>).conversationId;
   await assert.rejects(turn(f, f.call({ conversationId: id, model: 'model-two' })), code('stale-conversation'));
-  await assert.rejects(turn(f, f.call({ conversationId: id, scene: { mode: 'pole', project: null, toronto: [] } })), code('stale-conversation'));
+  await assert.rejects(turn(f, f.call({ conversationId: id, scene: { mode: 'toronto', toronto: [] } })), code('stale-conversation'));
   await assert.rejects(turn(f, f.call({ generation: 'wrong' })), code('stale-account'));
   now = L.conversationTtlMs; await assert.rejects(turn(f, f.call({ conversationId: id })), code('stale-conversation'));
   assert.equal(f.requests.length, 2); f.model.close();

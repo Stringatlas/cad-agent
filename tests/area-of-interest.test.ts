@@ -9,14 +9,13 @@ import { projectAreaOfInterest } from '../apps/web/src/area-of-interest';
 import { modelScene } from '../apps/web/src/model-chat-client';
 import { bindModelScene } from '../apps/server/src/model-scene';
 import { SemanticArtifact } from '../apps/server/src/semantic-artifact';
-import { ProjectSession } from '../apps/server/src/project-session';
 import { ModelError } from '../apps/server/src/provider-model';
 
 const revision = 'a'.repeat(64);
 const area = (): ModelAreaOfInterest => ({ datasetId: 'toronto3d', artifactRevision: revision,
   frameId: 'toronto3d-local-v1', units: 'm', localOrigin: [627285, 4841948, 0],
   corners: [[1, 2, 120], [7, 10, 120], [3, 13, 120], [-3, 5, 120]] });
-const scene = (a = area()): ModelScene => ({ mode: 'toronto', project: null, toronto: [], areaOfInterest: a });
+const scene = (a = area()): ModelScene => ({ mode: 'toronto', toronto: [], areaOfInterest: a });
 const signal = () => new AbortController().signal;
 const closeTo = (actual: number, expected: number, epsilon = 1e-8) => assert.ok(Math.abs(actual - expected) < epsilon, `${actual} != ${expected}`);
 function camera() {
@@ -69,8 +68,8 @@ test('projection rejects horizon, backward-plane, far-plane, invalid viewport an
 });
 
 test('canonicalModelScene keeps AOI optional and clones all mutable AOI arrays', () => {
-  for (const mode of ['toronto', 'demo', 'pole'] as const) {
-    const result = canonicalModelScene({ mode, project: null, toronto: [] });
+  for (const mode of ['toronto', 'pole'] as const) {
+    const result = canonicalModelScene({ mode, toronto: [] });
     assert.equal(Object.hasOwn(result, 'areaOfInterest'), false);
   }
   const input = area(), result = canonicalModelScene(scene(input)).areaOfInterest!;
@@ -112,15 +111,15 @@ test('canonicalModelScene rejects nonrectangular, nonplanar, nonfinite and degen
 });
 
 test('modelScene includes AOI only in active Toronto mode and freezes the canonical copy', () => {
-  const input = area(), view = { selectedId: null, points: [], needsRefresh: false };
-  const toronto = modelScene('toronto', undefined, view, [], input);
+  const input = area();
+  const toronto = modelScene('toronto', [], input);
   assert.deepEqual(toronto.areaOfInterest, input); assert.notEqual(toronto.areaOfInterest, input);
   assert.ok(Object.isFrozen(toronto.areaOfInterest)); assert.ok(Object.isFrozen(toronto.areaOfInterest!.corners[0]));
-  for (const mode of ['demo', 'pole']) {
-    const result = modelScene(mode, undefined, view, [], input);
+  for (const mode of ['pole'] as const) {
+    const result = modelScene(mode, [], input);
     assert.equal(Object.hasOwn(result, 'areaOfInterest'), false);
   }
-  assert.equal(modelScene('toronto', undefined, view, []).areaOfInterest, undefined);
+  assert.equal(modelScene('toronto', []).areaOfInterest, undefined);
 });
 
 // Minimal uncompressed artifact from model-nearest-tool; no spatial index is needed for AOI binding.
@@ -144,12 +143,12 @@ async function artifactFixture(t: { after(fn: () => unknown): void }) {
   await writeFile(join(root, 'octree/metadata.json'), JSON.stringify(metadata));
   await writeFile(join(root, 'octree/hierarchy.bin'), hierarchy); await writeFile(join(root, 'octree/octree.bin'), payload);
   const artifact = await SemanticArtifact.open(root), artifactRevision = artifact.dataset.revision; await artifact.close();
-  return { root, artifactRevision, authority: new ProjectSession(join(root, 'project.json')) };
+  return { root, artifactRevision };
 }
 
 test('server binds an AOI-only turn to current artifact and exposes all-elevation query without mutation authority', async t => {
   const f = await artifactFixture(t), input = scene({ ...area(), artifactRevision: f.artifactRevision });
-  const bound = await bindModelScene(input, f.authority, f.root, signal());
+  const bound = await bindModelScene(input, f.root, signal());
   try {
     const context = bound.context as { areaOfInterest: ModelAreaOfInterest & Record<string, unknown>; capabilities: Record<string, boolean>; toronto: unknown[] };
     assert.deepEqual(context.areaOfInterest.corners, input.areaOfInterest!.corners);
@@ -161,7 +160,7 @@ test('server binds an AOI-only turn to current artifact and exposes all-elevatio
     assert.equal(context.areaOfInterest.source, 'user-selected-xy-rectangle');
     assert.deepEqual(context.toronto, []); assert.equal(context.capabilities.inspectScene, true);
     assert.equal(context.capabilities.nearestLabel, false); assert.equal(context.capabilities.geometryMutation, false);
-    assert.equal(bound.nearestLabel, undefined); assert.equal(bound.proposeCad, undefined); assert.equal(bound.proposeBox, undefined);
+    assert.equal(bound.nearestLabel, undefined); assert.equal(bound.proposeCad, undefined);
     await bound.check();
     await writeFile(join(f.root, 'manifest.json'), '{}');
     await assert.rejects(bound.check(), 'AOI-only binding must retain and check the artifact');
@@ -170,7 +169,7 @@ test('server binds an AOI-only turn to current artifact and exposes all-elevatio
 
 test('server rejects stale AOI-only revisions and cannot silently bind when artifact is missing', async t => {
   const f = await artifactFixture(t);
-  await assert.rejects(bindModelScene(scene({ ...area(), artifactRevision: 'f'.repeat(64) }), f.authority, f.root, signal()),
+  await assert.rejects(bindModelScene(scene({ ...area(), artifactRevision: 'f'.repeat(64) }), f.root, signal()),
     error => error instanceof ModelError && error.code === 'stale-scene');
-  await assert.rejects(bindModelScene(scene({ ...area(), artifactRevision: f.artifactRevision }), f.authority, join(f.root, 'missing'), signal()));
+  await assert.rejects(bindModelScene(scene({ ...area(), artifactRevision: f.artifactRevision }), join(f.root, 'missing'), signal()));
 });

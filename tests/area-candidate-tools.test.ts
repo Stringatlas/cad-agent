@@ -1,13 +1,11 @@
 import test from 'node:test';
 import { withProductSkills, isWorkflowTool } from './helpers/product-skill-transport';
 import assert from 'node:assert/strict';
-import { join } from 'node:path';
 import { canonicalModelChatEvent, type AreaCandidateResult, type AreaCandidateSettings, type ModelCatalog, type ModelChatEvent, type ModelScene, type ModelTurnRequest, type PointMoveProposal, type PointOverrideSnapshot, type TorontoCadProposal, type TorontoCadSnapshot } from '@spatial/contracts';
 import { createDemoServer } from '../apps/server/src/index';
 import { bindModelScene } from '../apps/server/src/model-scene';
 import { PointOverrideSession } from '../apps/server/src/point-overrides';
 import { TorontoCadSession } from '../apps/server/src/toronto-cad-session';
-import { ProjectSession } from '../apps/server/src/project-session';
 import { SemanticDiskIndex } from '../apps/server/src/semantic-disk-index';
 import { ModelChatController, validateModelEvent } from '../apps/web/src/model-chat-client';
 import { areaCandidatesMatchScene, validateAreaCandidateResult } from '../apps/web/src/area-candidate-client';
@@ -20,9 +18,9 @@ const decision = (p: PointMoveProposal | TorontoCadProposal) => ({ sessionId: p.
 
 async function httpFixture(t: { after(fn: () => unknown): void }, size = 4) {
   const source = await candidateSource(denseGround(size));
-  const scene: ModelScene = { mode: 'toronto', project: null, toronto: [], areaOfInterest: source.area(100) };
+  const scene: ModelScene = { mode: 'toronto', toronto: [], areaOfInterest: source.area(100) };
   const outputs: unknown[][] = [], requests: Record<string, any>[] = [];
-  const server = createDemoServer({ datasetRoot: source.root, projectPath: join(source.root, 'project.json'), provider: { mode: 'api-key', apiKey: 'synthetic-not-a-credential' },
+  const server = createDemoServer({ datasetRoot: source.root, provider: { mode: 'api-key', apiKey: 'synthetic-not-a-credential' },
     modelTransport: withProductSkills(async (url, init) => {
       if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'fixture-model' }] });
       requests.push(JSON.parse(String(init?.body))); return sse(outputs.shift() ?? []);
@@ -76,7 +74,7 @@ test('100x100m provider scan reaches client candidate callback without selected 
   assert.ok(schema); assert.ok(schema.parameters.properties.settings.required.includes('maxCandidates'));
   assert.equal(schema.parameters.properties.settings.properties.maxCandidates.maximum, 20);
   assert.match(String(f.requests[0].instructions), /LARGE area/);
-  assert.deepEqual(f.scene.toronto, []); assert.equal(f.scene.project, null);
+  assert.deepEqual(f.scene.toronto, []);
   const { points, cad } = await f.snapshots();
   assert.equal(points.entries.length, 0); assert.equal(cad.bodies.length, 0); assert.equal(cad.proposals.length, 0); assert.equal(proposalCallbacks, 0);
   assert.deepEqual((await (await f.fetcher('/datasets/toronto3d/overrides/pending')).json() as { result: unknown[] }).result, []);
@@ -121,10 +119,9 @@ test('real engine cell-budget failure with unavailable index hashes remains vali
 async function boundFixture(t: { after(fn: () => unknown): void }) {
   const source = await candidateSource(denseGround(4));
   const points = new PointOverrideSession(source.root), cad = new TorontoCadSession(source.root);
-  const project = new ProjectSession(join(source.root, 'project.json'));
   const controller = new AbortController();
-  const scene: ModelScene = { mode: 'toronto', project: null, toronto: [], areaOfInterest: source.area(100) };
-  const bound = await bindModelScene(scene, project, source.root, controller.signal, undefined, { points, cad });
+  const scene: ModelScene = { mode: 'toronto', toronto: [], areaOfInterest: source.area(100) };
+  const bound = await bindModelScene(scene, source.root, controller.signal, undefined, { points, cad });
   t.after(async () => { await bound.close(); await points.close(); await cad.close(); await source.close(); });
   const propose = async (kind: 'point' | 'cad') => {
     if (kind === 'point') {

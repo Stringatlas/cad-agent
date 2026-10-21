@@ -7,7 +7,7 @@ import type { ProviderAuthOptions, ProviderMode } from './provider-auth';
 
 /** This is the only automatically loaded .env file; never use process.cwd(). */
 export const SERVER_ENV_PATH = fileURLToPath(new URL('../.env', import.meta.url));
-export interface ServerConfiguration { provider: ProviderAuthOptions; projectPath?: string }
+export interface ServerConfiguration { provider: ProviderAuthOptions }
 
 /** Pure merge, no process.env writes. Only the executable entrypoint calls this. */
 export function loadServerConfiguration(options: {
@@ -44,6 +44,5 @@ export function loadServerConfiguration(options: {
     }
     provider.redirectUri = 'http://127.0.0.1:3001/auth/callback';
   }
-  const projectPath = env.SPATIAL_PROJECT_PATH;
-  return { provider, ...(projectPath ? { projectPath } : {}) };
+  return { provider };
 }

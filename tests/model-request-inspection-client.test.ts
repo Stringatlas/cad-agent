@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { ModelChatController, MODEL_CLIENT_LIMITS, MODEL_INSPECTION_HISTORY_BYTES, streamModelTurn, validateModelEvent, type ModelChatView } from '../apps/web/src/model-chat-client';
 import { MODEL_INSPECTION_LIMITS, type ModelChatEvent, type ModelRequestInspection, type ModelScene, type ModelTurnRequest } from '../packages/contracts/src/index';
 
-const scene: ModelScene = { mode: 'toronto', project: null, toronto: [] };
+const scene: ModelScene = { mode: 'toronto', toronto: [] };
 const catalog = { mode: 'chatgpt', ready: true, generation: 'inspection-generation', code: 'ready', models: [{ id: 'fixture-model', label: 'Fixture model' }, { id: 'other-model', label: 'Other model' }] };
 const request: ModelTurnRequest = { requestId: 'inspection-request', conversationId: null, generation: catalog.generation, model: 'fixture-model', text: 'Inspect only', scene };
 const encode = new TextEncoder();

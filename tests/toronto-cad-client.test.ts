@@ -52,7 +52,7 @@ test('model CAD event refreshes retained authority after terminal success or lat
       const events = [{ kind:'start', requestId:r.requestId, conversationId:'conversation-1', model:r.model }, { kind:'tool', requestId:r.requestId, name:'propose_cad_box', context:{kind:'toronto-cad-proposal',status:'pending',proposal:{proposalId:'metadata-only'}} }, success ? {kind:'done',requestId:r.requestId,conversationId:'conversation-1'} : {kind:'error',requestId:r.requestId,code:'provider-failed'}];
       return new Response(events.map(e=>JSON.stringify(e)+'\n').join(''), { headers:{'content-type':'application/x-ndjson'} });
     }, 1000, 1000, { onauthorityproposal: kind => refreshed.push(kind) });
-    client.bind({mode:'toronto',project:null,toronto:[]}); await client.refreshModels(); await client.send('propose box'); assert.deepEqual(refreshed, ['cad']); client.dispose();
+    client.bind({mode:'toronto',toronto:[]}); await client.refreshModels(); await client.send('propose box'); assert.deepEqual(refreshed, ['cad']); client.dispose();
   }
 });
 const pointSnapshot = () => ({ ...binding, entries: [], nextUndoTransactionId: null });

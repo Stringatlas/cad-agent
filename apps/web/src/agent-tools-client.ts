@@ -12,7 +12,7 @@ export function validateAgentToolsInspection(value: unknown): AgentToolsInspecti
       typeof tool.strict === 'boolean' && strings(tool.requirements) && (tool.skillId === null || typeof tool.skillId === 'string')) ||
     !Array.isArray(value.skills) || !value.skills.every(skill => object(skill) && typeof skill.id === 'string' &&
       typeof skill.name === 'string' && typeof skill.description === 'string' && typeof skill.instructions === 'string' &&
-      strings(skill.tools) && strings(skill.dependencies) && strings(skill.modes) && skill.modes.every(mode => ['toronto', 'demo', 'pole'].includes(mode)))) {
+      strings(skill.tools) && strings(skill.dependencies) && strings(skill.modes) && skill.modes.every(mode => ['toronto', 'pole'].includes(mode)))) {
     throw new Error('Invalid tools inspection response.');
   }
   return value as unknown as AgentToolsInspection;

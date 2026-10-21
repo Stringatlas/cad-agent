@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { createServer, request as httpRequest, type Server } from 'node:http';
+import { request as httpRequest, type Server } from 'node:http';
 import { mkdtemp, mkdir, writeFile, rm, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -9,23 +9,20 @@ import { setImmediate as tick } from 'node:timers/promises';
 import { MODEL_CHAT_LIMITS as L, TORONTO_SEMANTIC_LABELS, canonicalModelTurnRequest, canonicalModelScene, canonicalModelCatalog, canonicalModelChatEvent,
   type ModelTurnRequest, type ModelChatEvent, type ModelCatalog, type ModelScene } from '@spatial/contracts';
 import { createDemoServer } from '../apps/server/src/index';
-import { ProjectSession } from '../apps/server/src/project-session';
-import { ProviderAuth } from '../apps/server/src/provider-auth';
-import { createModelChatRoutes } from '../apps/server/src/model-chat-routes';
 import { bindModelScene } from '../apps/server/src/model-scene';
 import { PotreeDataset } from '../apps/server/src/potree';
 
 const freshSignal = () => new AbortController().signal;
 async function listen(server: Server) { server.listen(0, '127.0.0.1'); await once(server, 'listening'); const address = server.address(); assert.ok(address && typeof address !== 'string'); return `http://127.0.0.1:${address.port}`; }
 async function close(server: Server) { await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }); }
-const call = (generation = 'generation'): ModelTurnRequest => ({ requestId: 'request-one', conversationId: null, generation, model: 'model-one', text: 'Inspect these points', scene: { mode: 'demo', project: null, toronto: [] } });
+const call = (generation = 'generation'): ModelTurnRequest => ({ requestId: 'request-one', conversationId: null, generation, model: 'model-one', text: 'Inspect these points', scene: { mode: 'pole', toronto: [] } });
 const encoder = new TextEncoder();
 const completed = (text = 'Scene inspected') => `data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text, annotations: [] }] }] } })}\n\n`;
 const response = (text = 'Scene inspected') => new Response(completed(text), { headers: { 'content-type': 'text/event-stream' } });
 async function fixture(t: { after(fn: () => unknown): void }, transport?: typeof fetch) {
   const root = await mkdtemp(join(tmpdir(), 'spatial-model-http-'));
   const requests: Record<string, unknown>[] = [];
-  const server = createDemoServer({ projectPath: join(root, 'project.json'), datasetRoot: join(root, 'absent-dataset'), provider: { mode: 'api-key', apiKey: 'fake-fixture-key' }, modelTransport: transport ?? (async (url, init) => {
+  const server = createDemoServer({ datasetRoot: join(root, 'absent-dataset'), provider: { mode: 'api-key', apiKey: 'fake-fixture-key' }, modelTransport: transport ?? (async (url, init) => {
     if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'model-one' }] });
     requests.push(JSON.parse(String(init?.body))); return response();
   }) });
@@ -79,7 +76,7 @@ test('canonical contract rejects extra fields/client history, frame mixing, dupl
   assert.deepEqual(canonicalModelTurnRequest(call()), call());
   const point = { name: 'Point 1', datasetId: 'toronto3d', artifactRevision: 'a'.repeat(64), key: { sourceFileId: 1, sourceRow: 0 }, position: [0, 0, 120], frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] };
   for (const value of [{ ...call(), history: [] }, { ...call(), model: 'model?key=secret' }, { ...call(), text: 'x'.repeat(L.textChars + 1) }, { ...call(), text: ' ' }, { ...call(), generation: '' }]) assert.throws(() => canonicalModelTurnRequest(value));
-  const scene = { mode: 'toronto', project: null, toronto: [point] };
+  const scene = { mode: 'toronto', toronto: [point] };
   assert.deepEqual(canonicalModelScene(scene), scene);
   for (const value of [{ ...scene, mode: 'demo' }, { ...scene, toronto: [point, point] }, { ...scene, toronto: [{ ...point, units: 'mm' }] },
     { ...scene, toronto: [{ ...point, key: { sourceFileId: 5, sourceRow: 0 } }] }, { ...scene, toronto: [{ ...point, position: [Infinity, 0, 0] }] },
@@ -91,19 +88,19 @@ test('canonical contract rejects extra fields/client history, frame mixing, dupl
 test('scene and catalog discriminants require strings without coercion', () => {
   for (const mode of [[], ['demo'], ['toronto'], ['pole'], ['disabled'], ['api-key'], ['chatgpt'], {},
     { toString: () => 'demo' }, { toString: () => 'disabled' }, new String('demo'), new String('disabled'), 0, 1, null, undefined]) {
-    const scene = { mode, project: null, toronto: [] };
+    const scene = { mode, toronto: [] };
     assert.throws(() => canonicalModelScene(scene), TypeError);
     assert.throws(() => canonicalModelTurnRequest({ ...call(), scene }), TypeError);
     assert.throws(() => canonicalModelCatalog({ mode, ready: false, code: 'disabled', generation: 'opaque', models: [] }), TypeError);
   }
-  for (const mode of ['demo', 'toronto', 'pole']) assert.equal(canonicalModelScene({ mode, project: null, toronto: [] }).mode, mode);
+  for (const mode of ['toronto', 'pole']) assert.equal(canonicalModelScene({ mode, toronto: [] }).mode, mode);
   for (const mode of ['disabled', 'api-key', 'chatgpt']) assert.equal(canonicalModelCatalog({ mode, ready: false, code: 'unavailable', generation: 'opaque', models: [] }).mode, mode);
   for (const models of [[], [{ id: 'model-one', label: 'Model' }]]) assert.throws(() => canonicalModelCatalog({ mode: 'disabled', ready: true, code: 'ready', generation: 'opaque', models }), TypeError);
 });
-test('non-demo empty authoritative revision bindings are retained, hidden selections and pole Toronto refs are rejected', () => {
+test('removed project bindings, hidden selections and pole Toronto refs are rejected', () => {
   const project = { sessionId: 'session', projectRevision: 3, frameId: 'demo-local-v1', units: 'm', entityIds: [], points: [] };
   for (const mode of ['toronto', 'pole']) {
-    assert.deepEqual(canonicalModelScene({ mode, project, toronto: [] }), { mode, project, toronto: [] });
+    assert.throws(() => canonicalModelScene({ mode, project, toronto: [] }), TypeError);
     for (const hidden of [{ ...project, entityIds: ['proposal-box'] }, { ...project, points: [{ name: 'Point 1', entityId: 'cloud', pointIndex: 0, position: [0, 0, 0] }] }]) {
       assert.throws(() => canonicalModelScene({ mode, project: hidden, toronto: [] }), TypeError);
     }
@@ -114,19 +111,19 @@ test('non-demo empty authoritative revision bindings are retained, hidden select
 test('HTTP rejects coercible scene modes before provider inference', async t => {
   const f = await fixture(t);
   for (const mode of [['demo'], { mode: 'demo' }, 0, null]) {
-    assert.equal((await f.post({ ...call(f.catalog.generation), scene: { mode, project: null, toronto: [] } })).status, 400);
+    assert.equal((await f.post({ ...call(f.catalog.generation), scene: { mode, toronto: [] } })).status, 400);
   }
   assert.equal(f.requests.length, 0);
 });
 
-test('factory model routes preserve existing project API, server-only history and NDJSON terminal framing', async t => {
-  const f = await fixture(t); const before = await (await fetch(f.base + '/project/session')).json();
+test('factory model routes preserve server-only history and NDJSON terminal framing', async t => {
+  const f = await fixture(t);
   const result = await events(await f.post(call(f.catalog.generation)));
   assert.deepEqual(result.map(e => e.kind), ['start', 'delta', 'done']);
   const done = result.at(-1) as Extract<ModelChatEvent, { kind: 'done' }>;
   await events(await f.post({ ...call(f.catalog.generation), conversationId: done.conversationId, text: 'Continue' }));
   assert.equal((f.requests[1].input as unknown[]).length, 5);
-  assert.deepEqual(await (await fetch(f.base + '/project/session')).json(), before, 'model chat never mutates project/approvals');
+  assert.equal((await fetch(f.base + '/project/session')).status, 404);
   assert.equal(JSON.stringify(result).includes('fake-fixture-key'), false);
   assert.equal((await fetch(f.base + '/health')).status, 200);
 });
@@ -147,20 +144,6 @@ test('HTTP admission denies foreign origins/hosts, methods/query, body bounds/sc
   for (const extra of [{ history: [] }, { transport: 'https://evil.invalid' }, { tool: 'create_box' }]) assert.equal((await f.post({ ...request, ...extra })).status, 400);
   const stale = await events(await f.post({ ...request, generation: 'old-generation' })); assert.equal(stale.at(-1)?.kind, 'error');
   assert.deepEqual(stale.at(-1), { kind: 'error', requestId: 'request-one', code: 'stale-account' }); assert.equal(f.requests.length, 0);
-});
-test('synthetic context requires exact authoritative point/ID/revision and includes selected box parameters', async t => {
-  const f = await fixture(t); const info = await (await fetch(f.base + '/project/session')).json(); const snapshot = info.result.snapshot;
-  const cloud = snapshot.project.entities.find((e: { kind: string }) => e.kind === 'point-cloud');
-  const project = { sessionId: snapshot.sessionId, projectRevision: snapshot.project.revision, frameId: snapshot.frameId, units: 'm', entityIds: ['proposal-box'], points: [{ name: 'Point 1', entityId: cloud.id, pointIndex: 0, position: cloud.points[0] }] };
-  const request = { ...call(f.catalog.generation), scene: { mode: 'demo', project, toronto: [] } };
-  await events(await f.post(request));
-  const input = f.requests[0].input as { role: string; content: string }[];
-  const context = JSON.parse(input[1].content.slice(input[1].content.indexOf('\n') + 1));
-  assert.equal(context.project.source, 'synthetic-project'); assert.deepEqual(context.project.points[0].position, cloud.points[0]); assert.deepEqual(context.selectedGeometry[0].dimensions, [1.8, 1.2, 1.5]);
-  for (const bad of [{ ...project, projectRevision: project.projectRevision + 1 }, { ...project, entityIds: ['nonexistent'] }, { ...project, points: [{ ...project.points[0], position: [999, 0, 0] }] }]) {
-    const result = await events(await f.post({ ...request, scene: { ...request.scene, project: bad } })); assert.equal(result.at(-1)?.kind, 'error');
-  }
-  assert.equal(f.requests.length, 1);
 });
 test('provider HTTP/SSE failure is sanitized and does not emit done or retry', async t => {
   let requests = 0;
@@ -215,27 +198,13 @@ async function datasetFixture(t: { after(fn: () => unknown): void }) {
   t.after(() => rm(root, { recursive: true, force: true })); return root;
 }
 test('Toronto attachments revision-check original source metadata, stay unmapped and never claim exact record verification', async t => {
-  const root = await datasetFixture(t); const info = await new PotreeDataset(root).info(); const authority = new ProjectSession(join(root, 'project.json'));
-  const scene: ModelScene = { mode: 'toronto', project: null, toronto: [{ name: 'Point 1', datasetId: 'toronto3d', artifactRevision: info.revision, key: { sourceFileId: 1, sourceRow: 0 }, position: [1, 2, 120], frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] }] };
-  const result = await bindModelScene(scene, authority, root, freshSignal());
-  const context = result.context as { project: null; toronto: { position: unknown; recordValidation: string; mapping: string }[] };
-  assert.equal(context.project, null); assert.equal(context.toronto[0].recordValidation, 'unverified'); assert.equal(context.toronto[0].mapping, 'unmapped-to-project'); assert.deepEqual(context.toronto[0].position, [1, 2, 120], 'user attachment retained without pretending actual original [0,0,120] was validated');
+  const root = await datasetFixture(t); const info = await new PotreeDataset(root).info();
+  const scene: ModelScene = { mode: 'toronto', toronto: [{ name: 'Point 1', datasetId: 'toronto3d', artifactRevision: info.revision, key: { sourceFileId: 1, sourceRow: 0 }, position: [1, 2, 120], frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] }] };
+  const result = await bindModelScene(scene, root, freshSignal());
+  const context = result.context as { toronto: { position: unknown; recordValidation: string; source: string }[] };
+  assert.equal('project' in context, false); assert.equal(context.toronto[0].recordValidation, 'unverified'); assert.equal(context.toronto[0].source, 'user-attached-toronto-record-reference'); assert.deepEqual(context.toronto[0].position, [1, 2, 120], 'user attachment retained without pretending actual original [0,0,120] was validated');
   await result.check(); await result.close();
-  for (const point of [{ ...scene.toronto[0], artifactRevision: '0'.repeat(64) }, { ...scene.toronto[0], key: { sourceFileId: 1, sourceRow: 1 } }, { ...scene.toronto[0], position: [1000, 0, 120] as const }]) await assert.rejects(bindModelScene({ ...scene, toronto: [point] }, authority, root, freshSignal()));
-  const held = await bindModelScene(scene, authority, root, freshSignal());
+  for (const point of [{ ...scene.toronto[0], artifactRevision: '0'.repeat(64) }, { ...scene.toronto[0], key: { sourceFileId: 1, sourceRow: 1 } }, { ...scene.toronto[0], position: [1000, 0, 120] as const }]) await assert.rejects(bindModelScene({ ...scene, toronto: [point] }, root, freshSignal()));
+  const held = await bindModelScene(scene, root, freshSignal());
   await writeFile(join(root, 'manifest.json'), '{}'); await assert.rejects(held.check()); await held.close();
-});
-test('authoritative revision changed during async inference suppresses completion and discards turn', async t => {
-  const root = await mkdtemp(join(tmpdir(), 'spatial-model-stale-')); t.after(() => rm(root, { recursive: true, force: true }));
-  const authority = new ProjectSession(join(root, 'project.json')); const auth = new ProviderAuth({ mode: 'api-key', apiKey: 'fake-only' });
-  let upstream!: ReadableStreamDefaultController<Uint8Array>; let entered!: () => void; const gate = new Promise<void>(r => { entered = r; });
-  const routes = createModelChatRoutes(auth, authority, root, async url => String(url).endsWith('/models') ? Response.json({ data: [{ id: 'model-one' }] }) : new Response(new ReadableStream({ start(c) { upstream = c; entered(); } }), { headers: { 'content-type': 'text/event-stream' } }));
-  const server = createServer((request, response) => { void routes.handle(request, response); }); const base = await listen(server);
-  t.after(async () => { routes.close(); auth.close(); await close(server); });
-  const catalog: ModelCatalog = await (await fetch(base + '/chat/models')).json();
-  const pending = fetch(base + '/chat/turn', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...call(catalog.generation), scene: { mode: 'demo', toronto: [], project: { ...authority.binding(), entityIds: ['proposal-box'], points: [] } } }) });
-  await gate; const proposal = authority.propose({ ...authority.binding(), edit: { kind: 'update-box', entityId: 'proposal-box', center: [1, 2, 3], dimensions: [1, 1, 1] } });
-  authority.approve({ ...authority.binding(), proposalId: proposal.proposalId, digest: proposal.digest, humanApproved: true });
-  upstream.enqueue(encoder.encode(completed())); upstream.close();
-  const result = await events(await pending); assert.equal(result.at(-1)?.kind, 'error'); assert.ok(!result.some(e => e.kind === 'done')); assert.equal((result.at(-1) as Extract<ModelChatEvent, { kind: 'error' }>).code, 'stale-scene');
 });

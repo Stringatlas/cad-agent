@@ -11,7 +11,7 @@ const message = { type: 'message', role: 'assistant', phase: 'final_answer', con
 const reasoning = { type: 'reasoning', encrypted_content: opaque, summary: [{ text: opaque }], arbitrary: opaque };
 const tool = (id: number) => ({ type: 'function_call', namespace: 'scene', name: 'inspect_scene', call_id: `call_${id}`, arguments: '{}' });
 const sse = (output: unknown[]) => new Response(`data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output } })}\n\n`, { headers: { 'content-type': 'text/event-stream' } });
-const scene = { context: { mode: 'demo', projectRevision: 7, frameId: 'demo-local-v1', units: 'm', points: [{ name: 'Point 1', position: [1, 2, 3] }] }, async check() {}, async close() {} };
+const scene = { context: { mode: 'pole', frameId: 'pole-local-v1', units: 'm', points: [{ name: 'Point 1', position: [1, 2, 3] }] }, async check() {}, async close() {} };
 function fixture(mode: 'api-key' | 'chatgpt' = 'api-key') {
   const bodies: Record<string, unknown>[] = [], events: ModelChatEvent[] = [];
   let next: () => Promise<Response> = async () => sse([message]);
@@ -22,7 +22,7 @@ function fixture(mode: 'api-key' | 'chatgpt' = 'api-key') {
     bodies.push(JSON.parse(String(init?.body))); return next();
   };
   const model = new ProviderModel(auth, transport);
-  const call = (conversationId: string | null = null): ModelTurnRequest => ({ requestId: 'request-one', conversationId, generation: 'gen', model: 'model-one', text: 'Inspect A', scene: { mode: 'demo', project: null, toronto: [] } });
+  const call = (conversationId: string | null = null): ModelTurnRequest => ({ requestId: 'request-one', conversationId, generation: 'gen', model: 'model-one', text: 'Inspect A', scene: { mode: 'pole', toronto: [] } });
   const run = (conversationId: string | null = null, signal = new AbortController().signal) => model.turn(call(conversationId), scene, async e => { events.push(canonicalModelChatEvent(e)); }, signal);
   return { model, bodies, events, run, setNext(fn: () => Promise<Response>) { next = fn; } };
 }
@@ -36,7 +36,7 @@ for (const mode of ['api-key', 'chatgpt'] as const) test(`${mode}: effective bod
   assert.deepEqual(snapshot.omissions, ['credentials-and-headers']);
   assert.equal(typeof JSON.parse(snapshot.bodyJson).instructions, 'string');
   assert.deepEqual((JSON.parse(snapshot.bodyJson).input as { role: string }[]).map(v => v.role), ['user', 'developer']);
-  assert.ok(snapshot.bodyJson.includes('projectRevision')); assert.ok(!snapshot.bodyJson.includes('"role":"system"'));
+  assert.ok(snapshot.bodyJson.includes('pole-local-v1')); assert.ok(!snapshot.bodyJson.includes('"role":"system"'));
   assert.equal(JSON.parse(snapshot.bodyJson).max_output_tokens, mode === 'api-key' ? 4096 : undefined);
   assert.deepEqual(phases(f.events), [[1, 'dispatched'], [1, 'completed']]);
   assert.ok(!JSON.stringify(f.events).includes(secret)); f.model.close();
@@ -74,7 +74,7 @@ test('cancellation while fetch pending settles inspection cancelled without comp
 });
 test('prepared inspection cancellation never falsely dispatches', async () => {
   const f = fixture(); await f.model.models(new AbortController().signal); const abort = new AbortController();
-  await assert.rejects(f.model.turn({ requestId: 'r', conversationId: null, generation: 'gen', model: 'model-one', text: 'Hi', scene: { mode: 'demo', project: null, toronto: [] } }, scene,
+  await assert.rejects(f.model.turn({ requestId: 'r', conversationId: null, generation: 'gen', model: 'model-one', text: 'Hi', scene: { mode: 'pole', toronto: [] } }, scene,
     async e => { f.events.push(e); if (e.kind === 'request-inspection') abort.abort(); }, abort.signal));
   assert.equal(inspections(f.events).length, 1); assert.deepEqual(phases(f.events), [[1, 'cancelled']]); assert.equal(f.bodies.length, 0); f.model.close();
 });

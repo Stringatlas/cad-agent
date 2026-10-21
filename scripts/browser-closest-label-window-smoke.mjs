@@ -283,11 +283,9 @@ try {
   await page.getByRole('button', { name: 'Toronto3D preview', exact: true }).click(); await page.waitForSelector('[data-testid="toronto-viewer"][data-ready="true"]');
   assert.deepEqual(await oldHost.evaluate(host => ({ connected: host.isConnected, canvases: host.querySelectorAll('canvas').length })), { connected: false, canvases: 0 });
   const oldCamera = await oldHost.getAttribute('data-camera'); await delay(300); assert.equal(await oldHost.getAttribute('data-camera'), oldCamera);
-  await page.getByRole('button', { name: 'Synthetic demo', exact: true }).click(); await page.waitForSelector('[data-testid="viewer"][data-ready="true"]');
-  await page.screenshot({ path: join(directory, 'demo-regression.png'), fullPage: true }); report.screenshots.push('demo-regression.png');
   await page.getByRole('button', { name: 'Closest: label', exact: true }).click(); await ready(); await phase('idle');
   assert.equal(await page.getByTestId('closest-label').inputValue(), '6'); assert.equal(await host.getAttribute('data-crop-points'), '0'); assert.equal(await page.getByTestId('pole-result').count(), 0);
-  await oldHost.dispose(); report.checks.push('Responsive narrow layout; Toronto/demo regressions ready; tab disposal removes old canvas/animation; remount has default Pole/idle/no detail or query');
+  await oldHost.dispose(); report.checks.push('Responsive narrow layout; Toronto regression ready; tab disposal removes old canvas/animation; remount has default Pole/idle/no detail or query');
   assert.deepEqual(report.messages.filter(m => ['error', 'pageerror'].includes(m.type)), []);
   report.status = 'passed';
 } catch (error) { report.error = error.stack ?? String(error); process.exitCode = 1; console.error(report.error); if (page && !page.isClosed()) await screenshot('failure.png').catch(() => {}); }

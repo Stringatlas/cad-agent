@@ -5,14 +5,13 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { candidateSource } from './fixtures/area-candidate-source';
 import { bindModelScene } from '../apps/server/src/model-scene';
-import { ProjectSession } from '../apps/server/src/project-session';
 import { getSemanticDiskIndex } from '../apps/server/src/semantic-disk-index';
 import { canonicalPerceptionQuery, type ModelPointQuery } from '../apps/server/src/model-perception';
 import { PointOverrideSession } from '../apps/server/src/point-overrides';
 import { TorontoCadSession } from '../apps/server/src/toronto-cad-session';
 import { SpatialPageIndex } from '../apps/server/src/spatial-page-index';
 const signal = new AbortController().signal;
-const scene = { mode: 'toronto' as const, project: null, toronto: [] };
+const scene = { mode: 'toronto' as const, toronto: [] };
 // The tool boundary intentionally returns unknown. Validate containers before
 // inspecting their fields, then retain the exact behavioral assertions below.
 function record(value: unknown): Record<string, unknown> {
@@ -41,7 +40,7 @@ async function fixture(t: { after(fn: () => unknown): void }) {
     { xyz: [0, 0, 0], label: 1 }, { xyz: [1, 0, 1], label: 6 },
     { xyz: [1, 1, 2], label: 6 }, { xyz: [2, 2, 2], label: 7 },
   ]);
-  const bound = await bindModelScene(scene, new ProjectSession(join(f.root, 'project.json')), f.root, signal);
+  const bound = await bindModelScene(scene, f.root, signal);
   t.after(async () => { await bound.close(); await f.close(); });
   return { ...f, bound, tools: perceptionTools(bound) };
 }
@@ -164,23 +163,21 @@ test('ground elevation reports supported source minima/interpolation and missing
 test('original perception stays explicit with edited state, and bound authority revisions are checked', async t => {
   const f = await fixture(t), points = new PointOverrideSession(f.root), cad = new TorontoCadSession(f.root);
   t.after(async () => { await points.close(); await cad.close(); });
-  const project = new ProjectSession(join(f.root, 'project.json'));
   const before = await points.execute('snapshot') as any;
   const proposal = await points.execute('propose', { sessionId: before.sessionId, revision: before.revision, artifactRevision: before.artifactRevision,
     points: [{ key: { sourceFileId: 1, sourceRow: 1 }, position: [1, 0, 1] }], translation: [10, 0, 0] }) as any;
   const moved = await points.execute('approve', { sessionId: before.sessionId, revision: before.revision, proposalId: proposal.proposalId }) as any;
-  const bound = await bindModelScene(scene, project, f.root, signal, undefined, { points, cad }); t.after(() => bound.close());
+  const bound = await bindModelScene(scene, f.root, signal, undefined, { points, cad }); t.after(() => bound.close());
   const tools = perceptionTools(bound);
   const nearest = await tools.queryPoints({ operation: 'nearest', position: [1, 0, 1], maxResults: 1 }, signal);
   assert.deepEqual(record(nearest.point).position, [1, 0, 1]); assert.match(text(nearest.limitations), /accepted point edits.*excluded/);
   await points.execute('undo', { sessionId: before.sessionId, revision: 1, transactionId: moved.nextUndoTransactionId });
   await assert.rejects(tools.queryPoints({ operation: 'nearest', position: [1, 0, 1], maxResults: 1 }, signal), { code: 'stale-scene' });
 });
-test('empty Toronto context without installed artifact has no factual tools; demo remains separate', async t => {
+test('empty Toronto context without installed artifact has no factual tools; pole remains separate', async t => {
   const root = await mkdtemp(join(tmpdir(), 'perception-no-artifact-')); t.after(() => rm(root, { recursive: true, force: true }));
-  const project = new ProjectSession(join(root, 'project.json'));
-  const bound = await bindModelScene(scene, project, root, signal); t.after(() => bound.close());
+  const bound = await bindModelScene(scene, root, signal); t.after(() => bound.close());
   assert.equal((bound.context as any).capabilities.queryPoints, false); assert.equal((bound as any).queryPoints, undefined);
-  const demo = await bindModelScene({ ...scene, mode: 'demo' }, project, root, signal); t.after(() => demo.close());
-  assert.equal((demo as any).queryPoints, undefined);
+  const pole = await bindModelScene({ ...scene, mode: 'pole' }, root, signal); t.after(() => pole.close());
+  assert.equal((pole as any).queryPoints, undefined);
 });

@@ -21,7 +21,7 @@ test('server env parser supports quoted tokens; process environment wins without
   writeFileSync(f.envPath, 'SPATIAL_PROVIDER_MODE=api-key\nOPENAI_API_KEY="file-secret"\nSPATIAL_PROJECT_PATH=/tmp/from-file.json\n');
   const env = { OPENAI_API_KEY: 'process-secret' };
   assert.deepEqual(loadServerConfiguration({ ...f, env }), {
-    provider: { mode: 'api-key', apiKey: 'process-secret' }, projectPath: '/tmp/from-file.json',
+    provider: { mode: 'api-key', apiKey: 'process-secret' },
   });
   assert.deepEqual(env, { OPENAI_API_KEY: 'process-secret' });
   assert.equal(loadServerConfiguration({ ...f, env: { SPATIAL_PROVIDER_MODE: 'disabled' } }).provider.apiKey, undefined);

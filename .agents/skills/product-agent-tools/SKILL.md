@@ -33,7 +33,7 @@ Choose a comparable implementation rather than copying the most complex tool:
 - Authored point: `propose_point_create`.
 - Kernel-backed proposal: `propose_cad_box`.
 - Coordinate perception: `query_points` / `ground_elevation`; disposable hypotheses: `set_scene_marks` / `get_scene_marks` (Task069).
-- The runtime registry has six skills: `scene-inspection`, `visual-inspection`, `candidate-assessment`, `synthetic-boxes`, `scene-objects`, `toronto-geometry`. Task-specific utility-box assessment, placement search, area scanning and candidate finalization are removed from the product-agent interface (Task070); internal/manual engines are not model tools. Compose general-purpose perception and model-owned hypotheses instead.
+- The runtime registry has five skills: `scene-inspection`, `visual-inspection`, `candidate-assessment`, `scene-objects`, `toronto-geometry`. Task-specific utility-box assessment, placement search, area scanning and candidate finalization are removed from the product-agent interface (Task070); internal/manual engines are not model tools. Compose general-purpose perception and model-owned hypotheses instead.
 
 File locations below describe current integration seams; verify them before relying on them.
 

@@ -170,7 +170,7 @@
     <pre data-testid="model-scene-context">{JSON.stringify(scene, null, 2)}</pre>
     <p class="continuation" data-testid="model-continuation">{view.continuationActive ? 'Active server continuation · retained server history can be replayed on the next send.' : 'No active server continuation · retained messages are display-only; the next send starts a new server conversation.'}</p>
   </details>
-  <details class="boundary"><summary>Changes require your approval</summary><p>{scene.mode === 'toronto' ? 'Chat can propose point translations and real kernel solids in Toronto local meters. Accept or Decline each retained change; only human Accept publishes. State is volatile.' : 'Chat can propose synthetic box changes, never approve them. Review each ghost; parameter checks are not CAD verification.'}</p></details>
+  <details class="boundary"><summary>Changes require your approval</summary><p>Chat can propose point translations and real kernel solids in Toronto local meters. Accept or Decline each retained change; only human Accept publishes. State is volatile.</p></details>
   </details>
   {#if view.historyNotice}
     <p class="continuation" role="status" data-testid="model-history-notice">{view.historyNotice}</p>

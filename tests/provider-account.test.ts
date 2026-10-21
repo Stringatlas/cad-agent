@@ -225,9 +225,8 @@ test('workspace markup keeps native sign-in separate and guides model discovery 
 
 test('browser fixtures use exact owned account routes with auth-only Host routing and no Origin rewrite', () => {
   const fixtures = [
-    ['smoke', 3012], ['toronto-smoke', 3015], ['closest-pole-smoke', 3002],
-    ['closest-label-window-smoke', 3002], ['shared-chat-smoke', 3013],
-    ['interactive-edit-smoke', 3014], ['demo-workspace-smoke', 3071],
+    ['toronto-smoke', 3015], ['closest-pole-smoke', 3002],
+    ['closest-label-window-smoke', 3002],
   ] as const;
   for (const [name, port] of fixtures) {
     const source = readFileSync(new URL(`../scripts/browser-${name}.mjs`, import.meta.url), 'utf8');

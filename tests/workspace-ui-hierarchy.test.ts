@@ -56,15 +56,14 @@ test('one directly accessible model selector precedes settings, retaining contex
   for (const id of ['model-scene-context', 'model-continuation', 'model-request-body', 'model-tool-context']) assert.ok(ui.includes(`data-testid="${id}"`));
 });
 
-test('workspace selector retains Toronto default and both fixtures; persistence is contextual', () => {
+test('workspace selector retains Toronto and nearest search without synthetic controls', () => {
   const ui = source('App.svelte');
-  assert.match(ui, /mode = \$state<'demo' \| 'toronto' \| 'pole'>\('toronto'\)/);
+  assert.match(ui, /mode = \$state<'toronto' \| 'pole'>\('toronto'\)/);
   const selector = elements('App.svelte', 'select')[0];
   const markup = ui.slice(selector.start, selector.end);
-  for (const mode of ['toronto', 'demo', 'pole']) assert.ok(markup.includes(`value="${mode}"`));
+  for (const mode of ['toronto', 'pole']) assert.ok(markup.includes(`value="${mode}"`));
   assert.match(markup, /switchSource\(event.currentTarget.value/);
-  assert.match(ui, /\{#if mode === 'demo'\}\s*<details class="project-controls"/);
-  assert.match(ui, /\{#if view.needsRefresh\}<p class="authority-alert"/);
+  assert.doesNotMatch(ui, /Synthetic|value="demo"|project-controls|ProjectController/);
 });
 
 test('scene and account remove idle duplicate identity/status while retaining disclosed evidence', () => {

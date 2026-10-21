@@ -8,7 +8,6 @@ import { TORONTO_SEMANTIC_LABELS, type ModelScene, type ModelChatEvent, type Mod
 import { bindModelScene } from '../apps/server/src/model-scene';
 import { SemanticArtifact } from '../apps/server/src/semantic-artifact';
 import { preparePoleIndex, dropPoleIndexMemoryCache } from '../apps/server/src/pole-index';
-import { ProjectSession } from '../apps/server/src/project-session';
 import { ProviderModel, ModelError, type BoundModelScene } from '../apps/server/src/provider-model';
 import { ProviderAuth } from '../apps/server/src/provider-auth';
 import { validateModelEvent } from '../apps/web/src/model-chat-client';
@@ -35,10 +34,9 @@ async function dataset(t: { after(fn: () => unknown): void }) {
   const snapshot = await SemanticArtifact.open(root); const revision = snapshot.dataset.revision; await snapshot.close();
   const prep = await preparePoleIndex(root);
   t.after(async () => { dropPoleIndexMemoryCache(); await rm(root, { recursive: true, force: true }); await rm(prep.directory, { recursive: true, force: true }); });
-  const scene: ModelScene = { mode: 'toronto', project: null, toronto: [{ name: 'Point 1', datasetId: 'toronto3d', artifactRevision: revision,
+  const scene: ModelScene = { mode: 'toronto', toronto: [{ name: 'Point 1', datasetId: 'toronto3d', artifactRevision: revision,
     key: { sourceFileId: 1, sourceRow: 0 }, position: [9, 0, 120], frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] }] };
-  const authority = new ProjectSession(join(root, 'project.json'));
-  return { root, scene, bound: await bindModelScene(scene, authority, root, signal()) };
+  return { root, scene, bound: await bindModelScene(scene, root, signal()) };
 }
 const sse = (output: unknown[]) => new Response(`data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output } })}\n\n`, { headers: { 'content-type': 'text/event-stream' } });
 const tool = (args: unknown, name = 'nearest_label', call_id = 'nearest_call') => ({ type: 'function_call', name, namespace: 'scene', call_id, arguments: JSON.stringify(args) });
@@ -90,7 +88,7 @@ test('verified-none and cancellation/stale artifact are preserved, not invented 
 for (const args of [{ pointName: 'Point 99', label: 6 }, { pointName: 'Point 1', label: -1 }, { pointName: 'Point 1', label: 9 },
   { pointName: 'Point 1', label: 1.5 }, { pointName: 'Point 1', label: '6' }, { pointName: 'Point 1' },
   { pointName: 'Point 1', label: 6, sourceRow: 0 }]) test(`strict nearest-label arguments: ${JSON.stringify(args)}`, async t => {
-  const scene: ModelScene = { mode: 'toronto', project: null, toronto: [{ name: 'Point 1', datasetId: 'toronto3d', artifactRevision: 'a'.repeat(64), key: { sourceFileId: 1, sourceRow: 0 },
+  const scene: ModelScene = { mode: 'toronto', toronto: [{ name: 'Point 1', datasetId: 'toronto3d', artifactRevision: 'a'.repeat(64), key: { sourceFileId: 1, sourceRow: 0 },
     position: [0, 0, 120], frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] }] };
   let invoked = false;
   const bound: BoundModelScene = { context: {}, async check() {}, async close() {}, async nearestLabel() { invoked = true; throw new Error('Must not execute'); } };
@@ -99,15 +97,15 @@ for (const args of [{ pointName: 'Point 99', label: 6 }, { pointName: 'Point 1',
   assert.equal(p.events.some(e => isWorkflowTool(e)), false);
 });
 
-for (const mode of ['demo', 'pole', 'toronto'] as const) test(`nearest-label is unavailable without active bound Toronto names: ${mode}`, async t => {
+for (const mode of ['pole', 'toronto'] as const) test(`nearest-label is unavailable without active bound Toronto names: ${mode}`, async t => {
   const bound: BoundModelScene = { context: {}, async check() {}, async close() {}, async nearestLabel() { throw new Error('Must not execute'); } };
-  const p = await provider(t, { mode, project: null, toronto: [] }, bound, [tool({ pointName: 'Point 1', label: 6 })]);
+  const p = await provider(t, { mode, toronto: [] }, bound, [tool({ pointName: 'Point 1', label: 6 })]);
   await assert.rejects(p.run(), e => e instanceof ModelError && e.code === 'unsupported-tool');
   assert.equal(JSON.stringify(p.bodies[0].tools).includes('nearest_label'), false);
 });
 
 test('model cannot invoke mutation tools', async t => {
   const bound: BoundModelScene = { context: {}, async check() {}, async close() {} };
-  const p = await provider(t, { mode: 'toronto', project: null, toronto: [] }, bound, [tool({}, 'move_point')]);
+  const p = await provider(t, { mode: 'toronto', toronto: [] }, bound, [tool({}, 'move_point')]);
   await assert.rejects(p.run(), e => e instanceof ModelError && e.code === 'unsupported-tool');
 });

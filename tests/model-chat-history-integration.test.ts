@@ -6,9 +6,7 @@ import { createServer } from 'node:http';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
-import { TORONTO_SEMANTIC_LABELS, type BoxProposal, type ModelScene, type ModelTurnRequest } from '@spatial/contracts';
-import { ProjectSession } from '../apps/server/src/project-session';
+import { TORONTO_SEMANTIC_LABELS, type ModelScene, type ModelTurnRequest } from '@spatial/contracts';
 import { ProviderAuth } from '../apps/server/src/provider-auth';
 import { createModelChatRoutes } from '../apps/server/src/model-chat-routes';
 import { SemanticArtifact } from '../apps/server/src/semantic-artifact';
@@ -22,18 +20,12 @@ type ProviderBody = { input: Item[]; tools: { name: string; tools: { name: strin
 const answer = (text: string): Item => ({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] });
 const tool = (name: string, id: string, args: object = {}): Item => ({ type: 'function_call', namespace: 'scene', name, call_id: id, arguments: JSON.stringify(args) });
 const results = (body: ProviderBody) => body.input.filter(item => item.type === 'function_call_output');
-const deferred = <T>() => {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve };
-};
 async function fixture(t: TestContext, rounds: (body: ProviderBody, round: number) => Item[], skillIds: readonly string[] = []) {
   const root = await mkdtemp(join(tmpdir(), 'spatial-chat-history-'));
-  const authority = new ProjectSession(join(root, 'project.json'));
   const auth = new ProviderAuth({ mode: 'api-key', apiKey: 'synthetic-never-live' });
   // Keep original workflow numbering distinct from the explicit skill-load network rounds.
   const requests: ProviderBody[] = [], skillRequests: Record<string, unknown>[] = [], turns: ModelTurnRequest[] = [];
-  const routes = createModelChatRoutes(auth, authority, root, withProductSkills(async (url, init) => {
+  const routes = createModelChatRoutes(auth, root, withProductSkills(async (url, init) => {
     assert.match(String(url), /^https:\/\/api\.openai\.com\/v1\/(models|responses)$/u);
     if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'fixture-model' }] });
     assert.equal(init?.method, 'POST');
@@ -56,13 +48,13 @@ async function fixture(t: TestContext, rounds: (body: ProviderBody, round: numbe
     if (String(path) === '/chat/turn') turns.push(JSON.parse(String(init?.body)) as ModelTurnRequest);
     return fetch(base + String(path), { ...init, headers: { ...init?.headers, Origin: base } });
   };
-  const scene: ModelScene = { mode: 'demo', project: { ...authority.binding(), entityIds: [], points: [] }, toronto: [] };
+  const scene: ModelScene = { mode: 'pole', toronto: [] };
   t.after(async () => {
     routes.close(); auth.close(); server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
     await rm(root, { recursive: true, force: true });
   });
-  return { root, authority, fetcher, requests, skillRequests, turns, scene };
+  return { root, fetcher, requests, skillRequests, turns, scene };
 }
 function completed(controller: ModelChatController) {
   assert.equal(controller.view.phase, 'completed', controller.view.code);
@@ -101,7 +93,7 @@ test('controller preserves three user turns, assistant replies and every tool ca
     assert.deepEqual(results(body).map(item => item.call_id), [firstCall.call_id, secondCall.call_id]);
     for (const result of results(body)) {
       const context = JSON.parse(result.output);
-      assert.equal(context.mode, 'demo'); assert.equal(context.project.sessionId, f.authority.binding().sessionId);
+      assert.equal(context.mode, 'pole'); assert.equal('project' in context, false);
     }
   }
   assert.deepEqual(f.requests[4].input.filter(item => item.role === 'user').map(item => item.content), sends);
@@ -142,51 +134,13 @@ test('completed provider history survives catalog discovery failure and a confir
   assert.equal(f.turns[2].conversationId, f.turns[1].conversationId);
 });
 
-test('human approval pauses the controller loop until external authority acceptance, then replays the actual receipt', { timeout: 10000 }, async t => {
-  const proposed = deferred<BoxProposal>(), waiting = deferred<void>();
-  const call = tool('propose_box_create', 'history-proposal', { entityId: 'history-created-box', center: [1, 2, 3], dimensions: [1, 1, 1] });
-  const f = await fixture(t, (_body, round) => round === 1 ? [call] : [answer('The human accepted the proposal.')], ['synthetic-boxes']);
-  const before = f.authority.binding().projectRevision;
-  const controller = new ModelChatController(() => {}, f.fetcher, 5000, 1000, {
-    onproposal: proposal => proposed.resolve(proposal as BoxProposal),
-    onapprovalwait: active => { if (active) waiting.resolve(); },
-    onauthorityrefresh: async () => ({ ...f.scene, project: { ...f.scene.project!, ...f.authority.binding() } }),
-  });
-  t.after(() => controller.dispose()); controller.bind(f.scene); await controller.refreshModels();
-  const pending = controller.send('Propose a box and wait for my decision.');
-  const proposal = await proposed.promise; await waiting.promise;
-  assert.equal(controller.view.phase, 'streaming'); assert.equal(f.requests.length, 1);
-  assert.equal(f.authority.proposalDecision(proposal.proposalId), undefined);
-  assert.equal(f.authority.snapshot().project.entities.some(entity => entity.id === 'history-created-box'), false);
-  await delay(180); // longer than the real receipt polling interval
-  assert.equal(f.requests.length, 1, 'no provider continuation while the human has not decided');
-  for (const body of f.requests) {
-    const names = body.tools.flatMap(namespace => namespace.tools.map(tool => tool.name));
-    assert.ok(!names.some(name => /approve|accept|decline|publish/u.test(name)));
-  }
-  // This action is deliberately outside any model/browser callback.
-  f.authority.approve({ ...f.authority.binding(), proposalId: proposal.proposalId, digest: proposal.digest, humanApproved: true });
-  await pending; completed(controller); assert.equal(f.requests.length, 2);
-  assert.equal(f.skillRequests.length, 1); assert.equal(f.requests.length + f.skillRequests.length, 3);
-  const result = JSON.parse(results(f.requests[1]).find(item => item.call_id === call.call_id)!.output);
-  assert.equal(result.humanDecision.outcome, 'accepted');
-  assert.equal(result.humanDecision.scene.project.projectRevision, before + 1);
-  assert.equal(f.authority.proposalDecision(proposal.proposalId), 'accepted');
-  assert.equal(f.authority.snapshot().project.entities.some(entity => entity.id === 'history-created-box'), true);
-  assert.equal(await controller.send('Remember my acceptance.'), true); completed(controller);
-  assert.ok(f.turns[1].conversationId);
-  assert.equal(f.turns[1].scene.project?.projectRevision, before + 1);
-  assert.deepEqual(results(f.requests[2]).filter(item => item.call_id === call.call_id), results(f.requests[1]).filter(item => item.call_id === call.call_id));
-});
-
 test('a provider cannot bypass human approval with an invented approval tool', { timeout: 10000 }, async t => {
   const f = await fixture(t, () => [tool('approve', 'forged-model-approval', { humanApproved: true })]);
-  const before = f.authority.snapshot();
   const controller = new ModelChatController(() => {}, f.fetcher, 5000, 1000);
   t.after(() => controller.dispose()); controller.bind(f.scene); await controller.refreshModels();
   assert.equal(await controller.send('Approve the scene yourself.'), true);
   assert.equal(controller.view.phase, 'error'); assert.equal(controller.view.code, 'unsupported-tool');
-  assert.equal(f.requests.length, 1); assert.deepEqual(f.authority.snapshot(), before);
+  assert.equal(f.requests.length, 1);
 });
 
 async function torontoArea(root: string): Promise<ModelScene> {
@@ -211,7 +165,7 @@ async function torontoArea(root: string): Promise<ModelScene> {
   await writeFile(join(root, 'octree/hierarchy.bin'), hierarchy); await writeFile(join(root, 'octree/octree.bin'), payload);
   const artifact = await SemanticArtifact.open(root);
   try {
-    return { mode: 'toronto', project: null, toronto: [], areaOfInterest: {
+    return { mode: 'toronto', toronto: [], areaOfInterest: {
       datasetId: 'toronto3d', artifactRevision: artifact.dataset.revision, frameId: 'toronto3d-local-v1', units: 'm',
       localOrigin: [627285, 4841948, 0], corners: [[0, 0, 0], [2, 0, 0], [2, 2, 0], [0, 2, 0]],
     } };

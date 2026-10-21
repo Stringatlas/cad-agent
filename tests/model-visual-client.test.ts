@@ -13,7 +13,7 @@ function observation(bytes = 1): VisualObservation {
     binding: { sourceId: 'session-one', sourceRevision: 0, frameId: 'frame-one', units: 'm', origin: [0, 0, 0] },
     coverage: { kind: 'displayed-sample', complete: false, displayedPointCount: 4 } };
 }
-const scene = { mode: 'toronto', project: null, toronto: [] } as const;
+const scene = { mode: 'toronto', toronto: [] } as const;
 function request(v?: ModelVisualObservation): ModelTurnRequest {
   return { requestId: 'request-one', conversationId: null, generation: 'account-one', model: 'fixture-vision-vNext', text: 'Inspect this scene', scene,
     ...(v ? { visualObservation: v } : {}) };
@@ -180,7 +180,7 @@ test('historical image stays usable after a real scene rebind; request tools use
     if (path === '/chat/models') return Response.json({ mode: 'api-key', ready: true, generation: 'account-one', code: 'ready', models: [{ id: 'fixture-vision-vNext', label: 'Fixture' }] });
     const r = JSON.parse(init!.body as string) as ModelTurnRequest; turns.push(r); return response([start(r), done(r)]);
   });
-  const currentScene = { mode: 'demo' as const, project: { sessionId: 'current-session', projectRevision: 8, frameId: 'demo-local-v1' as const, units: 'm' as const, entityIds: [], points: [] }, toronto: [] };
+  const currentScene = { mode: 'toronto' as const, toronto: [] };
   try {
     client.bind(scene); await client.refreshModels();
     client.bind(currentScene); a.stale();
@@ -278,7 +278,7 @@ test('controller resends the same image after reset, failure, or cancellation, n
       client.bind(scene); await client.refreshModels(); await client.send('First image', a.attachment);
       if (reset === 'new-chat') client.newChat();
       if (reset === 'account') { client.accountChanged(); await client.refreshModels(); }
-      if (reset === 'scene') client.bind({ mode: 'pole', project: null, toronto: [] });
+      if (reset === 'scene') client.bind({ mode: 'pole', toronto: [] });
       if (reset === 'failure') { fail = true; await client.send('Failed followup', a.attachment); fail = false; }
       if (reset === 'cancel') {
         hold = true; const pending = client.send('Interrupted followup', a.attachment);

@@ -4,7 +4,7 @@ import type { ModelCaptureRequest, ModelTurnRequest } from '@spatial/contracts';
 import { streamModelTurn } from '../apps/web/src/model-chat-client';
 
 for (const colorMode of ['rgb', 'type', undefined] as const) test(`browser stream forwards capture mode ${colorMode ?? 'omitted'} unchanged to adapter`, async () => {
-  const request: ModelTurnRequest = { requestId: 'request-one', conversationId: null, generation: 'account-one', model: 'fixture', text: 'Inspect scene', scene: { mode: 'toronto', project: null, toronto: [] } };
+  const request: ModelTurnRequest = { requestId: 'request-one', conversationId: null, generation: 'account-one', model: 'fixture', text: 'Inspect scene', scene: { mode: 'toronto', toronto: [] } };
   const capture: ModelCaptureRequest = { kind: 'top-down', ...(colorMode ? { colorMode } : {}) };
   const frames = [{ kind: 'start', requestId: request.requestId, conversationId: 'conversation-one', model: request.model },
     { kind: 'browser-request', requestId: request.requestId, toolCallId: 'capture-one', nonce: 'nonce-one', action: { kind: 'capture', request: capture } },

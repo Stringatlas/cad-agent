@@ -4,9 +4,7 @@ import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import { deflateSync } from 'node:zlib';
 import { once } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { MODEL_VISUAL_LIMITS, canonicalModelChatEvent, canonicalModelTurnRequest, canonicalModelVisualObservation, canonicalModelVisualToolResult,
   type ModelTurnRequest, type ModelChatEvent, type VisualObservation } from '@spatial/contracts';
@@ -14,6 +12,7 @@ import { createDemoServer } from '../apps/server/src/index';
 import { validateModelVisual } from '../apps/server/src/model-visual';
 import { ModelVisualBroker } from '../apps/server/src/model-visual-broker';
 import { ProviderModel, type ModelAuth } from '../apps/server/src/provider-model';
+import { candidateSource } from './fixtures/area-candidate-source';
 
 const signal = () => new AbortController().signal;
 const jpeg = createRequire(new URL('../apps/server/package.json', import.meta.url))('jpeg-js') as { encode(image: { data: Buffer; width: number; height: number }, quality: number): { data: Buffer } };
@@ -34,15 +33,17 @@ function observation(): VisualObservation {
     image: { mimeType: 'image/png', dataUrl: `data:image/png;base64,${bytes.toString('base64')}`, sha256: createHash('sha256').update(bytes).digest('hex'), byteLength: bytes.length },
     viewport: { width: 2, height: 2, pixelRatio: 1, pixelOrigin: 'top-left' },
     camera: { position: [1, 2, 3], quaternion: [0, 0, 0, 1], up: [0, 0, 1], near: .1, far: 100, fov: 50, aspect: 1, zoom: 1, matrixWorld: identity, matrixWorldInverse: identity, projectionMatrix: identity },
-    binding: { sourceId: 'session-one', sourceRevision: 0, frameId: 'synthetic-project-local-v1', units: 'm', origin: [0, 0, 0] },
+    binding: { sourceId: 'toronto3d', sourceRevision: 'a'.repeat(64), frameId: 'toronto3d-local-v1', units: 'm', origin: [627285, 4841948, 0] },
     coverage: { kind: 'displayed-sample', complete: false, displayedPointCount: 4 } };
 }
 const complete = (output: unknown[] = [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Grounded' }] }]) => new Response(`data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output } })}\n\n`, { headers: { 'content-type': 'text/event-stream' } });
 const tool = (args: unknown) => ({ type: 'function_call', namespace: 'scene', name: 'resolve_visual_pixel', call_id: 'pixel-call', arguments: JSON.stringify(args) });
 async function fixture(t: { after(fn: () => unknown): void }, args: unknown = { observationId: 'observation-one', x: 1, y: 1 }) {
-  const root = await mkdtemp(join(tmpdir(), 'spatial-visual-model-')), requests: Record<string, unknown>[] = [], skillRequests: Record<string, unknown>[] = [];
+  const source = await candidateSource([{ xyz: [0, 0, 0], label: 1 }]);
+  const root = source.root, requests: Record<string, unknown>[] = [], skillRequests: Record<string, unknown>[] = [];
+  t.after(() => source.close());
   // Workflow requests retain their numbering; load requests are real additional network rounds.
-  const server = createDemoServer({ projectPath: join(root, 'project.json'), datasetRoot: join(root, 'absent'), provider: { mode: 'api-key', apiKey: 'fake-no-live-key' },
+  const server = createDemoServer({ datasetRoot: root, provider: { mode: 'api-key', apiKey: 'fake-no-live-key' },
     modelTransport: withProductSkills(async (url, init) => {
       if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'fixture-vision-vNext' }, { id: 'fixture-image-rejected' }] });
       const body = JSON.parse(String(init?.body)); requests.push(body);
@@ -51,11 +52,11 @@ async function fixture(t: { after(fn: () => unknown): void }, args: unknown = { 
     }, ['visual-inspection'], skillRequests) });
   server.listen(0, '127.0.0.1'); await once(server, 'listening'); const address = server.address(); assert.ok(address && typeof address !== 'string'); const base = `http://127.0.0.1:${address.port}`;
   t.after(async () => { await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }); await rm(root, { recursive: true, force: true }); });
-  const catalog = await (await fetch(base + '/chat/models')).json(), snapshot = (await (await fetch(base + '/project/session')).json()).result.snapshot;
+  const catalog = await (await fetch(base + '/chat/models')).json();
   const visual = observation();
-  const boundVisual: VisualObservation = { ...visual, binding: { sourceId: snapshot.sessionId, sourceRevision: snapshot.project.revision, frameId: snapshot.frameId, units: 'm', origin: snapshot.project.coordinates.localOrigin } };
+  const boundVisual: VisualObservation = { ...visual, binding: { ...visual.binding, sourceRevision: source.snapshot.dataset.revision } };
   const call: ModelTurnRequest = { requestId: 'request-one', conversationId: null, generation: catalog.generation, model: 'fixture-vision-vNext', text: 'Ground this pixel',
-    scene: { mode: 'demo', toronto: [], project: { sessionId: snapshot.sessionId, projectRevision: snapshot.project.revision, frameId: snapshot.frameId, units: 'm', entityIds: [], points: [] } }, visualObservation: boundVisual };
+    scene: { mode: 'toronto', toronto: [] }, visualObservation: boundVisual };
   const post = (body: unknown) => fetch(base + '/chat/turn', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   const result = (body: unknown, origin: string | null = base) => fetch(base + '/chat/tool-result', { method: 'POST', headers: { 'content-type': 'application/json', ...(origin ? { origin } : {}) }, body: JSON.stringify(body) });
   return { server, base, call, requests, skillRequests, post, result };
@@ -79,7 +80,7 @@ test('actual PNG bytes/hash/CRC/dimensions are validated before dispatch; image 
   const bytes = png(); bytes[bytes.length - 1] ^= 1;
   await assert.rejects(validateModelVisual({ ...call, visualObservation: { ...call.visualObservation!, image: { ...call.visualObservation!.image, dataUrl: `data:image/png;base64,${bytes.toString('base64')}`, sha256: createHash('sha256').update(bytes).digest('hex') } } }, signal()));
   assert.equal(f.requests.length, 0);
-  const historical = { ...call.visualObservation!, binding: { ...call.visualObservation!.binding, sourceId: 'older-session', sourceRevision: 999, origin: [1, 2, 3] as const } };
+  const historical = { ...call.visualObservation!, binding: { ...call.visualObservation!.binding, sourceRevision: 'b'.repeat(64) } };
   assert.deepEqual(await validateModelVisual({ ...call, visualObservation: historical }, signal()), historical);
 });
 test('image pixel roundtrip is nonce-bound, origin-guarded, one-use, truthful and image turns retain conversation history', async t => {
@@ -171,22 +172,6 @@ test('large screenshots get a dedicated retained image budget without increasing
   assert.equal(tooLarge.status, 400); assert.equal(f.requests.length, 2);
   const text = await f.post({ ...f.call, visualObservation: undefined, text: 'x'.repeat(70000) }); assert.equal(text.status, 400);
 });
-test('authority Load while browser RPC is pending cannot bypass revision checks', async t => {
-  const f = await fixture(t); let callback: Record<string, unknown> | undefined;
-  const abort = new AbortController();
-  const response = await fetch(f.base + '/chat/turn', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(f.call), signal: abort.signal });
-  const reader = response.body!.getReader(); let pending = '';
-  for (;;) { const next = await reader.read(); assert.equal(next.done, false); pending += new TextDecoder().decode(next.value); const lines = pending.split('\n'); pending = lines.pop()!;
-    for (const line of lines) { const e = canonicalModelChatEvent(JSON.parse(line)); if (e.kind === 'tool-request') { const { kind: _kind, x, y, ...identity } = e; callback = { ...identity, result: { status: 'no-hit', observationId: e.observationId, x, y, reason: 'empty' } }; } }
-    if (callback) break;
-  }
-  // Persist current snapshot, then Load rotates session even with unchanged geometry revision.
-  const headers = { 'content-type': 'application/json' }, project = f.call.scene.project!;
-  const binding = { sessionId: project.sessionId, projectRevision: project.projectRevision, frameId: project.frameId, units: 'm' };
-  assert.equal((await fetch(f.base + '/project/save', { method: 'POST', headers, body: JSON.stringify(binding) })).status, 200);
-  assert.equal((await fetch(f.base + '/project/load', { method: 'POST', headers, body: JSON.stringify(binding) })).status, 200);
-  assert.equal((await f.result(callback)).status, 400); abort.abort(); await reader.cancel().catch(() => undefined); assert.equal(f.requests.length, 1);
-});
 test('JPEG crop HTTP roundtrip transmits only compressed bytes, reports truthful metadata and bounds model pixels to sent size', async t => {
   for (const x of [0, 1]) {
     const f = await fixture(t, { observationId: 'observation-one', x, y: 0 }), v = f.call.visualObservation!;
@@ -266,7 +251,7 @@ test('catalog-listed unfamiliar ChatGPT model receives input_image; provider rej
   const model = new ProviderModel(auth, async (url, init) => { if (String(url).endsWith('/models')) return Response.json({ models: [{ slug: 'fixture-vision-vNext', display_name: 'Fixture model', visibility: 'list' }] }); requests.push(JSON.parse(String(init?.body))); return rejectImage ? Response.json({ error: { code: 'subscription_sharing_unsupported_capability' } }, { status: 400 }) : complete(); });
   try {
     await model.models(signal());
-    const call: ModelTurnRequest = { requestId: 'r', conversationId: null, generation: 'g', model: 'fixture-vision-vNext', text: 'Look', scene: { mode: 'demo', project: null, toronto: [] }, visualObservation: observation() };
+    const call: ModelTurnRequest = { requestId: 'r', conversationId: null, generation: 'g', model: 'fixture-vision-vNext', text: 'Look', scene: { mode: 'toronto', toronto: [] }, visualObservation: observation() };
     const bound = { context: {}, async check() {}, async close() {} };
     await model.turn(call, bound, async () => {}, signal());
     assert.equal(requests.length, 1); assert.equal('max_output_tokens' in requests[0], false);

@@ -6,7 +6,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TORONTO_SEMANTIC_LABELS, canonicalModelChatEvent, type ModelChatEvent, type ModelScene, type ModelTurnRequest, type PointMoveProposal, type PointOverrideSnapshot, type TorontoCadSnapshot, type ModelVisualObservation } from '@spatial/contracts';
 import { bindModelScene } from '../apps/server/src/model-scene';
-import { ProjectSession } from '../apps/server/src/project-session';
 import { PointOverrideSession } from '../apps/server/src/point-overrides';
 import { TorontoCadSession } from '../apps/server/src/toronto-cad-session';
 import { ProviderAuth } from '../apps/server/src/provider-auth';
@@ -35,14 +34,14 @@ async function dataset(t: { after(fn: () => unknown): void }, multiple = false) 
   await writeFile(join(root, 'manifest.json'), JSON.stringify({ units: 'm', frame: 'right-handed Z-up', local_origin_world: [627285, 4841948, 0], potree_scale_m: metadata.scale,
     semantic_attribute: 'scalar_Label', semantic_classes: TORONTO_SEMANTIC_LABELS, sources: [1, 2, 3, 4].map(id => ({ source_file_id: id, file: `L00${id}.ply`, points: id === 1 ? count : 0 })) }));
   await writeFile(join(root, 'octree/metadata.json'), JSON.stringify(metadata)); await writeFile(join(root, 'octree/hierarchy.bin'), hierarchy); await writeFile(join(root, 'octree/octree.bin'), payload);
-  const points = new PointOverrideSession(root), cad = new TorontoCadSession(root), project = new ProjectSession(join(root, 'project.json'));
+  const points = new PointOverrideSession(root), cad = new TorontoCadSession(root);
   t.after(async () => { await points.close(); await cad.close(); await rm(root, { recursive: true, force: true }); });
   const state = await points.execute('snapshot') as PointOverrideSnapshot;
-  let scene: ModelScene = { mode: 'toronto', project: null, toronto: [{ name: 'Point 1', datasetId: 'toronto3d', artifactRevision: state.artifactRevision,
+  let scene: ModelScene = { mode: 'toronto', toronto: [{ name: 'Point 1', datasetId: 'toronto3d', artifactRevision: state.artifactRevision,
     key: { sourceFileId: 1, sourceRow: 0 }, position: [1, 0, 0], frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] }] };
   if (multiple) scene = { ...scene, toronto: [...scene.toronto, { ...scene.toronto[0], name: 'Point 2', key: { sourceFileId: 1, sourceRow: 1 }, position: [10, 0, 0] }] };
-  const bind = async (s = scene) => { const bound = await bindModelScene(s, project, root, signal(), undefined, { points, cad }); t.after(() => bound.close()); return bound; };
-  return { root, points, cad, project, state, scene, bind };
+  const bind = async (s = scene) => { const bound = await bindModelScene(s, root, signal(), undefined, { points, cad }); t.after(() => bound.close()); return bound; };
+  return { root, points, cad, state, scene, bind };
 }
 async function provider(t: { after(fn: () => unknown): void }) {
   const auth = new ProviderAuth({ mode: 'api-key', apiKey: 'synthetic-only' });
@@ -62,7 +61,6 @@ async function provider(t: { after(fn: () => unknown): void }) {
 
 test('Toronto box/cylinder tools work without attached points, return metadata only, and leave actual kernel candidates pending', async t => {
   const f = await dataset(t), p = await provider(t), scene = { ...f.scene, toronto: [] }, bound = await f.bind(scene);
-  const syntheticBefore = f.project.snapshot();
   p.outputs.push([tool('propose_cad_box', { center: [3, 4, 5], dimensions: [2, 4, 6] }), tool('propose_cad_cylinder', { center: [7, 8, 9], radius: 2, height: 3 })], []);
   const events = toolEvents(await p.run(scene, bound));
   assert.deepEqual(advertised(p.requests[0]), ['list_skills', 'load_skill', 'get_scene_marks', 'set_scene_marks', 'query_points', 'ground_elevation', 'inspect_scene', 'propose_cad_box', 'propose_cad_cylinder']);
@@ -76,7 +74,6 @@ test('Toronto box/cylinder tools work without attached points, return metadata o
   const snapshot = await f.cad.execute('snapshot') as TorontoCadSnapshot;
   assert.equal(snapshot.bodies.length, 0); assert.equal(snapshot.revision, 0); assert.equal(snapshot.proposals.length, 2);
   assert.ok(snapshot.proposals.every(proposal => proposal.mesh.triangles.length > 0));
-  assert.deepEqual(f.project.snapshot(), syntheticBefore);
   const replay = p.requests[1].input as { type?: string; output?: string }[];
   assert.deepEqual(replay.filter(i => i.type === 'function_call_output' && !JSON.parse(i.output!).kind?.startsWith('runtime-skill')).map(i => JSON.parse(i.output!)), events.map(e => e.context));
   await bound.close();
@@ -101,7 +98,7 @@ test('named point move reuses shared authority, independently rejects forged ori
   const forged = await f.bind({ ...f.scene, toronto: [{ ...f.scene.toronto[0], position: [9, 0, 0] }] });
   await assert.rejects(forged.proposePointMove!({ pointNames: ['Point 1'], translation: [0, 1, 0] }, signal()), { code: 'invalid-point-proposal' });
   const fresh = new PointOverrideSession(f.root); t.after(() => fresh.close());
-  const bad = await bindModelScene({ ...f.scene, toronto: [{ ...f.scene.toronto[0], position: [9, 0, 0] }] }, f.project, f.root, signal(), undefined, { points: fresh, cad: f.cad }); t.after(() => bad.close());
+  const bad = await bindModelScene({ ...f.scene, toronto: [{ ...f.scene.toronto[0], position: [9, 0, 0] }] }, f.root, signal(), undefined, { points: fresh, cad: f.cad }); t.after(() => bad.close());
   await assert.rejects(bad.proposePointMove!({ pointNames: ['Point 1'], translation: [0, 1, 0] }, signal()), { code: 'position-mismatch' });
 });
 
@@ -126,8 +123,8 @@ test('Toronto strict tools reject malformed arguments, model-selected keys, bind
   assert.equal(attempts, 0);
   assert.equal((await f.points.execute('pending') as PointMoveProposal[]).length, 0);
   assert.equal((await f.cad.execute('snapshot') as TorontoCadSnapshot).proposals.length, 0);
-  for (const mode of ['demo', 'pole'] as const) {
-    const scene: ModelScene = { mode, project: null, toronto: [] };
+  for (const mode of ['pole'] as const) {
+    const scene: ModelScene = { mode, toronto: [] };
     p.outputs.push([tool('propose_cad_box', { center: [0, 0, 0], dimensions: [1, 1, 1] })]);
     await assert.rejects(p.run(scene, guarded), { code: 'unsupported-tool' });
     assert.deepEqual(advertised(p.requests.at(-1)!), ['list_skills', 'load_skill', 'query_points', 'ground_elevation', 'inspect_scene']);
@@ -140,7 +137,7 @@ test('historical images admit point/CAD ghosts, edited points and accepted solid
   // artifact revision in the image cannot grant or replace current tool permissions.
   const visual = { binding: { sourceRevision: 'older-captured-artifact' } } as ModelVisualObservation;
   const imageBind = async () => {
-    const next = await bindModelScene(f.scene, f.project, f.root, signal(), visual, { points: f.points, cad: f.cad });
+    const next = await bindModelScene(f.scene, f.root, signal(), visual, { points: f.points, cad: f.cad });
     t.after(() => next.close()); await next.check(); return next;
   };
   const proposal = await bound.proposePointMove!({ pointNames: ['Point 1'], translation: [0, 1, 0] }, signal());

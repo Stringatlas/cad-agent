@@ -23,7 +23,7 @@ export interface AgentToolsInspection {
     readonly description: string;
     readonly instructions: string;
     readonly tools: readonly string[];
-    readonly modes: readonly ('toronto' | 'demo' | 'pole')[];
+    readonly modes: readonly ('toronto' | 'pole')[];
     readonly dependencies: readonly string[];
   }[];
 }

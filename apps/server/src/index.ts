@@ -1,10 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { createDatasetRoutes, DEFAULT_DATASET_ROOT } from './dataset-routes';
-import { createChatRoutes } from './chat-routes';
-import { createCadRoutes } from './cad-routes';
-import { ProjectSession } from './project-session';
-import { createProjectRoutes } from './project-routes';
 import { ProviderAuth, type ProviderAuthOptions } from './provider-auth';
 import { createAuthRoutes } from './auth-routes';
 import { loadServerConfiguration } from './provider-config';
@@ -19,13 +15,11 @@ import { createSceneObjectRoutes } from './scene-object-routes';
 import { PlacementSearchSession } from './placement-search-session';
 import { createPlacementSearchRoutes } from './placement-search-routes';
 
-/** One single-user authority. View selections are disposable; CAD remains a separate sandbox. */
-export function createDemoServer(options: { datasetRoot?: string; projectPath?: string; provider?: ProviderAuthOptions; modelTransport?: ModelTransport } = {}): Server {
-  const authority = new ProjectSession(options.projectPath ?? process.env.SPATIAL_PROJECT_PATH);
+/** Toronto dataset, point, authored-object and CAD authorities. */
+export function createDemoServer(options: { datasetRoot?: string; provider?: ProviderAuthOptions; modelTransport?: ModelTransport } = {}): Server {
   // Factory callers/tests never load the operator's .env or authentication store implicitly.
   const auth = new ProviderAuth(options.provider ?? { mode: 'disabled' });
   const authRoutes = createAuthRoutes(auth, options.provider?.redirectUri);
-  const projectRoutes = createProjectRoutes(authority);
   const directory = options.datasetRoot ?? DEFAULT_DATASET_ROOT;
   const points = new PointOverrideSession(directory);
   const cad = new TorontoCadSession(directory);
@@ -33,14 +27,10 @@ export function createDemoServer(options: { datasetRoot?: string; projectPath?: 
   const placementRoutes = createPlacementSearchRoutes(placement);
   const objects = new SceneObjectSession(directory, points);
   const objectRoutes = createSceneObjectRoutes(directory, points, objects);
-  const modelRoutes = createModelChatRoutes(auth, authority, directory, options.modelTransport, { points, cad, objects, placement });
+  const modelRoutes = createModelChatRoutes(auth, directory, options.modelTransport, { points, cad, objects, placement });
   const datasetRoutes = createDatasetRoutes(options.datasetRoot);
   const pointOverrideRoutes = createPointOverrideRoutes(directory, points);
   const torontoCadRoutes = createTorontoCadRoutes(directory, cad);
-  const chatRoutes = createChatRoutes(() => authority.snapshot(), authority.snapshot().sessionId, options.datasetRoot ?? DEFAULT_DATASET_ROOT);
-  // The sandbox is bound at startup; edit/load explicitly invalidates it until restart.
-  const cadSource = () => { const b = authority.binding(); return { sessionId: b.sessionId, projectRevision: b.projectRevision, frameId: b.frameId }; };
-  const cadRoutes = createCadRoutes(cadSource(), cadSource);
   const server = createServer((request, response) => {
     response.setHeader('Content-Type', 'application/json; charset=utf-8');
     response.setHeader('Cache-Control', 'no-store');
@@ -56,10 +46,7 @@ export function createDemoServer(options: { datasetRoot?: string; projectPath?: 
     }
     const dispatch = async () => {
       if (await authRoutes(request, response)) return;
-      if (await projectRoutes(request, response)) return;
       if (await modelRoutes.handle(request, response)) return;
-      if (await chatRoutes(request, response)) return;
-      if (await cadRoutes.handle(request, response)) return;
       if (await pointOverrideRoutes.handle(request, response)) return;
       if (await torontoCadRoutes.handle(request, response)) return;
       if (await objectRoutes.handle(request, response)) return;
@@ -90,7 +77,7 @@ export function createDemoServer(options: { datasetRoot?: string; projectPath?: 
     void placementClosed.then(() => { void pointOverrideRoutes.close(); void torontoCadRoutes.close(); void objectRoutes.close(); });
     return close(...args);
   };
-  server.once('close', () => { modelRoutes.close(); auth.close(); void cadRoutes.close(); });
+  server.once('close', () => { modelRoutes.close(); auth.close(); });
   return server;
 }
 
@@ -106,7 +93,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       server.close(); process.exitCode = 1;
     });
     server.listen(3001, '127.0.0.1', () => {
-      console.log('Local demo server listening at http://127.0.0.1:3001 (provider settings: /auth; authoritative project; separate CAD sandbox)');
+      console.log('Local server listening at http://127.0.0.1:3001 (provider settings: /auth; Toronto workspace)');
     });
   } catch {
     console.error('Server startup failed; check server configuration and protected local storage (see docs/provider-auth.md)');

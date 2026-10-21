@@ -16,11 +16,11 @@ function visual(): ModelVisualObservation {
     crop: { x: 2, y: 3, width: 7, height: 5, outputWidth: 3, outputHeight: 2 },
     viewport: { width: 12, height: 10, pixelRatio: 2, pixelOrigin: 'top-left' },
     camera: { position: [1, 2, 3], quaternion: [0, 0, 0, 1], up: [0, 0, 1], near: .1, far: 100, fov: 50, aspect: 1.2, zoom: 1, matrixWorld: identity, matrixWorldInverse: identity, projectionMatrix: identity },
-    binding: { sourceId: 'session-one', sourceRevision: 0, frameId: 'demo-local-v1', units: 'm', origin: [0, 0, 0] },
+    binding: { sourceId: 'toronto3d', sourceRevision: 'a'.repeat(64), frameId: 'toronto3d-local-v1', units: 'm', origin: [627285, 4841948, 0] },
     coverage: { kind: 'displayed-sample', complete: false, displayedPointCount: 4 } };
 }
 function request(v = visual()): ModelTurnRequest { return { requestId: 'request-one', conversationId: null, generation: 'account-one', model: 'catalog-arbitrary-model', text: 'Inspect crop',
-  scene: { mode: 'demo', project: { sessionId: 'session-one', projectRevision: 0, frameId: 'demo-local-v1', units: 'm', entityIds: [], points: [] }, toronto: [] }, visualObservation: v }; }
+  scene: { mode: 'toronto', toronto: [] }, visualObservation: v }; }
 const signal = () => new AbortController().signal;
 function withBytes(v: ModelVisualObservation, bytes: Buffer): ModelVisualObservation { return { ...v, image: { ...v.image, byteLength: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), dataUrl: `data:${v.image.mimeType};base64,${bytes.toString('base64')}` } }; }
 
@@ -38,7 +38,7 @@ test('actual bounded JPEG decode rejects forged dimensions, MIME, hash, truncate
   for (const bad of [{ ...v, crop: { ...v.crop!, outputWidth: 2 } }, { ...v, image: { ...v.image, sha256: 'a'.repeat(64) } },
     { ...v, image: { ...v.image, mimeType: 'image/png' as const, dataUrl: v.image.dataUrl.replace('image/jpeg', 'image/png') } },
     withBytes(v, Buffer.from([0xff, 0xd8, 0xff, 0xd9])), withBytes(v, Buffer.from(v.image.dataUrl.split(',')[1], 'base64').subarray(0, 100))]) await assert.rejects(validateModelVisual(request(bad), signal()));
-  const historical = { ...v, binding: { ...v.binding, sourceRevision: 1 } };
+  const historical = { ...v, binding: { ...v.binding, sourceRevision: 'b'.repeat(64) } };
   assert.deepEqual(await validateModelVisual(request(historical), signal()), historical);
   const bomb = Buffer.from(v.image.dataUrl.split(',')[1], 'base64');
   const marker = bomb.indexOf(Buffer.from([0xff, 0xc0])); assert.ok(marker > 0);

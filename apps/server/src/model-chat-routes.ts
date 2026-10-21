@@ -6,7 +6,6 @@ import { createModelAgentRuntime, retryModelSceneRead } from './model-agent-runt
 import { ModelVisualBroker } from './model-visual-broker';
 import { validateModelVisual } from './model-visual';
 import { bindModelScene, type ModelEditingAuthorities } from './model-scene';
-import { ProjectSession, ProjectError } from './project-session';
 
 function readBody(request: IncomingMessage, signal: AbortSignal, maxBytes: number = L.requestBytes): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -32,7 +31,7 @@ async function writeEvent(response: ServerResponse, event: ModelChatEvent, signa
   });
 }
 /** One admission includes catalog/credentials, body reading, scene checks and all tool rounds. */
-export function createModelChatRoutes(auth: ModelAuth, authority: ProjectSession, directory: string, transport?: ModelTransport, editing?: ModelEditingAuthorities) {
+export function createModelChatRoutes(auth: ModelAuth, directory: string, transport?: ModelTransport, editing?: ModelEditingAuthorities) {
   const model = new ProviderModel(auth, transport);
   let active: AbortController | undefined, closed = false, windowStart = Date.now(), calls = 0;
   let broker: ModelVisualBroker | undefined, browserBroker: ModelBrowserBroker | undefined, boundActive: BoundModelScene | undefined, readingToolResult = false;
@@ -108,11 +107,11 @@ export function createModelChatRoutes(auth: ModelAuth, authority: ProjectSession
         if (!call.visualObservation && Buffer.byteLength(JSON.stringify(raw)) > L.requestBytes) throw new ModelError('invalid-request');
         const visual = await validateModelVisual(call, controller.signal);
         if (call.generation !== auth.credentialGeneration()) throw new ModelError('stale-account');
-        // Binding uses only authoritative synthetic context or revision-checked unmapped dataset metadata.
-        bound = await retryModelSceneRead(() => bindModelScene(call!.scene, authority, directory, controller.signal, visual, editing), controller.signal);
+        // Bind dataset metadata and the separate Toronto editing authorities.
+        bound = await retryModelSceneRead(() => bindModelScene(call!.scene, directory, controller.signal, visual, editing), controller.signal);
         broker = new ModelVisualBroker(call.requestId, controller.signal, emit);
         browserBroker = new ModelBrowserBroker(call.requestId, controller.signal, emit);
-        const runtime = createModelAgentRuntime(call, bound, authority, directory, controller.signal, browserBroker, editing);
+        const runtime = createModelAgentRuntime(call, bound, directory, controller.signal, browserBroker, editing);
         bound = new Proxy(runtime, { get(target, key) {
           if (key === 'resolveVisualPixel') return (args: { observationId: string; x: number; y: number }, toolCallId: string) => broker!.resolve(args, toolCallId);
           return Reflect.get(target, key);
@@ -121,8 +120,7 @@ export function createModelChatRoutes(auth: ModelAuth, authority: ProjectSession
         await model.turn(call, bound, emit, controller.signal);
         response.end();
       } catch (error) {
-        const code = timedOut ? 'deadline' : controller.signal.aborted ? 'cancelled' : error instanceof ModelError ? error.code :
-          error instanceof ProjectError ? error.code === 'stale-project' ? 'stale-scene' : 'invalid-scene' : 'request-failed';
+        const code = timedOut ? 'deadline' : controller.signal.aborted ? 'cancelled' : error instanceof ModelError ? error.code : 'request-failed';
         if (!response.destroyed && !response.writableEnded) {
           if (call && !terminal && !controller.signal.aborted) {
             // A fixed error frame, never provider exception/body text. Partial text is not completed history.

@@ -9,7 +9,6 @@ import type { SceneObjectSnapshot, SceneObjectProposal, AuthoredObjectReference 
 import { SceneObjectSession } from '../apps/server/src/scene-object-session';
 import { PointOverrideSession } from '../apps/server/src/point-overrides';
 import { TorontoCadSession } from '../apps/server/src/toronto-cad-session';
-import { ProjectSession } from '../apps/server/src/project-session';
 import { bindModelScene } from '../apps/server/src/model-scene';
 import { createModelAgentRuntime } from '../apps/server/src/model-agent-runtime';
 import { ModelBrowserBroker } from '../apps/server/src/model-browser-broker';
@@ -25,13 +24,13 @@ async function fixture(t: { after(fn: () => unknown): void }) {
   await mkdir(join(root, 'octree'));
   await writeFile(join(root, 'manifest.json'), JSON.stringify({ units: 'm', frame: 'right-handed Z-up', local_origin_world: [627285, 4841948, 0], potree_scale_m: metadata.scale, semantic_attribute: 'scalar_Label', semantic_classes: TORONTO_SEMANTIC_LABELS, sources: [1, 2, 3, 4].map(id => ({ source_file_id: id, file: `L00${id}.ply`, points: id === 1 ? 1 : 0 })) }));
   await writeFile(join(root, 'octree/metadata.json'), JSON.stringify(metadata)); await writeFile(join(root, 'octree/octree.bin'), payload); await writeFile(join(root, 'octree/hierarchy.bin'), hierarchy);
-  const points = new PointOverrideSession(root), cad = new TorontoCadSession(root), objects = new SceneObjectSession(root, points), project = new ProjectSession(join(root, 'project.json'));
+  const points = new PointOverrideSession(root), cad = new TorontoCadSession(root), objects = new SceneObjectSession(root, points);
   t.after(async () => { await objects.close(); await points.close(); await cad.close(); await rm(root, { recursive: true, force: true }); });
   const s = await objects.execute('snapshot') as SceneObjectSnapshot;
-  const scene: ModelScene = { mode: 'toronto', project: null, toronto: [{ name: 'Point 1', datasetId: 'toronto3d', artifactRevision: s.artifactRevision, key: { sourceFileId: 1, sourceRow: 0 }, position: [19, 0, 0], frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] }] };
+  const scene: ModelScene = { mode: 'toronto', toronto: [{ name: 'Point 1', datasetId: 'toronto3d', artifactRevision: s.artifactRevision, key: { sourceFileId: 1, sourceRow: 0 }, position: [19, 0, 0], frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] }] };
   const editing = { points, cad, objects };
-  const bind = async (next = scene) => { const b = await bindModelScene(next, project, root, signal, undefined, editing); t.after(() => b.close()); return b; };
-  return { root, points, cad, objects, project, editing, s, scene, bind };
+  const bind = async (next = scene) => { const b = await bindModelScene(next, root, signal, undefined, editing); t.after(() => b.close()); return b; };
+  return { root, points, cad, objects, editing, s, scene, bind };
 }
 const decision = (p: SceneObjectProposal) => ({ sessionId: p.sessionId, revision: p.revision, artifactRevision: p.artifactRevision, proposalId: p.proposalId });
 const ref = (s: SceneObjectSnapshot): AuthoredObjectReference => ({ kind: 'authored-object', sessionId: s.sessionId, revision: s.revision, objectId: s.objects[0].id, objectRevision: 1, frameId: s.frameId, units: s.units });
@@ -45,7 +44,7 @@ test('model scene authored references are Toronto-only, canonical, bounded and e
   const selectedBound = await f.bind(selected); await selectedBound.check();
   await assert.rejects(f.bind({ ...selected, objects: [{ ...ref(s), revision: 0 }] }), { code: 'stale-scene' });
   await assert.rejects(f.bind({ ...selected, objects: [{ ...ref(s), objectId: 'absent' }] }), { code: 'stale-scene' });
-  assert.equal(canonicalModelScene({ mode: 'demo', project: null, toronto: [] }).objects, undefined);
+  assert.equal(canonicalModelScene({ mode: 'pole', toronto: [] }).objects, undefined);
 });
 test('object tools retain checked independent datums, bounded inspection and no fabricated source record', async t => {
   const f = await fixture(t), b = await f.bind();
@@ -72,7 +71,7 @@ test('runtime observes object receipts, rebinds selected refs, rejects unrelated
   const scene = { ...f.scene, objects: [ref(s)] }, current = await f.bind(scene);
   const call: ModelTurnRequest = { requestId: 'req', conversationId: null, generation: 'generation', model: 'test', text: 'create', scene };
   const browser = new ModelBrowserBroker('req', signal, async () => undefined);
-  const runtime = createModelAgentRuntime(call, current, f.project, f.root, signal, browser, f.editing); t.after(() => runtime.close());
+  const runtime = createModelAgentRuntime(call, current, f.root, signal, browser, f.editing); t.after(() => runtime.close());
   const second = await runtime.proposePointCreate!({ name: 'B', input: { kind: 'object', objectId: first.object.id, offset: [1, 0, 0] } }, signal);
   await f.objects.execute('approve', decision(second));
   const result = await runtime.waitForApproval!('objects', second.proposalId);
@@ -119,7 +118,7 @@ test('provider advertises strict object tools, emits exact candidate and observe
   }, ['scene-objects']));
   t.after(() => { model.close(); auth.close(); });
   const catalog = await model.models(signal), call: ModelTurnRequest = { requestId: 'req', conversationId: null, generation: catalog.generation, model: 'test', text: 'create A', scene: f.scene };
-  const runtime = createModelAgentRuntime(call, bound, f.project, f.root, signal, new ModelBrowserBroker('req', signal, async () => undefined), f.editing);
+  const runtime = createModelAgentRuntime(call, bound, f.root, signal, new ModelBrowserBroker('req', signal, async () => undefined), f.editing);
   t.after(() => runtime.close());
   const events: ModelChatEvent[] = [];
   await model.turn(call, runtime, async event => {

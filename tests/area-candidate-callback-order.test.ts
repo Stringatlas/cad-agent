@@ -4,7 +4,7 @@ import { setImmediate } from 'node:timers/promises';
 import type { ModelScene, ModelTurnRequest } from '@spatial/contracts';
 import { ModelChatController } from '../apps/web/src/model-chat-client';
 function deferred() { let resolve!: () => void; let reject!: (error: Error) => void; const promise = new Promise<void>((a,b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
-const scene: ModelScene = { mode: 'toronto', project: null, toronto: [], areaOfInterest: { datasetId: 'toronto3d', artifactRevision: 'a'.repeat(64), frameId: 'toronto3d-local-v1', units: 'm', localOrigin: [627285,4841948,0], corners: [[0,0,0],[100,0,0],[100,100,0],[0,100,0]] } };
+const scene: ModelScene = { mode: 'toronto', toronto: [], areaOfInterest: { datasetId: 'toronto3d', artifactRevision: 'a'.repeat(64), frameId: 'toronto3d-local-v1', units: 'm', localOrigin: [627285,4841948,0], corners: [[0,0,0],[100,0,0],[100,100,0],[0,100,0]] } };
 function fixture(callback: (result: unknown, current: () => boolean) => Promise<void>) {
   const order: string[] = [];
   const client = new ModelChatController(() => {}, async (path, init) => {

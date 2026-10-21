@@ -30,7 +30,7 @@ for (const [index, view] of views.entries()) {
   });
 }
 
-const scene: ModelScene = { mode: 'toronto', project: null, toronto: [] };
+const scene: ModelScene = { mode: 'toronto', toronto: [] };
 const signal = new AbortController().signal;
 async function fixture(t: { after(fn: () => unknown): void }, args?: unknown, capabilities: Partial<BoundModelScene> = {}) {
   const auth = new ProviderAuth({ mode: 'api-key', apiKey: 'fixture-only' });

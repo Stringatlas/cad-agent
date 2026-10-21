@@ -13,7 +13,7 @@ const sections = Object.fromEntries([...readback.matchAll(/## (\w+)\n\n```text\n
 const workflowSections: Record<string, string> = {
   'scene-inspection': 'AOI_POINTS_INSTRUCTIONS', 'visual-inspection': 'VISUAL_INSTRUCTIONS',
   'candidate-assessment': 'CANDIDATE_INSTRUCTIONS',
-  'synthetic-boxes': 'SYNTHETIC_INSTRUCTIONS', 'scene-objects': 'OBJECT_INSTRUCTIONS',
+  'scene-objects': 'OBJECT_INSTRUCTIONS',
   'toronto-geometry': 'TORONTO_INSTRUCTIONS',
 };
 const catalog = (body: Record<string, any>): { id: string; tools: string[] }[] =>
@@ -63,8 +63,8 @@ async function request(t: { after(fn: () => unknown): void }, scene: ModelScene,
   }
   return bodies;
 }
-const demo: ModelScene = { mode: 'demo', project: null, toronto: [] };
-const toronto: ModelScene = { mode: 'toronto', project: null, toronto: [{ name: 'Point 1', datasetId: 'toronto3d', artifactRevision: 'a'.repeat(64), key: { sourceFileId: 1, sourceRow: 0 }, position: [1, 2, 3], frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] }] };
+const pole: ModelScene = { mode: 'pole', toronto: [] };
+const toronto: ModelScene = { mode: 'toronto', toronto: [{ name: 'Point 1', datasetId: 'toronto3d', artifactRevision: 'a'.repeat(64), key: { sourceFileId: 1, sourceRow: 0 }, position: [1, 2, 3], frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] }] };
 
 test('every runtime workflow body exactly preserves its documented evidence and approval instructions', () => {
   assert.deepEqual(PRODUCT_SKILLS.map(skill => skill.id), Object.keys(workflowSections));
@@ -87,7 +87,7 @@ test('every runtime workflow body exactly preserves its documented evidence and 
 });
 test('shared instructions builder and unbound inspector exactly match the static reference', () => {
   const allTools = [...new Set(PRODUCT_SKILLS.flatMap(skill => skill.tools))];
-  for (const mode of ['demo', 'toronto', 'pole'] as const) for (const hasImages of [false, true]) {
+  for (const mode of ['toronto', 'pole'] as const) for (const hasImages of [false, true]) {
     const capabilities = { mode, toolNames: allTools, hasImages };
     const ids = listProductSkills(capabilities).map(skill => skill.id);
     for (const loaded of [[], ...ids.map(id => [id]), [...ids].reverse()]) {
@@ -102,7 +102,7 @@ test('shared instructions builder and unbound inspector exactly match the static
   assert.equal(preview.instructions.text, expected({ instructions: preview.instructions.text }));
 });
 test('initial request contains exact core and filtered catalog, not eager workflow bodies', async t => {
-  const [body] = await request(t, demo);
+  const [body] = await request(t, pole);
   assert.equal(body.instructions, expected(body));
   assert.deepEqual(catalog(body).map(skill => skill.id), ['scene-inspection', 'candidate-assessment']);
   assert.doesNotMatch(body.instructions, /Runtime skill /u);
@@ -114,7 +114,7 @@ test('initial request contains exact core and filtered catalog, not eager workfl
   assert.deepEqual(body.tools[0].tools.map((v: { name: string }) => v.name), ['list_skills', 'load_skill', 'inspect_scene']);
 });
 test('explicit candidate load supplies honest evidence limits even without capture capability', async t => {
-  const [initial, body] = await request(t, demo, {}, [[]], ['candidate-assessment']);
+  const [initial, body] = await request(t, pole, {}, [[]], ['candidate-assessment']);
   assert.equal(initial.instructions, expected(initial));
   assert.equal(body.instructions, expected(body, ['scene-inspection', 'visual-inspection', 'candidate-assessment']));
   assert.match(body.instructions, /Inspect delivered images before making visual claims; request another view when useful, not as a fixed ritual/u);
@@ -124,13 +124,7 @@ test('explicit candidate load supplies honest evidence limits even without captu
   assert.match(body.instructions, /with geometry validation and individual human approval/u);
   assert.ok(!body.tools[0].tools.some((v: { name: string }) => v.name === 'capture_scene'), 'dependency guidance never grants unavailable capture');
 });
-test('synthetic workflow is cataloged with box tools but read only after explicit load', async t => {
-  const [initial, body] = await request(t, { ...demo, project: { sessionId: 'fixture', projectRevision: 0, frameId: 'demo-local-v1', units: 'm', entityIds: [], points: [] } }, { proposeBox: unavailable }, [[]], ['synthetic-boxes']);
-  assert.equal(initial.instructions, expected(initial));
-  assert.ok(catalog(initial).some(skill => skill.id === 'synthetic-boxes'));
-  assert.equal(body.instructions, expected(body, ['synthetic-boxes']));
-  assert.match(body.instructions, /parameter proposals do not create kernel geometry/u);
-});
+;
 test('Toronto candidate/object/geometry loads exactly match runtime readback and descriptive tools', async t => {
   // Keep each exact inspector comparison below its intentional per-string redaction cap.
   // All advertised capabilities stay present; only the loaded interface changes per request.

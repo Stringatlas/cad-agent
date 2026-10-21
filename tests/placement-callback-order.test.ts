@@ -11,7 +11,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 const scene: ModelScene = {
-  mode: 'toronto', project: null, toronto: [],
+  mode: 'toronto', toronto: [],
   areaOfInterest: { datasetId: 'toronto3d', artifactRevision: 'a'.repeat(64), frameId: 'toronto3d-local-v1', units: 'm',
     localOrigin: [627285, 4841948, 0], corners: [[0, 0, 0], [4, 0, 0], [4, 4, 0], [0, 4, 0]] },
 };

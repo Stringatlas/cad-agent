@@ -75,7 +75,7 @@ async function providerFixture(options: { unavailable?: boolean; stale?: boolean
     checkAreaCandidates: async () => { checks++; if (options.stale && checks > 1) throw Error('stale source/authority'); },
     captureScene: async request => options.unavailable ? undefined : image(request, scan!) };
   await model.models(new AbortController().signal);
-  try { await model.turn({ requestId: 'judgement-request', conversationId: null, generation: 'generation', model: 'mock-model', text: 'Choose the best two locations', scene: { mode: 'toronto', project: null, toronto: [], areaOfInterest: pool().area } }, scene, async e => { events.push(e); }, new AbortController().signal); }
+  try { await model.turn({ requestId: 'judgement-request', conversationId: null, generation: 'generation', model: 'mock-model', text: 'Choose the best two locations', scene: { mode: 'toronto', toronto: [], areaOfInterest: pool().area } }, scene, async e => { events.push(e); }, new AbortController().signal); }
   finally { model.close(); }
   return { requests, events, checks };
 }

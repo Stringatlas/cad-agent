@@ -12,7 +12,7 @@
     "typecheck": "pnpm -r typecheck && tsc -p tests/tsconfig.json",
     "test": "tsx --test tests/*.test.ts",
     "verify": "pnpm typecheck && pnpm test && pnpm build && node scripts/verification-note.mjs",
-    "verify:browser": "node scripts/browser-smoke.mjs"
+    "verify:browser": "node scripts/browser-toronto-smoke.mjs"
   },
   "dependencies": {
     "@spatial/contracts": "workspace:*",

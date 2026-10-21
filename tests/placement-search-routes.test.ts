@@ -34,7 +34,7 @@ async function fixture(t: { after(fn: () => unknown): void }) {
   const writeTerrain = () => writeFile(terrainPath, JSON.stringify(terrain)); await writeTerrain();
   const body = { area: { datasetId: 'toronto3d', artifactRevision: artifact.dataset.revision, frameId: 'toronto3d-local-v1', units: 'm', localOrigin: [627285, 4841948, 0], corners: [[0, 0, 100], [4, 0, 100], [4, 4, 100], [0, 4, 100]] },
     settings: { dimensions: [1, 1, 1.2], frontAccessDepth: .5, poleSeparation: 0, maxGroundSlopeDegrees: 1, maxGroundRelief: .1, spacingMeters: 1, allowedYawDegrees: [0] } };
-  const server = createDemoServer({ datasetRoot: root, projectPath: join(root, 'project.json') });
+  const server = createDemoServer({ datasetRoot: root });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); assert.ok(address && typeof address !== 'string'); const base = `http://127.0.0.1:${address.port}`;
   const post = async (path: string, value: unknown, headers: Record<string, string> = {}) => {

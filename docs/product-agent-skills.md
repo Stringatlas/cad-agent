@@ -20,7 +20,6 @@ An unloaded workflow returns `runtime-skill-required` with recovery instructions
 | `visual-inspection` | Current/top-down/arbitrary-camera capture and visual-pixel grounding |
 | `candidate-assessment` | Model-generated spatial hypotheses, revision-bound scene marks, evidence and uncertainty |
 | `area-candidates` | Optional legacy numerical scan/subset-finalization interface, not the default discovery method |
-| `synthetic-boxes` | Individually approved demo mesh/parameter boxes |
 | `scene-objects` | Authored objects and point-create proposals |
 | `toronto-geometry` | Toronto point moves and kernel-solid proposals |
 | `utility-box-placement` | Assessment before exact utility-box proposal |

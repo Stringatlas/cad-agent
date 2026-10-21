@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { CAD_LIMITS, PROJECT_FRAME_ID, CadError, canonicalCadRequest, type CadBodyResult, type CadResult, type CadSource } from '@spatial/contracts';
+import { CAD_LIMITS, CadError, canonicalCadRequest, type CadBodyResult, type CadResult, type CadSource } from '@spatial/contracts';
 import { inspectStepMeters } from '../packages/geometry/src/cad-kernel';
 import { CadWorkerClient } from '../apps/server/src/cad-client';
 
-const SOURCE: CadSource = { sessionId: 'engine-test', projectRevision: 1, frameId: PROJECT_FRAME_ID };
+const SOURCE: CadSource = { sessionId: 'engine-test', projectRevision: 1, frameId: 'cad-test-local-meters' };
 const BOX = { kind: 'box' as const, center: [0, 0, 0] as const, dimensions: [2, 2, 2] as const };
 function solid(value: CadResult): CadBodyResult { assert.ok('source' in value); return value; }
 function near(a: number, b: number, tolerance = 1e-7) { assert.ok(Math.abs(a - b) < tolerance, `${a} != ${b}`); }

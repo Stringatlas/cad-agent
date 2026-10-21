@@ -1,8 +1,7 @@
 import { MODEL_CHAT_LIMITS, MODEL_INSPECTION_LIMITS, MODEL_VISUAL_LIMITS, canonicalModelVisualToolResult, canonicalModelVisualObservation, modelVisualImageSize, modelVisualSourcePixel, type ModelVisualObservation, type VisualPixelResolution, type ModelRequestInspection, type ModelRequestPhase, canonicalModelScene, canonicalModelTurnRequest, canonicalModelCatalog, canonicalModelChatEvent,
-  canonicalSceneContextRequest, canonicalProtocolJson, freezeProtocolValue, protocolKeys, protocolRecord, protocolToken,
-  type ModelCaptureRequest, type ModelReferenceSelection, type ModelAreaOfInterest, type ModelCatalog, type ModelScene, type ModelTurnRequest, type ModelChatEvent, type ProjectSnapshot } from '@spatial/contracts';
+  canonicalProtocolJson, freezeProtocolValue, protocolKeys, protocolRecord, protocolToken,
+  type ModelCaptureRequest, type ModelReferenceSelection, type ModelAreaOfInterest, type ModelCatalog, type ModelScene, type ModelTurnRequest, type ModelChatEvent } from '@spatial/contracts';
 import type { TorontoDraftPoint } from './draft-context';
-import type { ProjectView } from './project-client';
 
 export const MODEL_CLIENT_LIMITS = Object.freeze({ catalogBytes: 1024 * 1024, streamBytes: MODEL_CHAT_LIMITS.streamBytes,
   frameBytes: MODEL_CHAT_LIMITS.frameBytes, outputChars: MODEL_CHAT_LIMITS.outputChars, textChars: MODEL_CHAT_LIMITS.textChars, requestBytes: MODEL_CHAT_LIMITS.requestBytes,
@@ -26,13 +25,9 @@ function modelId(value: unknown): string {
 }
 import type { AuthoredObjectReference } from '@spatial/contracts';
 /** Only references from the visible scene enter a turn; hidden-mode retained pins never leak. */
-export function modelScene(mode: string, snapshot: ProjectSnapshot | undefined,
-  view: Pick<ProjectView, 'selectedId' | 'points' | 'needsRefresh'>, points: readonly TorontoDraftPoint[], areaOfInterest?: ModelAreaOfInterest, objects: readonly AuthoredObjectReference[] = []): ModelScene {
-  if (mode !== 'demo' && mode !== 'toronto' && mode !== 'pole') throw new Error('Unknown scene');
-  const project = snapshot && !view.needsRefresh ? canonicalSceneContextRequest({ sessionId: snapshot.sessionId,
-    projectRevision: snapshot.project.revision, frameId: snapshot.frameId, units: snapshot.project.coordinates.units,
-    entityIds: mode === 'demo' && view.selectedId ? [view.selectedId] : [], points: mode === 'demo' ? view.points : [] }) : null;
-  return freezeProtocolValue(canonicalModelScene({ mode, project, toronto: mode === 'toronto' ? points : [], ...(mode === 'toronto' && objects.length ? { objects } : {}), ...(mode === 'toronto' && areaOfInterest ? { areaOfInterest } : {}) }));
+export function modelScene(mode: string, points: readonly TorontoDraftPoint[], areaOfInterest?: ModelAreaOfInterest, objects: readonly AuthoredObjectReference[] = []): ModelScene {
+  if (mode !== 'toronto' && mode !== 'pole') throw new Error('Unknown scene');
+  return freezeProtocolValue(canonicalModelScene({ mode, toronto: mode === 'toronto' ? points : [], ...(mode === 'toronto' && objects.length ? { objects } : {}), ...(mode === 'toronto' && areaOfInterest ? { areaOfInterest } : {}) }));
 }
 export function validateModelCatalog(value: unknown): ModelCatalog {
   const r = protocolRecord(canonicalModelCatalog(value)); protocolKeys(r, ['mode', 'ready', 'code', 'generation', 'models']);
@@ -63,8 +58,7 @@ export function validateModelEvent(value: unknown, request: ModelTurnRequest): M
       !(['query_aoi_points', 'search_placement_sites', 'scan_area_candidates', 'finalize_area_candidates'].includes(String(r.name)) && request.scene.mode === 'toronto' && request.scene.areaOfInterest) &&
       !(r.name === 'propose_placement_site' && request.scene.mode === 'toronto') && !(r.name === 'resolve_visual_pixel' && request.visualObservation) &&
       !(['nearest_label', 'assess_utility_box', 'propose_utility_box'].includes(String(r.name)) && request.scene.mode === 'toronto' && request.scene.toronto.length > 0) &&
-      !(['list_objects', 'get_object', 'propose_point_create', 'propose_point_move', 'propose_point_move_to_nearest_label', 'propose_cad_box', 'propose_cad_cylinder'].includes(String(r.name)) && request.scene.mode === 'toronto' && (!String(r.name).startsWith('propose_point_move') || request.scene.toronto.length > 0)) &&
-      !((r.name === 'propose_box_create' || r.name === 'propose_box_update') && request.scene.mode === 'demo' && request.scene.project)) throw new Error('Unsupported tool');
+      !(['list_objects', 'get_object', 'propose_point_create', 'propose_point_move', 'propose_point_move_to_nearest_label', 'propose_cad_box', 'propose_cad_cylinder'].includes(String(r.name)) && request.scene.mode === 'toronto' && (!String(r.name).startsWith('propose_point_move') || request.scene.toronto.length > 0))) throw new Error('Unsupported tool');
     canonicalProtocolJson(r.context, { maxDepth: 12, maxNodes: 4096, maxArrayLength: 256, maxStringLength: 12000 });
   }
   if (r.kind === 'tool-request') {
@@ -364,8 +358,6 @@ export class ModelChatController {
     if (this.active && this.scene && (this.approvalWaiting || this.selecting)) {
       const previous = this.scene;
       const same = (a: unknown, b: unknown) => canonicalProtocolJson(a) === canonicalProtocolJson(b);
-      const approvalChange = this.approvalWaiting && previous.project && scene.project && scene.project.projectRevision === previous.project.projectRevision + 1 &&
-        same({ ...scene, project: { ...scene.project, projectRevision: previous.project.projectRevision } }, previous);
       const previousObjects = previous.objects ?? [], nextObjects = scene.objects ?? [];
       const objectApprovalChange = this.approvalWaiting && previousObjects.length > 0 && nextObjects.length === previousObjects.length &&
         nextObjects.every((reference, index) => {
@@ -373,16 +365,12 @@ export class ModelChatController {
           return reference.revision === before.revision + 1 && same({ ...reference, revision: before.revision }, before);
         }) && same({ ...scene, objects: previousObjects }, previous);
       const selection = this.selecting;
-      const point = selection?.kind === 'toronto-point' ? scene.toronto.at(-1) : scene.project?.points.at(-1);
-      const selectionChange = selection && point && (selection.kind === 'toronto-point' ?
-        scene.toronto.length === previous.toronto.length + 1 && same((point as { key: unknown }).key, selection.key) && same({ ...scene, toronto: scene.toronto.slice(0, -1) }, previous) :
-        scene.project && previous.project && scene.project.points.length === previous.project.points.length + 1 &&
-        (point as { entityId: string }).entityId === selection.entityId && (point as { pointIndex: number }).pointIndex === selection.pointIndex &&
-        same({ ...scene, project: { ...scene.project, points: scene.project.points.slice(0, -1) } }, previous));
-      if (approvalChange || objectApprovalChange || selectionChange) { this.acceptAgentScene(scene); return; }
+      const point = scene.toronto.at(-1);
+      const selectionChange = selection && point && scene.toronto.length === previous.toronto.length + 1 &&
+        same(point.key, selection.key) && same({ ...scene, toronto: scene.toronto.slice(0, -1) }, previous);
+      if (objectApprovalChange || selectionChange) { this.acceptAgentScene(scene); return; }
     }
-    const sameSession = this.scene?.mode === scene.mode && this.scene?.project?.sessionId === scene.project?.sessionId &&
-      this.scene?.project?.frameId === scene.project?.frameId;
+    const sameSession = this.scene?.mode === scene.mode;
     if (!this.active && sameSession) {
       this.proposalEvents.oninvalidate?.(); this.acceptAgentScene(scene); return;
     }
@@ -517,13 +505,6 @@ export class ModelChatController {
             await abortable(Promise.resolve(this.proposalEvents.onplacementsearch?.(context.result, () => current() && !controller.signal.aborted)), controller.signal);
             if (!current()) throw new ModelTurnFailure('scene-changed');
           }
-        }
-        if (event.kind === 'tool' && (event.name === 'propose_box_create' || event.name === 'propose_box_update') && request.scene.mode === 'demo') {
-          const context = protocolRecord(event.context);
-          protocolKeys(context, ['kind', 'proposal']);
-          if (context.kind !== 'project-box-proposal' || protocolRecord(protocolRecord(context.proposal).edit).kind !==
-            (event.name === 'propose_box_create' ? 'create-box' : 'update-box')) throw new ModelTurnFailure('invalid-or-unavailable-stream');
-          this.proposalEvents.onproposal?.(context.proposal, () => current() && !controller.signal.aborted);
         }
       }, this.fetcher, attachment, {
         oncapture: this.proposalEvents.oncapture ? async (capture, isCurrent) => {

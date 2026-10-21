@@ -51,7 +51,6 @@ try {
   await page.mouse.wheel(0, -200); assert.equal(requests.length, 2); report.checks.push('Ctrl query verified, markers/Frame result, display LOD independence, ordinary orbit/zoom');
   await page.setViewportSize({ width: 700, height: 950 }); await page.screenshot({ path: new URL('narrow.png', directory).pathname, fullPage: true }); report.screenshots.push('narrow.png');
   await page.getByRole('button', { name: 'Toronto3D preview', exact: true }).click(); await page.waitForSelector('[data-testid="toronto-viewer"][data-ready="true"]');
-  await page.getByRole('button', { name: 'Synthetic demo', exact: true }).click(); await page.waitForSelector('[data-testid="viewer"][data-ready="true"]');
   report.checks.push('resize and tab disposal'); assert.deepEqual(report.messages.filter(m => ['error', 'pageerror'].includes(m.type)), []); report.status = 'passed';
 } catch (error) { report.error = String(error); console.error('Closest pole browser FAILED/UNAVAILABLE: ' + error); process.exitCode = 1; }
 finally {

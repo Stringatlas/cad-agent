@@ -5,7 +5,7 @@ import { ModelChatController, ModelTurnFailure, MODEL_CLIENT_LIMITS as L, fetchM
 import type { ModelCatalog, ModelScene, ModelTurnRequest } from '../packages/contracts/src/index';
 
 const catalog: ModelCatalog = { mode: 'chatgpt', ready: true, generation: 'account-generation-one', code: 'ready', models: [{ id: 'fixture-model', label: 'Fixture model' }, { id: 'other-model', label: 'Other model' }] };
-const scene: ModelScene = { mode: 'toronto', project: null, toronto: [] };
+const scene: ModelScene = { mode: 'toronto', toronto: [] };
 const request: ModelTurnRequest = { requestId: 'test-request', conversationId: null, generation: catalog.generation, model: 'fixture-model', text: 'Inspect scene A and B.', scene };
 const json = (value: unknown) => new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json' } });
 const events = (r = request) => [{ kind: 'start', requestId: r.requestId, conversationId: r.conversationId ?? 'conversation-fixture', model: r.model },

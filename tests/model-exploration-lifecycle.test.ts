@@ -4,7 +4,7 @@ import { MODEL_CHAT_LIMITS } from '../packages/contracts/src/index';
 import type { ModelCatalog, ModelScene, ModelTurnRequest } from '../packages/contracts/src/index';
 import { MODEL_CLIENT_LIMITS, ModelChatController, streamModelTurn } from '../apps/web/src/model-chat-client';
 
-const scene: ModelScene = { mode: 'toronto', project: null, toronto: [] };
+const scene: ModelScene = { mode: 'toronto', toronto: [] };
 const catalog: ModelCatalog = { mode: 'chatgpt', ready: true, generation: 'exploration-account', code: 'ready', models: [{ id: 'fixture-model', label: 'Fixture' }] };
 const request: ModelTurnRequest = { requestId: 'exploration-request', conversationId: null, generation: catalog.generation, model: 'fixture-model', text: 'Explore and inspect alternatives.', scene };
 const line = (event: unknown) => `${JSON.stringify(event)}\n`;

@@ -12,7 +12,6 @@ import { assessUtilityBox, type UtilityBoxAssessment } from '../apps/server/src/
 import { bindModelScene } from '../apps/server/src/model-scene';
 import { PointOverrideSession } from '../apps/server/src/point-overrides';
 import { TorontoCadSession, TorontoCadError } from '../apps/server/src/toronto-cad-session';
-import { ProjectSession } from '../apps/server/src/project-session';
 import { ProviderAuth } from '../apps/server/src/provider-auth';
 import { ProviderModel } from '../apps/server/src/provider-model';
 import { validateModelEvent } from '../apps/web/src/model-chat-client';
@@ -41,9 +40,9 @@ async function fixture(t: { after(fn: () => unknown): void }, points: { xyz: Vec
     instanceManifestHash: 'a'.repeat(64), membershipHash: 'b'.repeat(64) }, instances: [], ground: { cellMeters: 1, origin: [0, 0], labels: [1, 2], method: 'observed-cell-minimum-v1', minimumSupport: 3, points: 108, cells } };
   const writeTerrain = () => writeFile(terrainPath, JSON.stringify(terrain)); await writeTerrain();
   const reference = { name: 'Point 1' as const, artifactRevision: snapshot.dataset.revision, key: { sourceFileId: 1, sourceRow: 0 }, position: oracle[0].xyz };
-  const scene: ModelScene = { mode: 'toronto', project: null, toronto: [{ ...reference, datasetId: 'toronto3d', frameId: 'toronto3d-local-v1', ...snapshot.dataset.coordinates, localOrigin: [627285, 4841948, 0] }] };
-  const pointsAuthority = new PointOverrideSession(root), cad = new TorontoCadSession(root), project = new ProjectSession(join(root, 'project.json'));
-  const bind = () => bindModelScene(scene, project, root, signal(), undefined, { points: pointsAuthority, cad });
+  const scene: ModelScene = { mode: 'toronto', toronto: [{ ...reference, datasetId: 'toronto3d', frameId: 'toronto3d-local-v1', ...snapshot.dataset.coordinates, localOrigin: [627285, 4841948, 0] }] };
+  const pointsAuthority = new PointOverrideSession(root), cad = new TorontoCadSession(root);
+  const bind = () => bindModelScene(scene, root, signal(), undefined, { points: pointsAuthority, cad });
   t.after(async () => { if (previous === undefined) delete process.env.SPATIAL_PREPROCESSING_PATH; else process.env.SPATIAL_PREPROCESSING_PATH = previous;
     await pointsAuthority.close(); await cad.close(); dropSemanticDiskIndexMemoryCache(); await snapshot.close(); await rm(index.directory, { recursive: true, force: true }); await rm(root, { recursive: true, force: true }); });
   return { root, snapshot, index, spatial, oracle, terrain, writeTerrain, terrainPath, reference, scene, points: pointsAuthority, cad, bind };

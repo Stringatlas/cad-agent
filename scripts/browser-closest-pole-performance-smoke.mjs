@@ -424,8 +424,6 @@ try {
   assert.equal(await page.getByTestId('pole-viewer').count(), 0);
   assert.deepEqual(await oldHost.evaluate(host => ({ connected: host.isConnected, canvases: host.querySelectorAll('canvas').length })), { connected: false, canvases: 0 });
   const oldCamera = await oldHost.getAttribute('data-camera'); await delay(300); assert.equal(await oldHost.getAttribute('data-camera'), oldCamera);
-  await page.getByRole('button', { name: 'Synthetic demo', exact: true }).click();
-  await page.waitForSelector('[data-testid="viewer"][data-ready="true"]', { timeout: TIMEOUT });
   await bounded(page.setViewportSize({ width: 1440, height: 1100 }), 'final wide viewport');
   await page.getByRole('button', { name: 'Closest: label', exact: true }).click(); await waitReady(); await waitPhase('idle');
   assert.equal(await page.getByTestId('pole-viewer').getAttribute('data-query-selected'), 'false');

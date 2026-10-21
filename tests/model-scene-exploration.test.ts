@@ -48,11 +48,11 @@ async function fixture(t: { after(fn: () => unknown): void }, respond: (body: Bo
     captureScene: async request => { captures.push(request); return observation(); },
     queryPoints: async args => { measurements.push(args); return { complete: true, domain: 'original-source-points', totalCount: 2, points: [], truncated: false, independentVerification: false }; },
     groundElevation: async args => { measurements.push(args); return { status: 'unavailable', reason: 'no-supported-ground-cell' }; },
-    proposeCad: forbidden, proposeBox: forbidden, proposePointMove: forbidden, proposePointCreate: forbidden,
+    proposeCad: forbidden, proposePointMove: forbidden, proposePointCreate: forbidden,
     scanAreaCandidates: forbidden, searchPlacementSites: forbidden, proposePlacementSite: forbidden };
   const controller = new AbortController();
   const run = (conversationId: string | null = null, requestId = 'exploration-turn') => {
-    const call: ModelTurnRequest = { requestId, conversationId, generation: 'exploration-generation', model: 'exploration-model', text: 'Explore useful locations and compare alternatives.', scene: { mode: 'toronto', project: null, toronto: [] } };
+    const call: ModelTurnRequest = { requestId, conversationId, generation: 'exploration-generation', model: 'exploration-model', text: 'Explore useful locations and compare alternatives.', scene: { mode: 'toronto', toronto: [] } };
     return model.turn(call, bound, async event => { events.push(event); }, controller.signal);
   };
   t.after(() => { model.close(); assert.equal(mutations, 0, 'No scan, fit solver or geometry authority may execute'); });
@@ -285,7 +285,7 @@ test('object-only accepted approval clears annotations and prior visual receipts
   f.bound.waitForApproval = async (authority, proposalId) => {
     assert.equal(authority, 'objects'); assert.equal(proposalId, 'object-proposal');
     decisions++; objectRevision++;
-    return { outcome: 'accepted', scene: { mode: 'toronto', project: null, toronto: [] }, context: { objectRevision } };
+    return { outcome: 'accepted', scene: { mode: 'toronto', toronto: [] }, context: { objectRevision } };
   };
   await f.run();
   assert.equal(decisions, 1); assert.equal(f.captures.length, 1);

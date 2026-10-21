@@ -34,10 +34,10 @@ async function fixture(t: { after(fn: () => unknown): void }) {
   await writeFile(process.env.SPATIAL_PREPROCESSING_PATH, JSON.stringify({ version: 'scene-preprocessing-v1', complete: true, binding: { datasetId: 'toronto3d', artifactRevision: artifact.dataset.revision,
     frameId: 'toronto3d-local-v1', units: 'm', coordinates: artifact.dataset.coordinates, indexHash: index.hash, sourceHash: index.sourceHash, instanceManifestHash: 'a'.repeat(64), membershipHash: 'b'.repeat(64) },
     instances: [], ground: { cellMeters: 1, origin: [0, 0], labels: [1, 2], method: 'observed-cell-minimum-v1', minimumSupport: 3, points: cells.length * 3, cells } }));
-  const scene: ModelScene = { mode: 'toronto', project: null, toronto: [], areaOfInterest: { datasetId: 'toronto3d', artifactRevision: artifact.dataset.revision,
+  const scene: ModelScene = { mode: 'toronto', toronto: [], areaOfInterest: { datasetId: 'toronto3d', artifactRevision: artifact.dataset.revision,
     frameId: 'toronto3d-local-v1', units: 'm', localOrigin: [627285, 4841948, 0], corners: [[0, 0, 100], [4, 0, 100], [4, 4, 100], [0, 4, 100]] } };
   const outputs: unknown[][] = [], requests: Record<string, unknown>[] = [];
-  const server = createDemoServer({ datasetRoot: root, projectPath: join(root, 'project.json'), provider: { mode: 'api-key', apiKey: 'synthetic-not-a-credential' },
+  const server = createDemoServer({ datasetRoot: root, provider: { mode: 'api-key', apiKey: 'synthetic-not-a-credential' },
     modelTransport: withProductSkills(async (url, init) => {
       if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'fixture-model' }] });
       requests.push(JSON.parse(String(init?.body))); return sse(outputs.shift() ?? []);
@@ -148,12 +148,12 @@ test('strict settings/candidate allowlists reject model corners, operations, for
     assert.ok(!tools(f.requests.at(-1)!).some(t => t.name === 'search_placement_sites'));
     assert.equal((await f.snapshot()).proposals.length, 0); assert.equal((await f.snapshot()).bodies.length, 0);
   });
-  await t.test('demo scene cannot propose a retained Toronto candidate', async t => {
+  await t.test('pole scene cannot propose a retained Toronto candidate', async t => {
     const f = await fixture(t);
     const search = await f.post(PLACEMENT + '/search', { area: f.scene.areaOfInterest, settings }); assert.equal(search.status, 200);
     const r = search.body.result as PlacementSearchResponse;
     f.outputs.push([tool('propose_placement_site', { searchId: r.searchId, candidateId: r.candidates[0].id })]);
-    assert.equal((await f.run(f.call({ mode: 'demo', project: null, toronto: [] }))).at(-1)?.kind, 'error');
+    assert.equal((await f.run(f.call({ mode: 'pole', toronto: [] }))).at(-1)?.kind, 'error');
     assert.equal((await f.snapshot()).proposals.length, 0); assert.equal((await f.snapshot()).bodies.length, 0);
   });
 });
@@ -190,7 +190,7 @@ test('client accepts bounded additive placement tool events, delivers shortlist 
   assert.equal(client.view.phase, 'completed'); assert.equal(seen.length, 1); assert.ok((seen[0] as PlacementSearchResponse).candidates.length);
   const searchEvent = { kind: 'tool', requestId: 'fixture-request', name: 'search_placement_sites', context: { kind: 'placement-search-result', result: seen[0] } };
   assert.doesNotThrow(() => validateModelEvent(searchEvent, f.call()));
-  assert.throws(() => validateModelEvent(searchEvent, f.call({ mode: 'demo', project: null, toronto: [] })));
+  assert.throws(() => validateModelEvent(searchEvent, f.call({ mode: 'pole', toronto: [] })));
   assert.doesNotThrow(() => validateModelEvent({ ...searchEvent, name: 'propose_placement_site', context: { kind: 'toronto-cad-proposal', status: 'pending', proposal: {} } }, f.call()));
   const result = seen[0] as PlacementSearchResponse;
   f.outputs.push([tool('propose_placement_site', { searchId: result.searchId, candidateId: result.candidates[0].id })], []);

@@ -118,7 +118,7 @@ test('nearest-move model events request authority reload on success and later pr
       const events = [{ kind: 'start', requestId: r.requestId, conversationId: 'conversation-1', model: r.model }, { kind: 'tool', requestId: r.requestId, name: 'propose_point_move_to_nearest_label', context: { kind: 'toronto-point-move-proposal', status, ...(status === 'pending' ? { proposal: first } : {}) } }, success ? { kind: 'done', requestId: r.requestId, conversationId: 'conversation-1' } : { kind: 'error', requestId: r.requestId, code: 'provider-failed' }];
       return new Response(events.map(e => JSON.stringify(e) + '\n').join(''), { headers: { 'content-type': 'application/x-ndjson' } });
     }, 1000, 1000, { onauthorityproposal: kind => refreshed.push(kind) });
-    client.bind({ mode: 'toronto', project: null, toronto: [{ name: 'Point 1', datasetId: 'toronto3d', artifactRevision, key: first.moves[0].key, position: first.moves[0].originalPosition, frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] }] });
+    client.bind({ mode: 'toronto', toronto: [{ name: 'Point 1', datasetId: 'toronto3d', artifactRevision, key: first.moves[0].key, position: first.moves[0].originalPosition, frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] }] });
     await client.refreshModels(); await client.send('move point 1 to closest pole');
     assert.deepEqual(refreshed, status === 'pending' ? ['points'] : []); client.dispose();
   }

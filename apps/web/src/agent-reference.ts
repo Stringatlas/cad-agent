@@ -19,7 +19,7 @@ export async function resolveAgentTorontoPoint(reference: Extract<ModelReference
   if (value.artifactRevision !== revision || value.key?.sourceFileId !== reference.key.sourceFileId || value.key?.sourceRow !== reference.key.sourceRow ||
     !Number.isInteger(value.semanticLabel) || !Object.hasOwn(TORONTO_SEMANTIC_LABELS, value.semanticLabel)) throw new Error('Source point binding mismatch.');
   const { semanticLabel, ...original } = value;
-  const point = canonicalModelScene({ mode: 'toronto', project: null, toronto: [{ ...original, name: 'Point 1' }] }).toronto[0]!;
+  const point = canonicalModelScene({ mode: 'toronto', toronto: [{ ...original, name: 'Point 1' }] }).toronto[0]!;
   const { name: _name, ...source } = point;
   return { ...source, semanticLabel: semanticLabel as TorontoSemanticLabel };
 }

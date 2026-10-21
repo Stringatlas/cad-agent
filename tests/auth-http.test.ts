@@ -110,7 +110,7 @@ test('factory defaults auth disabled even when operator provider environment exi
   const root = mkdtempSync(join(tmpdir(), 'spatial-auth-isolated-project-'));
   const previous = process.env.SPATIAL_PROVIDER_MODE, key = process.env.OPENAI_API_KEY;
   process.env.SPATIAL_PROVIDER_MODE = 'api-key'; process.env.OPENAI_API_KEY = 'operator-secret-test';
-  const server = createDemoServer({ projectPath: join(root, 'project.json') });
+  const server = createDemoServer();
   try {
     const base = await listen(server); const status = await fetch(base + '/auth/status'); const text = await status.text();
     assert.equal(JSON.parse(text).result.mode, 'disabled'); assert.doesNotMatch(text, /operator/);
@@ -175,7 +175,7 @@ test('auth admission rate is bounded independently of status reads', async (t) =
 
 test('integrated malformed network request targets are redacted and do not terminate server', async (t) => {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'spatial-auth-target-'));
-  const server = createDemoServer({ projectPath: join(root, 'project.json') });
+  const server = createDemoServer();
   const base = await listen(server);
   t.after(async () => { await new Promise<void>((resolve) => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); });
   const status = await new Promise<number>((resolve, reject) => {
@@ -193,7 +193,7 @@ test('failed bind followed by server.close releases initialized auth storage loc
   await seed.start('browser'); seed.close();
   const occupied = createServer(); const base = await listen(occupied);
   const port = Number(new URL(base).port);
-  const server = createDemoServer({ projectPath: join(root, 'project.json'), provider: { mode: 'chatgpt', credentialPath } });
+  const server = createDemoServer({ provider: { mode: 'chatgpt', credentialPath } });
   t.after(async () => {
     await new Promise<void>((resolve) => occupied.close(() => resolve()));
     server.close(); rmSync(root, { recursive: true, force: true });

@@ -1,4 +1,4 @@
-import { canonicalBoxProposalRequest, canonicalPoleRequest, canonicalPointMoveProposalRequest, type PointOverrideSnapshot, type PointMoveProposal,
+import { canonicalPoleRequest, canonicalPointMoveProposalRequest, type PointOverrideSnapshot, type PointMoveProposal,
   type TorontoCadSnapshot, type TorontoCadProposal, type ModelScene, type ModelVisualObservation, type Vec3 } from '@spatial/contracts';
 import { canonicalSceneObjectProposalRequest, type SceneObjectSnapshot, type SceneObjectProposal, type AuthoredObjectReference } from '../../../packages/contracts/src/scene-objects';
 import type { SceneObjectSession } from './scene-object-session';
@@ -8,7 +8,6 @@ import type { PointOverrideSession } from './point-overrides';
 import { TorontoCadError, type TorontoCadSession } from './toronto-cad-session';
 import { randomUUID } from 'node:crypto';
 import { queryIndexedClosestPole } from './pole-index';
-import { ProjectSession } from './project-session';
 import { getSemanticDiskIndex } from './semantic-disk-index';
 import { SpatialPageIndex } from './spatial-page-index';
 import { TORONTO_SEMANTIC_LABELS } from '@spatial/contracts';
@@ -25,13 +24,8 @@ const activeAreaScans = new WeakSet<PointOverrideSession>();
 export interface ModelEditingAuthorities { readonly points: PointOverrideSession; readonly cad: TorontoCadSession; readonly objects?: SceneObjectSession; readonly placement?: PlacementSearchSession }
 
 /** Attachment metadata remains unverified; nearestLabel separately resolves original records and independently verifies its indexed result. */
-export async function bindModelScene(scene: ModelScene, authority: ProjectSession, directory: string, signal: AbortSignal, visual?: ModelVisualObservation, editing?: ModelEditingAuthorities): Promise<BoundModelScene> {
+export async function bindModelScene(scene: ModelScene, directory: string, signal: AbortSignal, visual?: ModelVisualObservation, editing?: ModelEditingAuthorities): Promise<BoundModelScene> {
   signal.throwIfAborted();
-  const project = scene.project === null ? null : authority.context(scene.project);
-  const selectedGeometry = project === null ? [] : authority.snapshot().project.entities.filter(e => project.entityIds.includes(e.id)).map(e =>
-    e.kind === 'box' ? { ...e } : { id: e.id, kind: e.kind, pointCount: e.points.length });
-  const canPropose = scene.mode === 'demo' && project !== null;
-  const availableProjectBoxes = canPropose ? authority.snapshot().project.entities.filter(e => e.kind === 'box') : [];
   let closed = false;
   let artifact: SemanticArtifact | undefined;
   try {
@@ -93,7 +87,6 @@ export async function bindModelScene(scene: ModelScene, authority: ProjectSessio
     const nearestLabel: NonNullable<BoundModelScene['nearestLabel']> = async (args, querySignal) => {
       const combined = AbortSignal.any([signal, querySignal]); combined.throwIfAborted();
       if (closed || !retained) throw new ModelError('stale-scene');
-      if (scene.project) authority.context(scene.project);
       await retained.check(combined);
       const point = scene.toronto.find(point => point.name === args.pointName);
       if (!point || !Number.isInteger(args.label) || args.label < 0 || args.label > 8) throw new ModelError('invalid-nearest-label');
@@ -105,7 +98,6 @@ export async function bindModelScene(scene: ModelScene, authority: ProjectSessio
         metric: 'euclidean-3d', domain: { kind: 'whole-dataset' } });
       const outcome = await queryIndexedClosestPole(directory, request, combined);
       combined.throwIfAborted(); await retained.check(combined);
-      if (scene.project) authority.context(scene.project);
       return { searchGeometry: 'original-prepared-dataset', pointName: point.name, request, outcome };
     };
     return {
@@ -122,21 +114,20 @@ export async function bindModelScene(scene: ModelScene, authority: ProjectSessio
           limitation: 'Bounds and measurements describe original prepared records, not accepted edits or rendered ghosts.' } } : {}), ...(scene.areaOfInterest ? { areaOfInterest: { ...scene.areaOfInterest, source: 'user-selected-xy-rectangle',
         elevationScope: 'all-elevations', referencePlane: 'orbit-target-z-not-terrain', purpose: 'spatial-query-footprint-not-geometry-authority' } } : {}),
         objects: (scene.objects ?? []).map(reference => ({ reference, object: objectState!.objects.find(object => object.id === reference.objectId) })),
-        mode: scene.mode, project, selectedGeometry, availableProjectBoxes, toronto: scene.toronto.map(point => ({ ...point,
+        mode: scene.mode, toronto: scene.toronto.map(point => ({ ...point,
         source: 'user-attached-toronto-record-reference', artifactValidation: 'revision-and-metadata-checked',
-        recordValidation: 'unverified', mapping: 'unmapped-to-project' })),
+        recordValidation: 'unverified' })),
       ...(torontoEditing ? { torontoEditing: { points: { sessionId: pointState!.sessionId, revision: pointState!.revision, artifactRevision: pointState!.artifactRevision, overrideCount: pointState!.entries.length,
           attachedOverrides: pointState!.entries.filter(e => scene.toronto.some(p => p.key.sourceFileId === e.key.sourceFileId && p.key.sourceRow === e.key.sourceRow)) },
         cad: { sessionId: cadState!.sessionId, revision: cadState!.revision, artifactRevision: cadState!.artifactRevision,
           bodies: cadState!.bodies.map(({ bodyId, operation }) => ({ bodyId, operation })),
           proposals: cadState!.proposals.map(({ proposalId, operation }) => ({ proposalId, operation })) },
         ...(objectState ? { objects: { sessionId: objectState.sessionId, revision: objectState.revision, artifactRevision: objectState.artifactRevision, count: objectState.objects.length } } : {}), volatile: true } } : {}),
-      capabilities: { queryPoints: scene.mode === 'toronto' && !!retained, groundElevation: scene.mode === 'toronto' && !!retained, queryAoiPoints: scene.mode === 'toronto' && !!scene.areaOfInterest && !!retained, inspectScene: true, listObjects: !!objectState, getObject: !!objectState, pointCreateProposals: !!objectState, authoredObjectKinds: objectState ? ['datum-point'] : [], authoredReferenceConsumers: objectState ? ['get_object', 'propose_point_create'] : [], nearestLabel: scene.mode === 'toronto' && scene.toronto.length > 0 && !!retained, boxParameterProposals: canPropose,
+      capabilities: { queryPoints: scene.mode === 'toronto' && !!retained, groundElevation: scene.mode === 'toronto' && !!retained, queryAoiPoints: scene.mode === 'toronto' && !!scene.areaOfInterest && !!retained, inspectScene: true, listObjects: !!objectState, getObject: !!objectState, pointCreateProposals: !!objectState, authoredObjectKinds: objectState ? ['datum-point'] : [], authoredReferenceConsumers: objectState ? ['get_object', 'propose_point_create'] : [], nearestLabel: scene.mode === 'toronto' && scene.toronto.length > 0 && !!retained,
         pointMoveProposals: !!torontoEditing && scene.toronto.length > 0, cadSolidProposals: !!torontoEditing, geometryMutation: false, cadVerification: !!torontoEditing },
       nearestLabelSearchGeometry: 'original-prepared-dataset',
       limitations: ['Toronto original point record/position is not independently verified by this chat attachment boundary.',
-        'Toronto and synthetic project frames are separate; no mapping exists.',
-        'Synthetic box proposals are parameter-postconditions-not-cad candidates only. Toronto CAD tools, when available, retain kernel-validated pending solids, never publish. Human acceptance of each change is required.',
+        'Toronto CAD tools, when available, retain kernel-validated pending solids, never publish. Human acceptance of each change is required.',
         'Toronto point proposals independently reread original records and check effective-position preconditions. Overrides do not change original-source nearest-label searches. All Toronto edits are volatile; restart clears them.',
         'Images may show past edits or ghosts and never grant current tool authority; rendering and publication are distinct from kernel validation. No model approval, decline or Undo tools exist.'] },
       ...(torontoEditing && pointState && cadState && retained && scene.areaOfInterest ? {
@@ -344,20 +335,6 @@ export async function bindModelScene(scene: ModelScene, authority: ProjectSessio
             bodyId: proposal.bodyId, operation: proposal.operation, validation: proposal.validation };
         },
       } satisfies Pick<BoundModelScene, 'assessUtilityBox' | 'proposeUtilityBox' | 'proposePointMove' | 'proposeNearestPointMove' | 'proposeCad'> : {}),
-      ...(canPropose ? {
-        async proposeBox(edit, querySignal) {
-          const combined = AbortSignal.any([signal, querySignal]); combined.throwIfAborted();
-          if (closed || !project) throw new ModelError('stale-scene');
-          authority.context(scene.project);
-          const { sessionId, projectRevision, frameId, units } = project;
-          const request = canonicalBoxProposalRequest({ sessionId, projectRevision, frameId, units, edit });
-          combined.throwIfAborted();
-          // Retain only a proposal: no geometry publication, including after this turn closes.
-          const proposal = authority.propose(request);
-          combined.throwIfAborted(); authority.context(scene.project);
-          return proposal;
-        },
-      } satisfies Pick<BoundModelScene, 'proposeBox'> : {}),
       ...(scene.mode === 'toronto' && retained ? {
         async queryPoints(args: ModelPointQuery, querySignal: AbortSignal) {
           let request;
@@ -458,7 +435,7 @@ export async function bindModelScene(scene: ModelScene, authority: ProjectSessio
       ...(scene.mode === 'toronto' && scene.toronto.length > 0 && retained ? {
         nearestLabel,
       } satisfies Pick<BoundModelScene, 'nearestLabel'> : {}),
-      async check() { if (closed) throw new ModelError('stale-scene'); signal.throwIfAborted(); if (scene.project) authority.context(scene.project); await retained?.check(signal); await checkEditing(signal); signal.throwIfAborted(); },
+      async check() { if (closed) throw new ModelError('stale-scene'); signal.throwIfAborted(); await retained?.check(signal); await checkEditing(signal); signal.throwIfAborted(); },
       async close() { closed = true; spatialPending = undefined; await retained?.close(); },
     };
   } catch (error) { await artifact?.close(); throw error; }

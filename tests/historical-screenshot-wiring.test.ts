@@ -6,9 +6,9 @@ const source = (file: string) => readFileSync(new URL(`../apps/web/src/${file}`,
 
 // Complement behavioral renderer/transport/authority tests with Svelte/viewer wiring
 // checks; these do not claim browser rendering or interaction verification.
-test('Toronto and synthetic capture paths admit mixed scenes and truthfully describe capture-time layers', () => {
-  const toronto = source('toronto-viewer.ts'), demo = source('viewer.ts');
-  for (const text of [toronto, demo]) {
+test('Toronto capture paths admit mixed scenes and truthfully describe capture-time layers', () => {
+  const toronto = source('toronto-viewer.ts');
+  for (const text of [toronto]) {
     const capture = text.slice(text.indexOf('    capture: (request?: ModelCaptureRequest) => {'), text.indexOf('    isCaptureCurrent:'));
     assert.ok(capture.includes('visual.capture(request)'), 'requested camera must reach mixed-scene capture');
     assert.ok(!capture.includes('throw new Error'));
@@ -20,7 +20,6 @@ test('Toronto and synthetic capture paths admit mixed scenes and truthfully desc
   assert.ok(toronto.includes('authoredDatumsOrGhosts: authoredObjects.count'));
   assert.match(toronto, /pointProvenance: pointOverrides\.captureBlocked \|\| authoredObjects\.count \? 'unavailable-for-edited-imagery'/);
   assert.match(toronto, /resolve: \(object, index\) => \{[\s\S]*?if \(pointOverrides\.captureBlocked \|\| authoredObjects\.count\) return;/);
-  assert.ok(demo.includes('pendingGhosts: overlays.children.some'));
 });
 
 test('chat attachment lifetime excludes camera, live capture currency and geometry comparisons', () => {
