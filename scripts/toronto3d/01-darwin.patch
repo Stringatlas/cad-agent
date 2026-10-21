@@ -1,0 +1,192 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 614e9ae..bd7838e 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -59,7 +59,7 @@ if (UNIX)
+ 	find_package(TBB REQUIRED)
+ 	
+ 	target_link_libraries(${PROJECT_NAME} Threads::Threads)
+-	target_link_libraries(${PROJECT_NAME} tbb)
++	target_link_libraries(${PROJECT_NAME} TBB::tbb)
+ 
+ 
+ 	#SET(CMAKE_CXX_FLAGS "-pthread -ltbb")
+diff --git a/Converter/modules/unsuck/unsuck.hpp b/Converter/modules/unsuck/unsuck.hpp
+index 43dd642..3b26303 100644
+--- a/Converter/modules/unsuck/unsuck.hpp
++++ b/Converter/modules/unsuck/unsuck.hpp
+@@ -52,6 +52,11 @@ using u8  =  uint8_t;
+ 
+ #if defined(__linux__)
+ constexpr auto fseek_64_all_platforms = fseeko64;
++#elif defined(__APPLE__)
++constexpr auto fseek_64_all_platforms = fseeko;
++#ifndef __debugbreak
++#define __debugbreak() __builtin_trap()
++#endif
+ #elif defined(WIN32)
+ constexpr auto fseek_64_all_platforms = _fseeki64;
+ #endif
+diff --git a/Converter/modules/unsuck/unsuck_platform_specific.cpp b/Converter/modules/unsuck/unsuck_platform_specific.cpp
+index 0fc6b14..e2f156b 100644
+--- a/Converter/modules/unsuck/unsuck_platform_specific.cpp
++++ b/Converter/modules/unsuck/unsuck_platform_specific.cpp
+@@ -145,6 +145,76 @@ CpuData getCpuData() {
+ 	return data;
+ }
+ 
++#elif defined(__APPLE__)
++
++#include <mach/mach.h>
++#include <sys/sysctl.h>
++#include <sys/resource.h>
++
++MemoryData getMemoryData() {
++    MemoryData data;
++    uint64_t total = 0;
++    size_t size = sizeof(total);
++    sysctlbyname("hw.memsize", &total, &size, nullptr, 0);
++    data.physical_total = total;
++    data.virtual_total = total;
++    vm_statistics64_data_t vm{};
++    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
++    vm_size_t pageSize = 0;
++    host_page_size(mach_host_self(), &pageSize);
++    if (host_statistics64(mach_host_self(), HOST_VM_INFO64,
++            reinterpret_cast<host_info64_t>(&vm), &count) == KERN_SUCCESS) {
++        data.physical_used = total - uint64_t(vm.free_count) * pageSize;
++        data.virtual_used = data.physical_used;
++    }
++    mach_task_basic_info_data_t task{};
++    count = MACH_TASK_BASIC_INFO_COUNT;
++    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO,
++            reinterpret_cast<task_info_t>(&task), &count) == KERN_SUCCESS) {
++        data.virtual_usedByProcess = task.virtual_size;
++        data.physical_usedByProcess = task.resident_size;
++    }
++    static size_t virtualMax = 0, physicalMax = 0;
++    virtualMax = std::max(virtualMax, data.virtual_usedByProcess);
++    physicalMax = std::max(physicalMax, data.physical_usedByProcess);
++    data.virtual_usedByProcess_max = virtualMax;
++    data.physical_usedByProcess_max = physicalMax;
++    return data;
++}
++
++CpuData getCpuData() {
++    CpuData data;
++    data.numProcessors = std::max(1u, std::thread::hardware_concurrency());
++    struct rusage usage{};
++    getrusage(RUSAGE_SELF, &usage);
++    double cpu = usage.ru_utime.tv_sec + usage.ru_utime.tv_usec / 1e6
++               + usage.ru_stime.tv_sec + usage.ru_stime.tv_usec / 1e6;
++    double now = std::chrono::duration<double>(
++        std::chrono::steady_clock::now().time_since_epoch()).count();
++    static double previousCPU = cpu, previousTime = now;
++    if (now > previousTime) {
++        data.usage = 100.0 * (cpu - previousCPU) / (now - previousTime) / data.numProcessors;
++    }
++    previousCPU = cpu;
++    previousTime = now;
++    return data;
++}
++
++void printMemoryReport() {
++    auto data = getMemoryData();
++    cout << "memory usage: virtual: " << formatNumber(double(data.virtual_usedByProcess) / (1ull << 30), 1)
++         << " GB, physical: " << formatNumber(double(data.physical_usedByProcess) / (1ull << 30), 1) << " GB" << endl;
++}
++
++void launchMemoryChecker(int64_t, double checkInterval) {
++    thread([checkInterval]() {
++        while (true) {
++            getMemoryData();
++            std::this_thread::sleep_for(std::chrono::milliseconds(int64_t(checkInterval * 1000)));
++        }
++    }).detach();
++}
++
+ #elif defined(__linux__)
+ 
+ // see https://stackoverflow.com/questions/63166/how-to-determine-cpu-and-memory-consumption-from-inside-a-process
+diff --git a/Converter/src/VBuffer.cpp b/Converter/src/VBuffer.cpp
+index 93cc07d..58b039c 100644
+--- a/Converter/src/VBuffer.cpp
++++ b/Converter/src/VBuffer.cpp
+@@ -6,7 +6,7 @@
+ #ifdef _WIN32
+ 	#define NOMINMAX 
+ 	#include "windows.h"
+-#elif defined(__linux__)
++#elif defined(__linux__) || defined(__APPLE__)
+ 	#include <sys/mman.h>
+ 	#include <unistd.h>
+ #endif
+@@ -19,7 +19,7 @@ shared_ptr<VBuffer> VBuffer::create(i64 size){
+ 	SYSTEM_INFO sysinfo;
+ 	GetSystemInfo(&sysinfo);
+ 	buffer->pageSize = sysinfo.dwPageSize;
+-#elif defined(__linux__)
++#elif defined(__linux__) || defined(__APPLE__)
+ 	buffer->pageSize = sysconf(_SC_PAGESIZE);
+ #endif
+ 	// println("buffer.pageSize: {:L}", buffer.pageSize);
+@@ -32,7 +32,7 @@ shared_ptr<VBuffer> VBuffer::create(i64 size){
+ 
+ #ifdef _WIN32
+ 	ptr = VirtualAlloc(nullptr, virtualCapacity, MEM_RESERVE, PAGE_READWRITE);
+-#elif defined(__linux__)
++#elif defined(__linux__) || defined(__APPLE__)
+ 	ptr = mmap(nullptr, virtualCapacity, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+ 	if(ptr == MAP_FAILED) ptr = nullptr;
+ #endif
+@@ -73,7 +73,7 @@ void VBuffer::commit(i64 size){
+ 		println("ERROR: VBuffer::commit - failed to commit {} bytes of physical memory.", target);
+ 		exit(4315);
+ 	}
+-#elif defined(__linux__)
++#elif defined(__linux__) || defined(__APPLE__)
+ 	if(mprotect(ptr, target, PROT_READ | PROT_WRITE) != 0){
+ 		println("ERROR: VBuffer::commit - failed to commit {} bytes of physical memory.", target);
+ 		exit(4315);
+@@ -146,7 +146,7 @@ void VBuffer::destroy(){
+ 
+ #ifdef _WIN32
+ 	VirtualFree(ptr, 0, MEM_RELEASE);
+-#elif defined(__linux__)
++#elif defined(__linux__) || defined(__APPLE__)
+ 	munmap(ptr, virtualCapacity);
+ #endif
+ 
+diff --git a/Converter/src/indexer.cpp b/Converter/src/indexer.cpp
+index 3432e48..fe7718c 100644
+--- a/Converter/src/indexer.cpp
++++ b/Converter/src/indexer.cpp
+@@ -1298,7 +1298,7 @@ void load_stage_chunkroots(
+ 	*totalBytes = js["totalBytes"];
+ 	*pointsProcessed = js["pointsProcessed"];
+ 
+-	state->name = js["state"]["name"];
++	state->name = js["state"]["name"].get<string>();
+ 	state->pointsTotal = i64(js["state"]["pointsTotal"]);
+ 	state->pointsProcessed = i64(js["state"]["pointsProcessed"]);
+ 	state->bytesProcessed = i64(js["state"]["bytesProcessed"]);
+@@ -1316,7 +1316,7 @@ void load_stage_chunkroots(
+ 		AttributeType type = typenameToType(jsAttribute["type"]);
+ 
+ 		Attribute attribute(name, size, numElements, elementSize, type);
+-		attribute.description = jsAttribute["description"];
++		attribute.description = jsAttribute["description"].get<string>();
+ 		attribute.min = jsToVec3(jsAttribute["min"], Infinity);
+ 		attribute.max = jsToVec3(jsAttribute["max"], -Infinity);
+ 		attribute.scale = jsToVec3(jsAttribute["scale"], 1.0);
+@@ -1397,8 +1397,8 @@ void load_stage_chunkroots(
+ 	chunks->attributes = attributes;
+ 	for(auto& jsChunk : js["chunks"]["list"]){
+ 		auto chunk = make_shared<Chunk>();
+-		chunk->id = jsChunk["id"];
+-		chunk->file = jsChunk["file"];
++		chunk->id = jsChunk["id"].get<string>();
++		chunk->file = jsChunk["file"].get<string>();
+ 
+ 		auto box = boundsOf(chunk->id);
+ 		chunk->min = box.min;

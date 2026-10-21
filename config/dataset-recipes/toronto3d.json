@@ -1,0 +1,32 @@
+{
+  "schema": "spatial-dataset-recipe-v1",
+  "id": "toronto3d",
+  "adapter": "toronto3d-packed-ply-v1",
+  "upstream": "https://github.com/WeikaiTan/Toronto-3D",
+  "acquisition": "Follow the official repository's Download section; manually extract the original L001-L004 PLY files and class/color sidecars into data/raw/toronto3d. No mirror or credentials are embedded here.",
+  "license": {"spdx": "CC-BY-NC-4.0", "url": "https://creativecommons.org/licenses/by-nc/4.0/", "notice": "Toronto-3D by Weikai Tan et al.; noncommercial use and attribution required. Consult upstream for citation and full terms."},
+  "units": "m",
+  "frame": "right-handed Z-up",
+  "local_origin_world": [627285.0, 4841948.0, 0.0],
+  "crs": "Source UTM coordinates; no reprojection; CRS not independently verified",
+  "checksum_provenance": "PLY hashes, sizes and counts transcribed from the existing independently validated prepared/manifest.json; sidecar hashes computed from local original files. These are local reference checksums, not upstream-signed checksums.",
+  "sources": [
+    {"file": "L001.ply", "source_file_id": 1, "points": 21567172, "bytes": 927388830, "sha256": "a7f1fc55d914b37884361ebe26f5da40364fae53c3650e83f9da85c5c901377d"},
+    {"file": "L002.ply", "source_file_id": 2, "points": 10283800, "bytes": 442203833, "sha256": "4ec8eb55c02ffdd1b15d6b881c0e46879f776f63f7b18b047285a6dd58dc6e41"},
+    {"file": "L003.ply", "source_file_id": 3, "points": 39721590, "bytes": 1708028803, "sha256": "5dcd0cf4b5be98b9e2cb4fddf408975a0347ea4e9dd90f97eb26bd2ad2e7870e"},
+    {"file": "L004.ply", "source_file_id": 4, "points": 6747648, "bytes": 290149296, "sha256": "431db8f21faee1f608ce81b42367d28a1f619b424940822aa1f6041c6c4d3b50"}
+  ],
+  "sidecars": [
+    {"file": "Colors.xml", "sha256": "fa29eb183dbe54a4f15ab4fad00a571d053eb5e1c8b61dd98c091f1834409cd0"},
+    {"file": "Mavericks_classes_9.txt", "sha256": "b69ca06ff19c998dbf0e11cebba9437c87fc4390db5cd813fe4cbe963e09bb91"}
+  ],
+  "converter": {
+    "upstream": "https://github.com/potree/PotreeConverter.git",
+    "commit": "c2cb61843bf2b901e8e257874b1a6dcf67792fb2",
+    "patches": ["scripts/toronto3d/01-darwin.patch", "scripts/toronto3d/02-hierarchy.patch"],
+    "license": "BSD-2-Clause; scripts/toronto3d/POTREE-LICENSE",
+    "arguments": ["-m", "poisson", "--encoding", "UNCOMPRESSED"],
+    "reference_executable_sha256": "b4fc33f94acc807225510c986da27f99e778ffddd32a7a7519b7d9a2ccdf8465",
+    "binary_reproducibility": "Not claimed; compiler, linked dependencies and concurrent sampling may change binary/output ordering. Validate semantic identity instead."
+  }
+}

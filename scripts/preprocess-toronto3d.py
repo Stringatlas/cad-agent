@@ -14,6 +14,8 @@ from pathlib import Path
 import laspy
 import numpy as np
 
+from dataset_recipe import DEFAULT_RECIPE, load_recipe, verify_sources
+
 ORIGIN = np.array([627285.0, 4841948.0, 0.0])
 SCALARS = ['scalar_Intensity', 'scalar_GPSTime', 'scalar_ScanAngleRank', 'scalar_Label']
 PROPERTIES = [('double', a) for a in 'xyz'] + [('uchar', a) for a in ['red', 'green', 'blue']] + [('float', a) for a in SCALARS]
@@ -97,20 +99,25 @@ def convert(path, target, file_id, chunk, preview_limit):
 
 
 def run(raw, out, converter, chunk=500000, preview_limit=25000):
-    inputs = [raw / f'L{i:03}.ply' for i in range(1, 5)]
-    if not all(p.is_file() for p in inputs):
-        raise ValueError('Expected L001.ply through L004.ply')
+    recipe = load_recipe()
+    if recipe['adapter'] != 'toronto3d-packed-ply-v1' or recipe['local_origin_world'] != ORIGIN.tolist():
+        raise ValueError('Recipe requires a different preprocessing adapter or origin')
+    verify_sources(raw, recipe)
+    inputs = [raw / source['file'] for source in recipe['sources']]
     converter = converter.resolve(strict=True)
     out.mkdir(parents=True, exist_ok=False)
     (out / 'las').mkdir()
     sources, previews = [], []
-    for i, path in enumerate(inputs, 1):
+    for source, path in zip(recipe['sources'], inputs):
         print(f'Converting {path.name}', flush=True)
-        info, preview = convert(path, out / 'las' / f'{path.stem}.las', i, chunk, preview_limit)
+        info, preview = convert(path, out / 'las' / f'{path.stem}.las', source['source_file_id'], chunk, preview_limit)
+        if info['points'] != source['points'] or info['sha256'] != source['sha256']:
+            raise ValueError(f'Source identity changed during conversion: {path.name}')
         sources.append(info)
         previews.append(preview)
     np.save(out / 'preview.npy', np.concatenate(previews), allow_pickle=False)
-    for name in ['Colors.xml', 'Mavericks_classes_9.txt']:
+    for sidecar in recipe['sidecars']:
+        name = sidecar['file']
         shutil.copyfile(raw / name, out / name)
     command = [str(converter), *[str((out / 'las' / f'{p.stem}.las').resolve()) for p in inputs], '-o', str((out / 'octree').resolve()), '-m', 'poisson', '--encoding', 'UNCOMPRESSED']
     with (out / 'converter.log').open('w') as log:
@@ -119,6 +126,9 @@ def run(raw, out, converter, chunk=500000, preview_limit=25000):
     if metadata['points'] != sum(s['points'] for s in sources):
         raise ValueError('Potree point count mismatch')
     manifest = {'format': 'Toronto3D preprocessing v1', 'units': 'm', 'frame': 'right-handed Z-up', 'local_origin_world': ORIGIN.tolist(), 'world_from_local': 'world = local + local_origin_world', 'crs': 'Source UTM coordinates, no reprojection; CRS not independently verified', 'las_quantization_m': 0.001, 'potree_scale_m': metadata['scale'], 'semantic_classes': dict(enumerate(CLASSES)), 'semantic_attribute': 'scalar_Label', 'rgb_encoding': 'LAS/Potree uint16 = original uint8 * 257', 'provenance': 'point source id (1..4) + source_row (zero-based original PLY vertex index)', 'preview': {'path': 'preview.npy', 'points': sum(map(len, previews)), 'sampling': 'deterministic evenly spaced source rows per file; not spatially uniform', 'positions': 'local float64'}, 'sources': sources, 'license': 'Toronto3D CC BY-NC 4.0; https://github.com/WeikaiTan/Toronto-3D', 'converter': {'executable_sha256': sha256(converter), 'command': command}, 'dependencies': {'numpy': np.__version__, 'laspy': laspy.__version__}}
+    manifest['recipe'] = {'id': recipe['id'], 'sha256': sha256(DEFAULT_RECIPE)}
+    manifest['converter']['upstream_commit'] = recipe['converter']['commit']
+    manifest['converter']['required_patches'] = recipe['converter']['patches']
     (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print(f'Completed: {out}', flush=True)
 

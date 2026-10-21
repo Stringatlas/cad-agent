@@ -68,22 +68,43 @@ test('awaited Toronto refresh waits in-flight approval and flushes all three ref
   await assert.rejects(refresh(), /Explicit recovery required/);
 });
 
-test('Toronto combines point and CAD review outside tools and leaves approval independent of model streaming', () => {
-  const toronto = source('Toronto.svelte'), points = source('PointEdits.svelte'), cad = source('TorontoCad.svelte');
+test('Toronto retains point, CAD and object approval outside display settings and independent of model streaming', () => {
+  const toronto = source('Toronto.svelte'), points = source('PointEdits.svelte');
   assert.equal((toronto.match(/<ApprovalReview /g) ?? []).length, 1);
   assert.ok(toronto.includes('$derived([...pointReviewItems, ...cadReviewItems, ...objectReviewItems])'));
-  const toolsAside = toronto.search(/<aside(?:\s|>)/);
-  assert.ok(toolsAside >= 0, 'Scene tools aside remains present');
-  assert.ok(toronto.indexOf('<ApprovalReview ') < toolsAside);
-  assert.doesNotMatch(cad, /toronto-cad-accept|toronto-cad-decline/);
+  const { parse } = webRequire('svelte/compiler');
+  const nodes: any[] = [];
+  const walk = (node: any) => {
+    if (!node || typeof node !== 'object') return;
+    if (node.type === 'RegularElement' || node.type === 'Component') nodes.push(node);
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) value.forEach(walk);
+      else if (value && typeof value === 'object') walk(value);
+    }
+  };
+  walk(parse(toronto, { modern: true }).fragment);
+  const review = nodes.find(node => node.name === 'ApprovalReview');
+  const quality = nodes.find(node => node.name === 'details' && toronto.slice(node.start, node.end).includes('data-testid="display-quality"'));
+  assert.ok(review && quality, 'Both the unified approval card and display quality remain available');
+  assert.ok(review.end <= quality.start || quality.end <= review.start, 'Approval must not be hidden inside display settings');
+  assert.doesNotMatch(toronto, /<TorontoCad\b|<summary>Scene tools<\/summary>/);
+  assert.match(toronto, /disabled: objectView\.busy \|\| objectView\.needsRefresh,/);
+  assert.match(toronto, /onaccept: \(\) => objectController\.approve\(proposal\.proposalId\)/);
+  assert.match(toronto, /ondecline: \(\) => objectController\.decline\(proposal\.proposalId\)/);
+  assert.match(toronto, /onaccept: \(\) => cadController\.approve\(proposal\.proposalId\)/);
+  assert.match(toronto, /ondecline: \(\) => cadController\.decline\(proposal\.proposalId\)/);
   assert.match(toronto, /disabled: cadView\.busy \|\| cadView\.needsRefresh,/);
   assert.match(points, /disabled: view\.busy \|\| view\.needsRefresh,/);
   assert.match(points, /selectProposal\(proposal\.proposalId\); return controller\.approve\(\)/);
   assert.match(points, /selectProposal\(proposal\.proposalId\); return controller\.decline\(\)/);
-  assert.match(cad, /const blocked = \$derived\(view\.busy \|\| view\.needsRefresh \|\| streaming\)/);
-  assert.match(points, /data-testid="point-edit-undo" disabled=\{view\.busy \|\| view\.needsRefresh \|\| streaming/);
-  assert.match(points, /data-testid="point-edit-refresh" disabled=\{view\.busy\}/);
-  assert.match(cad, /data-testid="toronto-cad-refresh" disabled=\{view\.busy\}/);
+  assert.doesNotMatch(points, /point-edit-undo|point-edit-refresh|<fieldset|Manual point/);
+  assert.match(points, /hidden=\{!problem\}/);
+  assert.match(points, /const problem = \$derived\(view\.needsRefresh \|\|/);
+  assert.match(points, /\{#if problem\}<p role="alert">\{view\.status\}<\/p>/);
+  assert.match(points, /\{#if view\.needsRefresh && !view\.busy\}<button data-testid="point-edit-recover" onclick=\{\(\) => void controller\.refresh\(\)\}/);
+  assert.match(toronto, /cadArtifact && \(cadView\.needsRefresh \|\|/);
+  assert.match(toronto, /<p role="alert">\{cadView\.status\}<\/p>/);
+  assert.match(toronto, /data-testid="toronto-cad-recover" disabled=\{cadView\.busy\} onclick=\{\(\) => void cadController\.refresh\(\)\}/);
   assert.match(toronto, /export async function refreshAgentAuthorities\(\): Promise<void>/);
   assert.match(toronto, /await Promise\.all\(\[cadController\.refresh\(\), pointEditor\.refreshAuthority\(\), objectController\.refresh\(\)\]\)/);
   assert.match(points, /await controller\.refresh\(\); await tick\(\)/);

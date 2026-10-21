@@ -14,6 +14,21 @@ The [CAD sandbox API](docs/cad-engine.md) adds actual OpenCascade box/cylinder s
 
 The [local project editing guide](docs/project-editing.md) covers original synthetic A/B pins and exact `context`, proposal preview/digest, deliberate human approval, checked atomic box edits, monotonic Undo and explicit Save/Load. Scope/evidence: [task014](docs/tasks/014-project-sessions.md), [task015](docs/tasks/015-approved-box-edits.md). This is parameter verification, not CAD solids or an A→B channel/model workflow.
 
+## Point-cloud data
+
+Point-cloud files are **not bundled in Git**. The prepared Toronto3D cloud combines
+all four original sections (L001–L004; 78,320,210 points). Start with the
+[dataset acquisition and reproducibility guide](docs/datasets.md): it links the
+official download, license, tracked source checksums, pinned converter patches,
+and preparation/validation steps. Raw files, generated octrees and local tooling
+remain ignored; `pnpm dev` does not download or prepare them.
+
+A [generic prepared-cloud adapter](docs/datasets.md#generic-read-only-adapter)
+provides a tested read-only integration seam for other cloud identities, frames,
+origins and optional semantic mappings. It is not yet connected to the viewer's
+scene picker, chat or editing authority; arbitrary raw formats still need their
+own ingestion adapters. Toronto remains the product's configured dataset.
+
 ## Setup and run
 
 Requires Node **22.12+ within Node 22** and **pnpm 10.34.6**. The package manager is pinned; the existing Corepack shim selected it successfully. No global installation is required. If your shim cannot find pnpm, use `corepack pnpm` instead of `pnpm` below.

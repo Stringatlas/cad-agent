@@ -139,6 +139,23 @@ Sandbox bodies have immutable IDs/revision1 and explicit demo session/source rev
 
 One admission includes bounded body reading; no queue. Input/registry/boolean-complexity/topology/output limits and hard15s kernel timeout contain native work. Cancellation of dispatched operations, kernel-operation timeout (not body-read timeout), unexpected worker failure or server close terminates the kernel and invalidates all sandbox handles; next use starts fresh after termination. JS heap limits do not cap WASM memory; bounded native workloads are not a peak-memory/security proof. Production remains loopback-only and unauthenticated—Host/Origin checks do not authorize public hosting. Task013 baseline138/138, independent HTTP/kernel/failure probes and fresh source review pass. New untracked graph coverage and parent stale-LSP cache remain incomplete; no clean graph certification claimed. No rendering/UI changes or task013 browser check.
 
+## Prepared-cloud portability boundary
+
+Task074 adds a bounded read-only seam without widening Toronto's edit authority.
+`apps/server/src/potree-core.ts` owns reusable Potree 2 layout/hierarchy parsing
+and fixed-asset I/O. `potree.ts` continues to enforce Toronto-specific schema and
+bindings. `prepared-cloud.ts` separately loads an explicit `cloud.json` descriptor
+through operator-owned ID-to-directory registrations, returning revision-bound
+samples with explicit frame/origin/source IDs and optional semantic mappings.
+Missing semantics never defaults to Toronto classes; read access never grants
+edit permissions. Raw format conversion remains an offline, format-specific job.
+
+This is not yet a generic product scene registry: viewer/HTTP/chat/editing still
+use the configured Toronto path and contracts. Integrating another scene must
+bind all observations, references, tool capabilities and authorities to its own
+dataset/frame/revision before enabling interactions. See [dataset guide](datasets.md)
+for supported layouts, actual capabilities, Git-tracked recipes and limitations.
+
 ## Toolchain and distribution
 
 The private pnpm 10 workspace targets Node 22 (`>=22.12.0 <23`) with TypeScript 5.9, Svelte 5, Vite 7 and Three.js. Workspace packages export TypeScript source; they are not published or independently emitted distributions.

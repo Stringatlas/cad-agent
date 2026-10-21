@@ -1,6 +1,6 @@
 # Toronto3D prepared dataset
 
-This is offline preprocessing, not viewer integration or CAD geometry. Raw inputs remain in `data/raw/toronto3d/`; generated data and local tooling are ignored by git. Dataset license: **CC BY-NC 4.0**, see https://github.com/WeikaiTan/Toronto-3D.
+This is offline preprocessing, not viewer integration or CAD geometry. Raw inputs remain in `data/raw/toronto3d/`; generated data and local tooling are ignored by git. The portable source recipe, checksums and converter patches are tracked; see [dataset acquisition and Git policy](datasets.md). Dataset license: **CC BY-NC 4.0**, see https://github.com/WeikaiTan/Toronto-3D.
 
 ## Outputs
 
@@ -21,21 +21,74 @@ Stable identity is `(point source id, source_row)` in Potree: file ID 1–4 maps
 
 ## Reproduction
 
-Project-local environment (no global install):
+1. Acquire originals using the official download instructions in [datasets.md](datasets.md).
+2. Verify them against `config/dataset-recipes/toronto3d.json` (standard-library Python only):
+   `python3 scripts/dataset_recipe.py`. It checks every PLY and both sidecars;
+   it does not need or modify any generated data.
+3. Build the pinned converter using the **tracked**
+   [patch sequence and build instructions](../scripts/toronto3d/README.md).
+   No old ignored patch exports are required. Both the Darwin and cumulative
+   hierarchy patches are necessary for the reference build.
+4. Create a project-local Python environment. The reference environment used
+   Python 3.14; dependencies are pinned, but availability on every Python/platform
+   combination is not claimed. No global Python package installs:
+
 ```sh
 python3 -m venv data/processed/toronto3d/tooling/venv
 data/processed/toronto3d/tooling/venv/bin/pip install -r scripts/toronto3d-requirements.txt
 ```
-Official PotreeConverter upstream commit `c2cb61843bf2b901e8e257874b1a6dcf67792fb2` needed local Darwin compatibility patches. Exact local build commands, compiler/dependency versions, patch export, executable hash and smoke evidence: `data/processed/toronto3d/tooling/POTREE_BUILD.md`, `potree-darwin.patch`, initial Darwin patch commit `95b426b9c1ccdc33774c543b6d5238c698cc343f`. Full-data checks also exposed upstream hierarchy serialization defects; local commit `975f3b468845b1673d83dc2c8ff896125fab5034` fixes type resets, proxy child masks and unreachable singleton records. See `tooling/hierarchy-v2-notes.md` and `hierarchy-v2.patch` alongside the Darwin patch. Tools depend on existing Homebrew GCC/TBB; not a portable binary. Those ignored artifacts must accompany a dataset transfer if build reproduction is needed.
+
+From repository root, run fixture checks, prepare into a **new** directory, and
+validate against the originals. To preserve an existing `prepared/`, choose a
+new output such as `prepared-reproduction/` and pass it to `--prepared` below.
 
 ```sh
-data/processed/toronto3d/tooling/venv/bin/python tests/toronto3d-preprocessing.test.py
-data/processed/toronto3d/tooling/venv/bin/python scripts/preprocess-toronto3d.py \
+PY=data/processed/toronto3d/tooling/venv/bin/python
+"$PY" tests/dataset-recipe.test.py
+"$PY" tests/toronto3d-preprocessing.test.py
+"$PY" scripts/preprocess-toronto3d.py \
   --out data/processed/toronto3d/prepared \
   --converter data/processed/toronto3d/tooling/PotreeConverter/build-gcc/PotreeConverter
-data/processed/toronto3d/tooling/venv/bin/python scripts/validate-toronto3d.py \
+"$PY" scripts/validate-toronto3d.py \
+  --prepared data/processed/toronto3d/prepared \
   --report data/processed/toronto3d/validation-report.json
 ```
+
+The producer now reads its source filenames, stable IDs and sidecars from the
+tracked recipe, verifies their hashes **before creating output**, and records
+recipe identity in its completion manifest. Origin, schema, class mapping,
+output format and default full L001–L004 cloud are unchanged. The converter
+executable hash is recorded, not required to match a host-specific reference
+binary. The selected executable is trusted input: listing required patches in
+manifest provenance does not prove an arbitrary supplied binary contains them.
+The strict validator is still specific to the full four-source Toronto release;
+editing this recipe is **not** a supported section/subset or new-dataset importer.
+The dependency-free verifier's `--recipe` option only selects an integrity recipe,
+not a product dataset or converter.
+
+### Verify a dataset already on disk
+
+No conversion or rebuild is needed to recheck existing output:
+
+```sh
+python3 scripts/dataset_recipe.py --raw data/raw/toronto3d
+PY=data/processed/toronto3d/tooling/venv/bin/python
+"$PY" scripts/validate-toronto3d.py \
+  --raw data/raw/toronto3d --prepared data/processed/toronto3d/prepared \
+  --report data/processed/toronto3d/revalidation-report.json
+```
+
+The existing validator accepts older manifests without a recipe field. Its
+report is emitted only after all checks pass; choose a fresh report path to avoid
+mistaking a stale report for a new success. Raw sources, LAS intermediates, the
+preview and octree are read-only during validation. Provide `--scratch` on a
+volume with at least ~79 MB free for source coverage bitmaps, plus overhead.
+Full conversion needs substantially more space (raw ~3.4 GB, full LAS and octree
+multi-GB, plus converter temporary files); plan generous free disk/RAM rather
+than assuming the Python buffer cap bounds converter resources. Outputs are
+semantically reproducible, not guaranteed byte-identical across concurrent runs.
+No new converter build or full-cloud conversion/validation is implied by these
+instructions.
 Producer refuses an existing output directory. Preserve or remove failed output explicitly before rerunning; failures have no completion manifest. Omit Potree `--attributes` to retain every Extra Bytes dimension. Preprocessing reads/writes bounded 500k-point buffers (converter has separate memory behavior). Validator uses capped 250k-point buffers and temporary disk-backed coverage bitmaps, with small hierarchy queues.
 
 Validation checks originals against recorded hashes, every intermediate LAS/preview/octree point against its PLY row, exact RGB/scalar bits, coordinate tolerances, one-to-one provenance coverage, semantic class mapping, recursive hierarchy/payload addressability and decoded point containment within each node's spatial bounds. It does not certify visual quality, CRS, CAD validity or future viewer support. See task `docs/tasks/002-toronto3d-preprocessing.md` for actual execution evidence and review status.

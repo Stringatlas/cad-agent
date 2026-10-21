@@ -35,10 +35,10 @@ test('exact active area, source-only state and current authorities are mandatory
   assert.equal(areaCandidatesMatchScene(r, area, points, { ...cad, bodies: [{} as any] }), false);
   assert.equal(areaCandidatesMatchScene(r, area, points, { ...cad, proposals: [{} as any] }), false);
 });
-test('UI bridge uses separate candidate sprites and keeps equipment form secondary', () => {
+test('UI bridge uses separate candidate sprites without manual equipment tools', () => {
   for (const path of ['App.svelte', 'Chat.svelte', 'ModelChat.svelte', 'model-chat-client.ts']) assert.match(readFileSync(`apps/web/src/${path}`, 'utf8'), /onareacandidates/);
   const toronto = readFileSync('apps/web/src/Toronto.svelte', 'utf8');
-  assert.match(toronto, /receiveAreaCandidates/); assert.match(toronto, /<summary>Equipment placement tools<\/summary>/);
+  assert.match(toronto, /receiveAreaCandidates/); assert.doesNotMatch(toronto, /<summary>Equipment placement tools<\/summary>/);
   const render = readFileSync('apps/web/src/area-candidate-render.ts', 'utf8');
   assert.match(render, /new THREE.Sprite/); assert.doesNotMatch(render, /BoxGeometry|setDraftMarkers|onpoint/);
   assert.match(readFileSync('apps/web/src/toronto-viewer.ts', 'utf8'), /areaCandidatePoints: areaCandidates.count/);

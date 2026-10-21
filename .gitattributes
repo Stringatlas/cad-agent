@@ -1,0 +1,3 @@
+# Converter patches include CRLF context from the pinned upstream source.
+# Preserve exact bytes when staging and cloning; normalization breaks git apply.
+scripts/toronto3d/*.patch -text

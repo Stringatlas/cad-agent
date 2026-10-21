@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
   import ApprovalReview, { type ApprovalReviewItem } from './ApprovalReview.svelte';
-  import TorontoCad from './TorontoCad.svelte';
   import PlacementSearch from './PlacementSearch.svelte';
   import AreaCandidates from './AreaCandidates.svelte';
   import SceneMarks from './SceneMarks.svelte';
@@ -21,7 +20,6 @@
   import { createTorontoViewer } from './toronto-viewer';
   import { POINT_TYPE_KEY, UNKNOWN_POINT_COLOR, type PointColorMode } from './point-colors';
   let colorMode = $state<PointColorMode>('rgb');
-  import VisualObservationPanel from './VisualObservationPanel.svelte';
   import type { VisualModelSource } from './visual-model-source';
   import type { AreaOfInterestInput } from './area-of-interest';
   import { compressScreenshot } from './screenshot-crop';
@@ -70,8 +68,6 @@
   let cadView = $state<TorontoCadView>({ busy: false, needsRefresh: true, status: 'Waiting for Toronto artifact…' });
   const cadController = new TorontoCadController(value => { cadView = value; oncadblocked(value.busy || value.needsRefresh); });
   let cadArtifact = $state<string>();
-  let cadToolsOpen = $state(false);
-  let pointToolsHost = $state<HTMLElement>();
   let pointEditor: PointEdits | undefined;
   let pointReviewItems = $state<readonly ApprovalReviewItem[]>([]);
   const cadReviewItems = $derived<ApprovalReviewItem[]>((cadView.snapshot?.proposals ?? []).map(proposal => ({
@@ -145,11 +141,10 @@
       viewer?.stopAdaptive(); focusStreet();
     }
   }
-  let harnessBudget = $state(1024), harnessDepth = $state(2);
-  let display = $state<PointObservation>(), observation = $state<PointObservation>();
-  let displayStatus = $state('Waiting'), harnessStatus = $state('Waiting');
+  let display = $state<PointObservation>();
+  let displayStatus = $state('Waiting');
   let viewerError = $state('');
-  let displayRequest = 0, harnessRequest = 0;
+  let displayRequest = 0;
   let alive = true;
   let center = $state<number[]>([0, 0, 125]), dimensions = $state<number[]>([5, 5, 5]);
   let crop = $state<CropStats>(), cropStatus = $state('Overview only — Shift-drag a window or select a box');
@@ -187,7 +182,6 @@
     viewer?.setPointOverrides(sceneSnapshot ? $state.snapshot(sceneSnapshot) : undefined); viewer?.setPointMovePreview($state.snapshot(sceneProposals));
     viewer?.setDraftMarkers(effectiveMarkers);
   });
-  const harnessChannel = createObservationChannel('harness', sample => { observation = sample; });
   function currentBox(): CropBox {
     const box: CropBox = { min: center.map((n, i) => n - dimensions[i] / 2) as unknown as Vec3, max: center.map((n, i) => n + dimensions[i] / 2) as unknown as Vec3 };
     assertCropBox(box); return box;
@@ -345,30 +339,16 @@
     }
     catch (error) { if (alive && request === displayRequest) displayStatus = String(error); }
   }
-  async function loadHarness() {
-    const request = ++harnessRequest;
-    harnessStatus = 'Loading bounded observation…';
-    // Do not label a prior observation with newly requested settings while loading/failing.
-    observation = undefined;
-    try { await harnessChannel.load({ budget: harnessBudget, depth: harnessDepth }); if (alive && request === harnessRequest) harnessStatus = 'Ready'; }
-    catch (error) { if (alive && request === harnessRequest) harnessStatus = String(error); }
-  }
-  function downloadObservation() {
-    if (!observation) return;
-    const url = URL.createObjectURL(new Blob([JSON.stringify(observation)], { type: 'application/json' }));
-    const link = document.createElement('a'); link.href = url; link.download = `toronto3d-observation-${observation.sampleHash.slice(0, 12)}.json`; link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 0);
-  }
   onMount(() => {
     try {
       viewer = createTorontoViewer(host, placeBox, undefined, viewerFailure, pinPoint, stats => { adaptiveStats = stats; }, (corners, error) => { void selectArea(corners, error); }, () => { boxInitialized = true; }, selectObject);
       tuneDisplay(); mounted = true;
       const current = viewer;
       onvisualsource({ capture: request => current.capture(request), isCurrent: id => current.isCaptureCurrent(id), resolvePixel: (id, x, y) => current.resolvePixel(id, x, y) });
-      void loadDisplay(); void loadHarness();
+      void loadDisplay();
     }
     catch (error) { viewerError = String(error); }
-    return () => { alive = false; mounted = false; clearArea(); onvisualsource(undefined); draftGate.dispose(); cadController.dispose(); objectController.dispose(); onobjectstate(undefined, undefined, true); onpoints([]); displayChannel.dispose(); harnessChannel.dispose(); cropChannel.dispose(); viewer?.dispose(); };
+    return () => { alive = false; mounted = false; clearArea(); onvisualsource(undefined); draftGate.dispose(); cadController.dispose(); objectController.dispose(); onobjectstate(undefined, undefined, true); onpoints([]); displayChannel.dispose(); cropChannel.dispose(); viewer?.dispose(); };
   });
 </script>
 
@@ -380,7 +360,7 @@
           <option value="rgb">Natural RGB</option><option value="type">Point types</option>
         </select>
         {#if colorMode === 'type'}
-          <details class="color-key" data-testid="point-type-key">
+          <details class="color-key" data-testid="point-type-key" name="scene-display">
             <summary>Key</summary>
             <ul aria-label="Point type color key">
               {#each [...POINT_TYPE_KEY, { label: -1, name: 'Unknown', color: UNKNOWN_POINT_COLOR }] as entry}
@@ -389,13 +369,31 @@
             </ul>
           </details>
         {/if}
+      <details class="technical" data-testid="display-quality" name="scene-display"><summary>Display quality</summary>
+      <div class="tools-content">
+      <label class="mode-toggle"><input data-testid="adaptive-display-toggle" type="checkbox" bind:checked={adaptiveEnabled} onchange={event => { adaptiveEnabled = event.currentTarget.checked; toggleAdaptive(); }} disabled={!display || !!viewerError} />Camera-driven detail</label>
+      {#if adaptiveEnabled}
+      <label>Full detail within (m)<input data-testid="display-near-radius" type="number" min="0" max="200" step="5" bind:value={nearRadius} onchange={tuneDisplay} /></label>
+      <label>Distant detail <select data-testid="display-threshold" bind:value={pixelThreshold} onchange={event => { pixelThreshold = Number(event.currentTarget.value); tuneDisplay(); }}><option value={160}>Coarse</option><option value={80}>Balanced</option><option value={40}>Fine</option><option value={20}>Very fine</option></select></label>
+      <label>Point budget <select data-testid="display-budget" bind:value={pointBudget} onchange={event => { pointBudget = Number(event.currentTarget.value); tuneDisplay(); }}><option value={500_000}>500,000</option><option value={1_000_000}>1 million</option><option value={2_000_000}>2 million</option><option value={3_000_000}>3 million</option></select></label>
+      <label>Point size <select data-testid="display-point-size" bind:value={pointSize} onchange={event => { pointSize = Number(event.currentTarget.value); viewer?.setPointSize(pointSize); }}><option value={2}>2 px</option><option value={3}>3 px</option><option value={4}>4 px</option><option value={5}>5 px</option><option value={6}>6 px</option></select></label>
+      <p data-testid="display-status" aria-live="polite">{adaptiveStats.error ? 'Detail unavailable.' : adaptiveStats.pending ? 'Loading detail…' : adaptiveStats.budgetLimited ? 'Point budget reached' : displayStatus === 'Ready' ? 'Ready' : displayStatus}</p>
+      {#if adaptiveStats.error}<button data-testid="retry-display" onclick={() => viewer?.retryAdaptive()}>Retry detail</button>{/if}
+      {:else}
+      <label>Display point budget <select data-testid="display-budget" bind:value={displayBudget} onchange={event => { displayBudget = Number(event.currentTarget.value); void loadDisplay(); }}><option value={10_000}>10,000</option><option value={50_000}>50,000</option><option value={100_000}>100,000</option></select></label>
+      <label>Display maximum depth <select data-testid="display-depth" bind:value={displayDepth} onchange={event => { displayDepth = Number(event.currentTarget.value); void loadDisplay(); }}>{#each [0, 1, 2, 3] as depth}<option value={depth}>{depth}</option>{/each}</select></label>
+      <p data-testid="display-status" aria-live="polite">{displayStatus}</p>
+      {/if}
+      <button onclick={loadDisplay}>Reload display</button>
+      </div>
+      </details>
       </div>
       {#if areaError}<p class="area-error" role="alert">{areaError}</p>{/if}
       <div class="viewport" data-testid="toronto-viewer" bind:this={host}></div>
       {#if viewerError}<p role="alert">Viewer unavailable: {viewerError}</p>{/if}
       {#if adaptiveEnabled && adaptiveStats.error && !viewerError}<div class="scene-feedback" role="status"><p class="crop-summary">Detail unavailable. <button data-testid="quick-retry-display" onclick={() => viewer?.retryAdaptive()}>Retry</button></p></div>{/if}
       <div class="point-confirmation" data-testid="scene-point-confirmation">
-        <PointEdits {points} toolsHost={pointToolsHost} artifactRevision={display?.dataset.revision} refreshToken={pointRefresh} streaming={modelStreaming} bind:this={pointEditor} onreview={items => pointReviewItems = items} onselect={selection => pinPoint(selection)} onstate={(snapshot, proposal, blocked, proposals) => { retainedSnapshot = snapshot; retainedProposals = proposals ?? []; pointAuthorityBlocked = !!blocked; onpointstate(snapshot, proposal, blocked); }} />
+        <PointEdits {points} artifactRevision={display?.dataset.revision} refreshToken={pointRefresh} bind:this={pointEditor} onreview={items => pointReviewItems = items} onstate={(snapshot, proposal, blocked, proposals) => { retainedSnapshot = snapshot; retainedProposals = proposals ?? []; pointAuthorityBlocked = !!blocked; onpointstate(snapshot, proposal, blocked); }} />
         {#if cadArtifact && (cadView.needsRefresh || /^(Error|TypeError|RangeError|CadError):/.test(cadView.status))}
           <section class="cad-recovery" aria-label="Toronto CAD recovery">
             <p role="alert">{cadView.status}</p>
@@ -418,78 +416,6 @@
       {#if areaCandidates}
         <AreaCandidates result={areaCandidates} selected={selectedCandidate} onselect={(id, position) => { selectedCandidate = id; viewer?.setAreaCandidates(areaCandidates ? $state.snapshot(areaCandidates) : undefined, id); viewer?.focusPosition(position); }} />
       {/if}
-      {#if areaInput?.area}
-        <details class="technical"><summary>Equipment placement tools</summary>
-        <PlacementSearch bind:this={placementSearch} area={areaInput.area} authorityKey={placementAuthorityKey} blocked={placementBlocked} invalidated={placementInvalidated}
-          onpreview={preview => viewer?.setPlacementPreview(preview)}
-          onproposed={async () => { await cadController.refresh(); }} onfocus={position => viewer?.focusPosition(position)} />
-        </details>
-      {/if}
-      <details class="technical" data-testid="toronto-technical" bind:open={cadToolsOpen}><summary>Scene tools</summary>
-      <div class="tools-content">
-      <div bind:this={pointToolsHost}></div>
-      <details class="tool-section" open data-testid="toronto-cad-tools"><summary>CAD tools</summary><TorontoCad view={cadView} controller={cadController} streaming={modelStreaming} /></details>
-      <details class="tool-section"><summary>Navigation help</summary>
-        <p class="note">Click or Tab into the scene, then hold W/S to fly forward/back and A/D to strafe. Drag to orbit · Double-click a point or surface to set the orbit center · Scroll to zoom toward the pointer · Shift-drag to select an AI area of interest and snapshot. Cmd/Ctrl-click to pin a numbered point; remove individual points in Scene references.</p>
-        <p class="note">Toronto local frame · meters · Z-up.</p>
-        <button onclick={() => viewer?.frameDataset()}>Frame dataset</button>
-        <button data-testid="clear-toronto-pins" disabled={!points.length} onclick={() => onpoints([])}>Clear points</button>
-      </details>
-      <details class="tool-section"><summary>Display quality</summary>
-      <label class="mode-toggle"><input data-testid="adaptive-display-toggle" type="checkbox" bind:checked={adaptiveEnabled} onchange={event => { adaptiveEnabled = event.currentTarget.checked; toggleAdaptive(); }} disabled={!display || !!viewerError} />Camera-driven detail</label>
-      {#if adaptiveEnabled}
-      <label>Full detail within (m)<input data-testid="display-near-radius" type="number" min="0" max="200" step="5" bind:value={nearRadius} onchange={tuneDisplay} /></label>
-      <label>Distant detail <select data-testid="display-threshold" bind:value={pixelThreshold} onchange={event => { pixelThreshold = Number(event.currentTarget.value); tuneDisplay(); }}><option value={160}>Coarse</option><option value={80}>Balanced</option><option value={40}>Fine</option><option value={20}>Very fine</option></select></label>
-      <label>Point budget <select data-testid="display-budget" bind:value={pointBudget} onchange={event => { pointBudget = Number(event.currentTarget.value); tuneDisplay(); }}><option value={500_000}>500,000</option><option value={1_000_000}>1 million</option><option value={2_000_000}>2 million</option><option value={3_000_000}>3 million</option></select></label>
-      <label>Point size <select data-testid="display-point-size" bind:value={pointSize} onchange={event => { pointSize = Number(event.currentTarget.value); viewer?.setPointSize(pointSize); }}><option value={2}>2 px</option><option value={3}>3 px</option><option value={4}>4 px</option><option value={5}>5 px</option><option value={6}>6 px</option></select></label>
-      <p data-testid="display-status" aria-live="polite">{adaptiveStats.error ? 'Detail unavailable.' : adaptiveStats.pending ? 'Loading detail…' : adaptiveStats.budgetLimited ? 'Point budget reached' : displayStatus === 'Ready' ? 'Ready' : displayStatus}</p>
-      {#if adaptiveStats.error}<button data-testid="retry-display" onclick={() => viewer?.retryAdaptive()}>Retry detail</button>{/if}
-      {:else}
-      <label>Display point budget <select data-testid="display-budget" bind:value={displayBudget} onchange={event => { displayBudget = Number(event.currentTarget.value); void loadDisplay(); }}><option value={10_000}>10,000</option><option value={50_000}>50,000</option><option value={100_000}>100,000</option></select></label>
-      <label>Display maximum depth <select data-testid="display-depth" bind:value={displayDepth} onchange={event => { displayDepth = Number(event.currentTarget.value); void loadDisplay(); }}>{#each [0, 1, 2, 3] as depth}<option value={depth}>{depth}</option>{/each}</select></label>
-      <p data-testid="display-status" aria-live="polite">{displayStatus}</p>
-      {/if}
-      <button onclick={loadDisplay}>Reload display</button>
-      </details><details class="tool-section"><summary>Full-resolution selection &amp; crop</summary>
-      <p class="note">Shift-drag selects an XY area of interest for chat and automatically attaches a scene snapshot. The rectangle follows the view orientation at the orbit target’s elevation, not terrain; all elevations are in scope. Send shares it with the model. Clear removes both. Tiny Shift-click places the box below. Full-resolution loading is manual.</p>
-      <p data-testid="selection-info" class="note">{selectionInfo}</p>
-      {#if projected}<p data-testid="projected-selection" class="note">Orbit does not change this selection. Edit box fields to return to box selection.</p><button data-testid="reload-window" disabled={cropPhase === 'loading' || !!viewerError} onclick={() => { if (projected) void loadSelection(projected); }}>Reload projected window</button>{/if}
-      <div class="box-fields">
-        {#each ['X', 'Y', 'Z'] as axis, i}
-          <label>Center {axis} (m)<input type="number" step="0.1" data-testid={'box-center-' + axis.toLowerCase()} bind:value={center[i]} oninput={event => { center[i] = event.currentTarget.valueAsNumber; changeBox(); }} /></label>
-          <label>Size {axis} (m)<input type="number" min="0.01" step="0.5" data-testid={'box-size-' + axis.toLowerCase()} bind:value={dimensions[i]} oninput={event => { dimensions[i] = event.currentTarget.valueAsNumber; changeBox(); }} /></label>
-        {/each}
-      </div>
-      <button onclick={() => { const value = viewer?.viewCenter(); if (value) placeBox(value); }}>Box at view target</button>
-      <button data-testid="frame-box" onclick={() => viewer?.frameBox()}>Frame box</button>
-      <button data-testid="load-crop" onclick={loadCrop} disabled={!display || cropPhase === 'loading' || !!viewerError}>Load full resolution in box</button>
-      <button data-testid="cancel-crop" onclick={cancelCrop} disabled={!feedback.canCancel}>Cancel loading (retain partial)</button>
-      <button data-testid="clear-crop" onclick={clearCrop} disabled={!feedback.canClear}>Clear full resolution</button>
-      {#if feedback.canRetry}<button data-testid="retry-crop" onclick={retryCrop} disabled={!!viewerError}>Retry same selection</button>{/if}
-      <p data-testid="crop-status" aria-live="polite">{cropStatus}</p>
-      <p data-testid="crop-count">{feedback.count}</p>
-      {#if feedback.progress}<p data-testid="crop-progress" class="note">{feedback.progress}</p>
-      {:else if crop}<p class="note">Source bytes: {crop.bytesRead.toLocaleString()}; scanned points: {crop.scannedPoints.toLocaleString()}; hierarchy chunks: {crop.hierarchyChunks.toLocaleString()}. {cropPhase === 'complete' && crop.count === 0 ? 'No points in this volume. Select a different region.' : ''}</p>{/if}
-      <p class="note">No total point/source-work cap and no downsampling. Bounded stream/GPU chunks load progressively; large selections can exhaust browser/GPU memory or take a long time. Cancel stops future work (not instantaneous OS/GPU work); Clear releases detail. Editing the box cancels and clears old detail.</p>
-      </details><details class="tool-section"><summary>Harness observation &amp; export</summary>
-      <label>Harness point budget <select data-testid="harness-budget" bind:value={harnessBudget} onchange={event => { harnessBudget = Number(event.currentTarget.value); void loadHarness(); }}><option value={256}>256</option><option value={1024}>1,024</option><option value={4096}>4,096</option></select></label>
-      <label>Harness maximum depth <select data-testid="harness-depth" bind:value={harnessDepth} onchange={event => { harnessDepth = Number(event.currentTarget.value); void loadHarness(); }}>{#each [0, 1, 2, 3] as depth}<option value={depth}>{depth}</option>{/each}</select></label>
-      <p data-testid="harness-status" aria-live="polite">{harnessStatus}</p>
-      <p data-testid="harness-count">Observation: {observation?.count ?? 0} points</p>
-      <button onclick={loadHarness}>Reload harness input</button>
-      <button onclick={downloadObservation} disabled={!observation}>Download harness observation JSON</button>
-      {#if observation}
-        <dl><dt>Dataset / artifact revision</dt><dd>{observation.dataset.id} / {observation.dataset.revision}</dd><dt>Algorithm / candidates / source bytes read</dt><dd>{observation.algorithm} / {observation.candidatePoints} / {observation.bytesRead}</dd><dt>Sample SHA256</dt><dd data-testid="harness-hash">{observation.sampleHash}</dd><dt>Actual observation settings</dt><dd>{observation.lod.budget} points maximum; levels 0–{observation.lod.depth}</dd></dl>
-      {/if}
-      <p class="note">Deterministic evenly spaced points across breadth-first levels 0–depth. Camera-independent, not screen-space LOD or an unbiased whole-cloud sample. Display first shows level 0. JSON contains local XYZ, RGB, semantic labels and stable source IDs; no model consumes it yet.</p>
-      </details>
-      {#if mounted}<VisualObservationPanel label="Toronto" capture={() => viewer!.capture()} isCurrent={id => viewer!.isCaptureCurrent(id)} resolvePixel={(id: string, x: number, y: number) => viewer!.resolvePixel(id, x, y)} />{/if}
-      <details class="tool-section"><summary>Dataset details</summary>
-      <p class="note">Read-only prepared cloud · 78.3M source points. Local meters · right-handed Z-up · world = local + [627285, 4841948, 0]. Session-only point overrides are separate from original semantic queries. Real CAD solids use a separate volatile Toronto authority.</p>
-      <p class="note">CC BY-NC 4.0 · <a href="https://github.com/WeikaiTan/Toronto-3D">Toronto-3D</a>. Source UTM; no reprojection or independent CRS certification.</p>
-      </details>
-      </div>
-      </details>
     </aside>
   </div>
 </main>
@@ -499,9 +425,12 @@
   main { color: #f5f5f7; background: #151619; overflow: hidden; }
   .viewport { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; }
   :global(canvas) { display: block; touch-action: none; }
-  .toolbar { position: absolute; z-index: 1; top: 16px; left: 16px; display: flex; align-items: center; gap: 10px; padding: 5px 10px; border: 1px solid #ffffff12; border-radius: 12px; background: #202124ed; font-size: 12px; }
+  .toolbar { position: absolute; z-index: 5; top: 16px; left: 16px; display: flex; flex-wrap: wrap; max-width: calc(100% - 32px); align-items: center; gap: 10px; padding: 5px 10px; border: 1px solid #ffffff12; border-radius: 12px; background: #202124ed; font-size: 12px; }
   .toolbar .color-mode { width: auto; margin: 0; padding: 7px 5px; }
   .color-key summary { padding: 8px 0; }
+  .toolbar .technical { position: static; }
+  .toolbar .technical[open] { width: auto; }
+  .toolbar .tools-content { position: absolute; top: calc(100% + 8px); right: 0; width: min(300px, calc(100vw - 48px)); padding: 4px 14px 14px; border: 1px solid #ffffff24; border-radius: 10px; background: #202124fa; }
   .color-key ul { position: absolute; top: calc(100% + 8px); left: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 9px 14px; list-style: none; margin: 0; padding: 12px; border: 1px solid #ffffff24; border-radius: 10px; background: #202124f5; width: 240px; box-shadow: 0 8px 24px #0004; }
   .color-key li { display: flex; align-items: center; gap: 7px; font-size: 11px; }
   .color-key li span { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
@@ -521,21 +450,16 @@
   .technical[open] { width: 360px; max-width: 100%; }
   .tools-content { padding: 0 14px 14px; box-sizing: border-box; max-height: min(65dvh, 620px); overflow-y: auto; overscroll-behavior: contain; }
   summary { color: #e8e8ed; font-size: 12px; cursor: pointer; }
-  .tool-section { border-top: 1px solid #ffffff18; margin-top: 12px; padding-top: 12px; }
-  .tool-section[open] { padding-bottom: 8px; }
   label { display: block; margin: 10px 0; font-size: 12px; color: #b9bac1; }
   select { display: block; width: 100%; margin-top: 4px; }
   .mode-toggle { display: flex; align-items: center; gap: 8px; }
   .mode-toggle input { width: auto; margin: 0; }
-  .box-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
   input { width: 100%; box-sizing: border-box; }
   button, select, input { color: #f5f5f7; background: #2b2c30; border: 1px solid #ffffff1c; border-radius: 8px; padding: 8px 10px; font-size: 12px; }
   button, select { cursor: pointer; } button { margin: 4px 0; } button:disabled { opacity: .4; cursor: default; }
   button:not(:disabled):hover { border-color: #72737b; }
   button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid #5b9cff; outline-offset: 2px; }
-  dt, .note { font-size: 11px; color: #a8a9b0; line-height: 1.5; } dd { margin: 0 0 8px; font-size: 11px; overflow-wrap: anywhere; } p { font-size: 12px; overflow-wrap: anywhere; }
-  a { color: #a8caff; }
   [role="alert"] { position: absolute; z-index: 1; left: 16px; right: 16px; top: 64px; max-height: 25%; overflow-y: auto; margin: 0; color: #ffb2aa; background: #202124f5; border: 1px solid #ffb2aa44; border-radius: 10px; padding: 10px 14px; overflow-wrap: anywhere; }
-  @media (max-width: 600px) { .toolbar { top: 12px; left: 12px; gap: 4px; padding: 5px 8px; flex-wrap: wrap; max-width: calc(100% - 150px); } .toolbar .color-mode { font-size: 11px; } .scene-panel .area-error { top: 180px; } .toolbar button { font-size: 11px; } aside { top: auto; bottom: 12px; right: 12px; max-width: calc(100% - 24px); max-height: 45%; } .scene-feedback { left: 12px; bottom: 12px; max-width: calc(100% - 24px); } }
+  @media (max-width: 600px) { .toolbar { top: 12px; left: 12px; gap: 4px; padding: 5px 8px; flex-wrap: wrap; max-width: calc(100% - 24px); } .toolbar .color-mode { font-size: 11px; } .scene-panel .area-error { top: 180px; } .toolbar button { font-size: 11px; } aside { top: auto; bottom: 12px; right: 12px; max-width: calc(100% - 24px); max-height: 45%; } .scene-feedback { left: 12px; bottom: 12px; max-width: calc(100% - 24px); } }
 
 </style>

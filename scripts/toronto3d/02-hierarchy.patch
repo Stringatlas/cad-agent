@@ -1,0 +1,66 @@
+diff --git a/Converter/include/HierarchyBuilder.h b/Converter/include/HierarchyBuilder.h
+index 6020f00..5b74ab0 100644
+--- a/Converter/include/HierarchyBuilder.h
++++ b/Converter/include/HierarchyBuilder.h
+@@ -144,12 +144,14 @@ struct HierarchyBuilder{
+ 			}
+ 		});
+ 
+-		// initialize all nodes as leaf nodes, turn into "normal" if child appears
+-		// also notify parent that it has a child!
++		// Initialize before linking: records may arrive in postorder, so resetting
++		// a parent while linking would overwrite its NORMAL type set by a child.
+ 		for(auto node : batch->nodes){
+-
+ 			node->type = TYPE::LEAF;
++		}
+ 
++		// Turn parents into normal nodes and notify them that they have a child.
++		for(auto node : batch->nodes){
+ 			string parentName = node->name.substr(0, node->name.size() - 1);
+ 
+ 			auto ptrParent = batch->nodeMap.find(parentName);
+@@ -260,7 +262,7 @@ struct HierarchyBuilder{
+ 				
+ 				TYPE type = node->type;
+ 				if(node->type == TYPE::PROXY && !isProxyNode){
+-					type = TYPE::NORMAL;
++					type = node->childMask == 0 ? TYPE::LEAF : TYPE::NORMAL;
+ 				}
+ 
+ 				uint64_t byteSize = isProxyNode ? node->proxyByteSize : node->byteSize;
+@@ -315,6 +317,16 @@ struct HierarchyBuilder{
+ 
+ 			if(batch->nodes.size() > 1){
+ 				auto proxyNode = batch_root->nodeMap[batch->name];
++				// Child links in the root batch stop at the batch boundary.
++				// The proxy must describe its real root in the target batch,
++				// including that root's children, not the root batch's local mask.
++				auto targetRoot = batch->nodeMap.at(batch->name);
++				if(proxyNode->numPoints != targetRoot->numPoints ||
++					proxyNode->byteOffset != targetRoot->byteOffset ||
++					proxyNode->byteSize != targetRoot->byteSize){
++					throw runtime_error("hierarchy batch root payload disagreement: " + batch->name);
++				}
++				proxyNode->childMask = targetRoot->childMask;
+ 				proxyNode->type = TYPE::PROXY;
+ 				proxyNode->proxyByteOffset = bytesWritten;
+ 				proxyNode->proxyByteSize = 22 * batch->chunkMap[batch->name]->nodes.size();
+@@ -323,7 +335,17 @@ struct HierarchyBuilder{
+ 				// if there is only one node in that batch,
+ 				// then we flag that node as leaf in the root-batch
+ 				auto root_batch_node = batch_root->nodeMap[batch->name];
++				auto targetRoot = batch->nodeMap.at(batch->name);
++				if(root_batch_node->numPoints != targetRoot->numPoints ||
++					root_batch_node->byteOffset != targetRoot->byteOffset ||
++					root_batch_node->byteSize != targetRoot->byteSize){
++					throw runtime_error("hierarchy singleton payload disagreement: " + batch->name);
++				}
+ 				root_batch_node->type = TYPE::LEAF;
++				root_batch_node->childMask = 0;
++				// This real leaf is already present in the root batch. Writing
++				// another copy would leave an unreachable hierarchy record.
++				continue;
+ 			}
+ 
+ 			fout.write(buffer->data_char, buffer->size);
