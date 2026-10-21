@@ -115,7 +115,7 @@ test('model UI renders safe content, keeps local draft IDs and exposes explicit 
   assert.ok(source.includes("window.addEventListener('focus', revalidate)")); assert.ok(source.includes("window.removeEventListener('focus', revalidate)"));
   assert.ok(source.includes("document.addEventListener('visibilitychange', visibility)")); assert.ok(source.includes("document.removeEventListener('visibilitychange', visibility)"));
   assert.match(source, /const revalidate = \(\) => \{ void controller\.refreshModels\(\); \}/);
-  assert.match(source, /const changed = \(\) => \{ removeAttachment\(\); controller\.accountChanged\(\); revalidate\(\); \}/);
+  assert.match(source, /const changed = \(\) => \{ controller\.accountChanged\(\); revalidate\(\); \}/);
   assert.match(source, /if \(document\.visibilityState === 'visible'\) revalidate\(\)/);
   assert.match(source, /document\.addEventListener\('visibilitychange', visibility\);\s*revalidate\(\);/);
   assert.match(source, /view\.catalogPhase === 'ready' && view\.catalog\?\.ready/);
@@ -148,7 +148,7 @@ test('model UI renders safe content, keeps local draft IDs and exposes explicit 
   for (const id of ['model-crop-dialog', 'model-crop-attach', 'model-image-capability-notice']) assert.ok(crop.includes(`data-testid="${id}"`));
   assert.ok(!source.includes('supported vision-model list')); assert.ok(!source.includes('modelSupportsVisualInput'));
   assert.ok(crop.includes('the provider catalog does not verify image capability')); assert.ok(crop.includes('the provider may reject it'));
-  assert.ok(source.includes('!catalogModelSelected')); assert.ok(crop.includes('Images are never silently removed or retried as text-only.'));
+  assert.ok(source.includes('disabled={!visualSource || cropOpen || captureBusy}')); assert.ok(!source.includes('catalogModelSelected')); assert.ok(crop.includes('Images are never silently removed or retried as text-only.'));
   assert.ok(source.includes('controller.send(submitted, current)')); assert.ok(integration.includes('<BoxControls {view} controller={projectController} />'));
   assert.ok(!integration.includes('open={listedPoints.length > 0}'));
   assert.ok(integration.includes('class="reference-preview"'));

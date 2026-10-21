@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { withProductSkills, isWorkflowTool } from './helpers/product-skill-transport';
 import assert from 'node:assert/strict';
 import { mkdtemp, realpath, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -44,11 +45,11 @@ const tool = (args: unknown, name = 'nearest_label', call_id = 'nearest_call') =
 async function provider(t: { after(fn: () => unknown): void }, scene: ModelScene, bound: BoundModelScene, output: unknown[]) {
   const auth = new ProviderAuth({ mode: 'api-key', apiKey: 'synthetic-only' });
   const bodies: Record<string, unknown>[] = []; const events: ModelChatEvent[] = []; let round = 0;
-  const model = new ProviderModel(auth, async (url, init) => {
+  const model = new ProviderModel(auth, withProductSkills(async (url, init) => {
     if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'test-model' }] });
     bodies.push(JSON.parse(String(init?.body)));
     return sse(round++ === 0 ? output : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Found original point.' }] }]);
-  });
+  }, ['scene-inspection']));
   t.after(() => { model.close(); auth.close(); });
   const catalog = await model.models(signal());
   const call: ModelTurnRequest = { requestId: 'nearest-request', conversationId: null, generation: catalog.generation, model: 'test-model', text: 'Find nearest Pole to Point 1', scene };
@@ -58,7 +59,7 @@ async function provider(t: { after(fn: () => unknown): void }, scene: ModelScene
 test('live nearest-label returns full verified lineage, resolves original source instead of attachment position, and replays result', async t => {
   const f = await dataset(t); t.after(() => f.bound.close());
   const p = await provider(t, f.scene, f.bound, [tool({ pointName: 'Point 1', label: 6 })]); await p.run();
-  const event = p.events.find(e => e.kind === 'tool'); assert.ok(event?.kind === 'tool'); assert.equal(event.name, 'nearest_label');
+  const event = p.events.find(e => isWorkflowTool(e)); assert.ok(event?.kind === 'tool'); assert.equal(event.name, 'nearest_label');
   const context = event.context as Awaited<ReturnType<NonNullable<BoundModelScene['nearestLabel']>>>;
   assert.equal(context.searchGeometry, 'original-prepared-dataset'); assert.equal(context.pointName, 'Point 1');
   assert.deepEqual(context.request.input, { kind: 'point-ref', key: { sourceFileId: 1, sourceRow: 0 } });
@@ -69,9 +70,9 @@ test('live nearest-label returns full verified lineage, resolves original source
   assert.equal(context.outcome.verification.verifier, 'semantic-disk-page-verifier-v1');
   assert.deepEqual(context.outcome.request, context.request); assert.ok(context.outcome.dataset.revision);
   const tools = p.bodies[0].tools as { tools: { name: string }[] }[];
-  assert.deepEqual(tools[0].tools.map(tool => tool.name), ['inspect_scene', 'nearest_label']);
+  assert.deepEqual(tools[0].tools.map(tool => tool.name), ['list_skills', 'load_skill', 'get_scene_marks', 'set_scene_marks', 'query_points', 'ground_elevation', 'inspect_scene', 'nearest_label']);
   const replay = p.bodies[1].input as { type?: string; output?: string }[];
-  assert.deepEqual(JSON.parse(replay.find(item => item.type === 'function_call_output')!.output!), context);
+  assert.deepEqual(JSON.parse(replay.find(item => item.type === 'function_call_output' && !JSON.parse(item.output!).kind?.startsWith('runtime-skill'))!.output!), context);
   assert.equal(p.events.at(-1)?.kind, 'done');
 });
 
@@ -95,7 +96,7 @@ for (const args of [{ pointName: 'Point 99', label: 6 }, { pointName: 'Point 1',
   const bound: BoundModelScene = { context: {}, async check() {}, async close() {}, async nearestLabel() { invoked = true; throw new Error('Must not execute'); } };
   const p = await provider(t, scene, bound, [tool(args)]);
   await assert.rejects(p.run(), e => e instanceof ModelError && e.code === 'invalid-nearest-label'); assert.equal(invoked, false);
-  assert.equal(p.events.some(e => e.kind === 'tool'), false);
+  assert.equal(p.events.some(e => isWorkflowTool(e)), false);
 });
 
 for (const mode of ['demo', 'pole', 'toronto'] as const) test(`nearest-label is unavailable without active bound Toronto names: ${mode}`, async t => {

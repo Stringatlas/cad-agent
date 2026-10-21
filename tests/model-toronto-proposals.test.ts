@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { withProductSkills, isWorkflowTool } from './helpers/product-skill-transport';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -15,7 +16,7 @@ const signal = () => new AbortController().signal;
 const tool = (name: string, args: unknown) => ({ type: 'function_call', namespace: 'scene', name, call_id: `call_${name}`, arguments: JSON.stringify(args) });
 const sse = (output: unknown[]) => new Response(`data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output } })}\n\n`, { headers: { 'content-type': 'text/event-stream' } });
 const advertised = (body: Record<string, unknown>) => (body.tools as { tools: { name: string }[] }[])[0].tools.map(t => t.name);
-const toolEvents = (events: ModelChatEvent[]) => events.filter((e): e is Extract<ModelChatEvent, { kind: 'tool' }> => e.kind === 'tool');
+const toolEvents = (events: ModelChatEvent[]) => events.filter((e): e is Extract<ModelChatEvent, { kind: 'tool' }> => isWorkflowTool(e));
 async function dataset(t: { after(fn: () => unknown): void }, multiple = false) {
   const root = await mkdtemp(join(tmpdir(), 'spatial-model-toronto-'));
   const count = multiple ? 4 : 1;
@@ -46,10 +47,10 @@ async function dataset(t: { after(fn: () => unknown): void }, multiple = false) 
 async function provider(t: { after(fn: () => unknown): void }) {
   const auth = new ProviderAuth({ mode: 'api-key', apiKey: 'synthetic-only' });
   const requests: Record<string, unknown>[] = [], outputs: unknown[][] = [];
-  const model = new ProviderModel(auth, async (url, init) => {
+  const model = new ProviderModel(auth, withProductSkills(async (url, init) => {
     if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'test-model' }] });
     requests.push(JSON.parse(String(init?.body))); return sse(outputs.shift() ?? []);
-  });
+  }, ['toronto-geometry', 'scene-inspection']));
   t.after(() => { model.close(); auth.close(); });
   const catalog = await model.models(signal());
   const run = async (scene: ModelScene, bound: BoundModelScene) => {
@@ -64,7 +65,7 @@ test('Toronto box/cylinder tools work without attached points, return metadata o
   const syntheticBefore = f.project.snapshot();
   p.outputs.push([tool('propose_cad_box', { center: [3, 4, 5], dimensions: [2, 4, 6] }), tool('propose_cad_cylinder', { center: [7, 8, 9], radius: 2, height: 3 })], []);
   const events = toolEvents(await p.run(scene, bound));
-  assert.deepEqual(advertised(p.requests[0]), ['inspect_scene', 'propose_cad_box', 'propose_cad_cylinder']);
+  assert.deepEqual(advertised(p.requests[0]), ['list_skills', 'load_skill', 'get_scene_marks', 'set_scene_marks', 'query_points', 'ground_elevation', 'inspect_scene', 'propose_cad_box', 'propose_cad_cylinder']);
   assert.deepEqual(events.map(e => e.name), ['propose_cad_box', 'propose_cad_cylinder']);
   for (const event of events) {
     const context = event.context as { status: string; proposal: { validation: { valid: boolean; volume: number }; mesh?: unknown; frameId: string } };
@@ -77,7 +78,7 @@ test('Toronto box/cylinder tools work without attached points, return metadata o
   assert.ok(snapshot.proposals.every(proposal => proposal.mesh.triangles.length > 0));
   assert.deepEqual(f.project.snapshot(), syntheticBefore);
   const replay = p.requests[1].input as { type?: string; output?: string }[];
-  assert.deepEqual(replay.filter(i => i.type === 'function_call_output').map(i => JSON.parse(i.output!)), events.map(e => e.context));
+  assert.deepEqual(replay.filter(i => i.type === 'function_call_output' && !JSON.parse(i.output!).kind?.startsWith('runtime-skill')).map(i => JSON.parse(i.output!)), events.map(e => e.context));
   await bound.close();
   const proposal = snapshot.proposals[0];
   const accepted = await f.cad.execute('approve', { sessionId: snapshot.sessionId, revision: snapshot.revision, artifactRevision: snapshot.artifactRevision, proposalId: proposal.proposalId }) as TorontoCadSnapshot;
@@ -129,7 +130,7 @@ test('Toronto strict tools reject malformed arguments, model-selected keys, bind
     const scene: ModelScene = { mode, project: null, toronto: [] };
     p.outputs.push([tool('propose_cad_box', { center: [0, 0, 0], dimensions: [1, 1, 1] })]);
     await assert.rejects(p.run(scene, guarded), { code: 'unsupported-tool' });
-    assert.deepEqual(advertised(p.requests.at(-1)!), ['inspect_scene']);
+    assert.deepEqual(advertised(p.requests.at(-1)!), ['list_skills', 'load_skill', 'query_points', 'ground_elevation', 'inspect_scene']);
   }
 });
 
@@ -237,7 +238,7 @@ test('nearest move of an original Pole to itself returns verified no-change with
   assert.deepEqual(await f.points.execute('pending'), []);
   assert.deepEqual(await f.points.execute('snapshot'), f.state);
   const replay = p.requests[1].input as { type?: string; output?: string }[];
-  assert.deepEqual(replay.filter(i => i.type === 'function_call_output').map(i => JSON.parse(i.output!)), [context]);
+  assert.deepEqual(replay.filter(i => i.type === 'function_call_output' && !JSON.parse(i.output!).kind?.startsWith('runtime-skill')).map(i => JSON.parse(i.output!)), [context]);
 });
 
 for (const sequential of [false, true]) test(`already approved nearest move is no-change and allows another actual move (${sequential ? 'sequential' : 'same-round'})`, async t => {
@@ -264,5 +265,5 @@ for (const sequential of [false, true]) test(`already approved nearest move is n
   assert.deepEqual(await f.points.execute('pending'), [changed.proposal]);
   assert.deepEqual(await f.points.execute('snapshot'), approved, 'neither call publishes a mutation');
   const replay = p.requests.at(-1)!.input as { type?: string; output?: string }[];
-  assert.deepEqual(replay.filter(i => i.type === 'function_call_output').map(i => JSON.parse(i.output!)), events.map(e => e.context));
+  assert.deepEqual(replay.filter(i => i.type === 'function_call_output' && !JSON.parse(i.output!).kind?.startsWith('runtime-skill')).map(i => JSON.parse(i.output!)), events.map(e => e.context));
 });

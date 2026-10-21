@@ -12,11 +12,12 @@
   import type { TorontoDraftPoint } from './draft-context';
   import { canonicalPoleRequest } from '@spatial/contracts';
   import { validatePoleResult } from './pole-client';
-  let { areaInput, scene, visualSource, points = [], onverifiedresult = () => {}, onplacementsearch, onareacandidates, onauthorityproposal = () => {}, onproposal = () => {}, oninvalidateproposals = () => {}, onstreamingchange = () => {}, onselectreference, onauthorityrefresh, proposalsBlocked = false }: {
+  let { areaInput, scene, visualSource, points = [], onverifiedresult = () => {}, onplacementsearch, onareacandidates, onscenemarks, onauthorityproposal = () => {}, onproposal = () => {}, oninvalidateproposals = () => {}, onstreamingchange = () => {}, onselectreference, onauthorityrefresh, proposalsBlocked = false }: {
     areaInput?: AreaOfInterestInput;
     scene: ModelScene; visualSource?: VisualModelSource; points?: readonly TorontoDraftPoint[]; onverifiedresult?: (context: unknown) => void;
     onplacementsearch?: (result: unknown, current: () => boolean) => Promise<void>;
     onareacandidates?: (result: unknown, current: () => boolean) => Promise<void>;
+    onscenemarks?: (snapshot: unknown) => void;
     onauthorityproposal?: (kind: 'points' | 'cad' | 'objects') => void;
     onproposal?: (proposal: unknown, isCurrent: () => boolean) => void; oninvalidateproposals?: () => void;
     onstreamingchange?: (streaming: boolean) => void; proposalsBlocked?: boolean;
@@ -48,7 +49,7 @@
   }
   async function attachScreenshot() {
     const source = visualSource, mode = scene.mode;
-    if (!source || !catalogModelSelected) return;
+    if (!source || cropOpen || captureBusy) return;
     removeAttachment(); const ticket = ++captureTicket; captureBusy = true; cropOpen = true;
     // The bytes describe the captured instant, not the current camera or authority.
     const current = () => alive && ticket === captureTicket && mode === scene.mode;
@@ -88,7 +89,6 @@
   let draft = $state('');
   let draftInput: HTMLTextAreaElement;
   let view = $state<ModelChatView>({ catalogPhase: 'idle', model: '', phase: 'idle', code: 'refresh-models', messages: [] });
-  const catalogModelSelected = $derived(view.catalogPhase === 'ready' && view.catalog?.ready && !!view.catalog.models.some(model => model.id === view.model));
   let approvalWaiting = $state(false);
   async function captureForAgent(request: ModelCaptureRequest, isCurrent: () => boolean): Promise<VisualModelAttachment> {
     const source = visualSource;
@@ -100,6 +100,7 @@
   const controller = new ModelChatController(value => { view = value; onstreamingchange(value.phase === 'streaming'); }, undefined, undefined, undefined,
     { onproposal: (proposal, current) => onproposal(proposal, current), oninvalidate: () => oninvalidateproposals(), onauthorityproposal: kind => onauthorityproposal(kind),
       oncapture: captureForAgent,
+      onscenemarks: snapshot => { if (!onscenemarks || !alive || scene.mode !== 'toronto') throw new Error('Location annotations unavailable.'); onscenemarks(snapshot); },
       onareacandidates: (result, current) => { if (!onareacandidates) throw new Error('Candidate display unavailable.'); return onareacandidates(result, current); },
       onplacementsearch: (result, current) => { if (!onplacementsearch) throw new Error('Placement display unavailable.'); return onplacementsearch(result, current); },
       onselectreference: (reference, current) => { if (!onselectreference) throw new Error('Reference selection unavailable.'); return onselectreference(reference, current); },
@@ -110,7 +111,8 @@
   // controller.bind independently owns current scene/tool binding and response invalidation.
   const captureMode = $derived(scene.mode);
   $effect(() => { captureMode; untrack(() => removeAttachment()); });
-  const effectiveAttachment = $derived(areaInput?.attachment ?? attachment);
+  const effectiveAttachment = $derived(attachment ?? areaInput?.attachment);
+  const showingAreaSnapshot = $derived(!attachment && !!areaInput?.attachment);
   const areaIdentity = $derived(areaInput?.area);
   $effect(() => { areaIdentity; untrack(() => removeAttachment()); });
   const readyToSend = $derived(!areaInput?.pending && !areaInput?.error && !proposalsBlocked && view.catalogPhase === 'ready' && view.catalog?.ready && !!view.model && view.phase !== 'streaming' && !captureBusy && !cropOpen);
@@ -119,7 +121,7 @@
   onMount(() => {
     // Discovery is read-only. Focus alone never erases a conversation or retries inference.
     const revalidate = () => { void controller.refreshModels(); };
-    const changed = () => { removeAttachment(); controller.accountChanged(); revalidate(); };
+    const changed = () => { controller.accountChanged(); revalidate(); };
     const visibility = () => { if (document.visibilityState === 'visible') revalidate(); };
     window.addEventListener('spatial-provider-change', changed);
     window.addEventListener('focus', revalidate);
@@ -138,7 +140,7 @@
 <section class="model-chat" data-testid="model-chat" data-state={view.phase} aria-label="Model conversation">
   <div class="chat-toolbar">
     <label class="model-label" for="chat-model">Model</label>
-    <select id="chat-model" data-testid="model-select" aria-label="Chat model" value={view.model} onchange={event => { removeAttachment(); controller.selectModel(event.currentTarget.value); }} disabled={!view.catalog?.ready || view.catalogPhase !== 'ready'}>
+    <select id="chat-model" data-testid="model-select" aria-label="Chat model" value={view.model} onchange={event => controller.selectModel(event.currentTarget.value)} disabled={!view.catalog?.ready || view.catalogPhase !== 'ready'}>
       <option value="">Choose a model…</option>
       {#each view.catalog?.models ?? [] as model (model.id)}<option value={model.id}>{model.label}</option>{/each}
     </select>
@@ -240,8 +242,8 @@
       {@const size = modelVisualImageSize(effectiveAttachment.observation)}
       <div class="screenshot-attachment" aria-label="Attached scene screenshot">
         <img data-testid="model-image-preview" src={effectiveAttachment.observation.image.dataUrl} alt="Scene crop attached to the next send" />
-        <span data-testid="model-image-status" role="status">{size.width} × {size.height} JPEG · {Math.ceil(effectiveAttachment.observation.image.byteLength / 1024)} KB{areaInput ? ' · Area of interest' : ''}</span>
-        <button type="button" title={areaInput ? 'Clear area of interest and snapshot' : 'Remove screenshot'} aria-label={areaInput ? 'Clear area of interest and snapshot' : 'Remove screenshot'} data-testid="model-remove-screenshot" disabled={view.phase === 'streaming'} onclick={() => areaInput ? areaInput.clear() : removeAttachment()}>×</button>
+        <span data-testid="model-image-status" role="status">{size.width} × {size.height} JPEG · {Math.ceil(effectiveAttachment.observation.image.byteLength / 1024)} KB{showingAreaSnapshot ? ' · Area of interest' : ''}</span>
+        <button type="button" title={showingAreaSnapshot ? 'Clear area of interest and snapshot' : 'Remove screenshot'} aria-label={showingAreaSnapshot ? 'Clear area of interest and snapshot' : 'Remove screenshot'} data-testid="model-remove-screenshot" disabled={showingAreaSnapshot && view.phase === 'streaming'} onclick={() => showingAreaSnapshot ? areaInput?.clear() : removeAttachment()}>×</button>
       </div>
     {/if}
     {#if areaInput?.pending}<p role="status">Capturing area of interest…</p>{/if}
@@ -255,7 +257,7 @@
       }
     }}></textarea>
     <div class="composer-footer">
-      <button bind:this={cameraButton} class="camera" type="button" title={visualSource ? 'Crop and attach scene screenshot' : 'Screenshot capture unavailable in this scene'} aria-label="Attach scene screenshot" data-testid="model-attach-screenshot" disabled={!!areaInput || !visualSource || !catalogModelSelected || cropOpen || view.phase === 'streaming'} onclick={() => void attachScreenshot()}>
+      <button bind:this={cameraButton} class="camera" type="button" title={visualSource ? 'Crop and attach scene screenshot' : 'Screenshot capture unavailable in this scene'} aria-label="Attach scene screenshot" data-testid="model-attach-screenshot" disabled={!visualSource || cropOpen || captureBusy} onclick={() => void attachScreenshot()}>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 6h4l2-3h4l2 3h4a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Z"/><circle cx="12" cy="12" r="4"/></svg>
       </button>
       <button class="cancel" type="button" data-testid="model-cancel" disabled={view.phase !== 'streaming' && view.catalogPhase !== 'loading'} onclick={() => controller.cancel()}>Cancel</button>

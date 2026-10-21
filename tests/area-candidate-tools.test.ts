@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { withProductSkills, isWorkflowTool } from './helpers/product-skill-transport';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { canonicalModelChatEvent, type AreaCandidateResult, type AreaCandidateSettings, type ModelCatalog, type ModelChatEvent, type ModelScene, type ModelTurnRequest, type PointMoveProposal, type PointOverrideSnapshot, type TorontoCadProposal, type TorontoCadSnapshot } from '@spatial/contracts';
@@ -22,10 +23,10 @@ async function httpFixture(t: { after(fn: () => unknown): void }, size = 4) {
   const scene: ModelScene = { mode: 'toronto', project: null, toronto: [], areaOfInterest: source.area(100) };
   const outputs: unknown[][] = [], requests: Record<string, any>[] = [];
   const server = createDemoServer({ datasetRoot: source.root, projectPath: join(source.root, 'project.json'), provider: { mode: 'api-key', apiKey: 'synthetic-not-a-credential' },
-    modelTransport: async (url, init) => {
+    modelTransport: withProductSkills(async (url, init) => {
       if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'fixture-model' }] });
       requests.push(JSON.parse(String(init?.body))); return sse(outputs.shift() ?? []);
-    } });
+    }, ['area-candidates']) });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); assert.ok(address && typeof address !== 'string');
   const fetcher: typeof fetch = (input, init) => fetch(`http://127.0.0.1:${address.port}${String(input)}`, init);
@@ -84,20 +85,26 @@ test('100x100m provider scan reaches client candidate callback without selected 
 });
 
 test('provider rejects extra settings, model corners, invalid filters and missing active AOI', async t => {
-  const f = await httpFixture(t);
-  for (const args of [
-    { settings, corners: f.scene.areaOfInterest!.corners }, { settings, area: f.scene.areaOfInterest },
-    { settings: { ...settings, corners: [] } }, { settings: { ...settings, dimensions: [1, 1, 1] } },
-    { settings: { ...settings, spacingMeters: 0 } }, { settings: { ...settings, clearanceRadiusMeters: -1 } },
-    { settings: { ...settings, ranking: 'made-up' } }, { settings: {} },
-  ]) {
-    f.outputs.push([tool(args)]); const events = await f.run();
-    assert.equal(events.at(-1)?.kind, 'error'); assert.equal(events.some(e => e.kind === 'tool'), false);
-  }
-  const { areaOfInterest: _, ...noArea } = f.scene;
-  f.outputs.push([tool({ settings })]); assert.equal((await f.run(f.call(noArea))).at(-1)?.kind, 'error');
-  assert.equal(f.requests.at(-1)!.tools[0].tools.some((item: { name: string }) => item.name === 'scan_area_candidates'), false);
-  const { points, cad } = await f.snapshots(); assert.equal(points.entries.length, 0); assert.equal(cad.proposals.length, 0);
+  const invalid = [
+    (scene: ModelScene) => ({ settings, corners: scene.areaOfInterest!.corners }),
+    (scene: ModelScene) => ({ settings, area: scene.areaOfInterest }),
+    () => ({ settings: { ...settings, corners: [] } }), () => ({ settings: { ...settings, dimensions: [1, 1, 1] } }),
+    () => ({ settings: { ...settings, spacingMeters: 0 } }), () => ({ settings: { ...settings, clearanceRadiusMeters: -1 } }),
+    () => ({ settings: { ...settings, ranking: 'made-up' } }), () => ({ settings: {} }),
+  ];
+  // Response EOF can precede admission cleanup; independent inputs need independent servers.
+  for (const [index, args] of invalid.entries()) await t.test(`malformed input ${index + 1}`, async t => {
+    const f = await httpFixture(t);
+    f.outputs.push([tool(args(f.scene))]); const events = await f.run();
+    assert.equal(events.at(-1)?.kind, 'error'); assert.equal(events.some(e => isWorkflowTool(e)), false);
+    const { points, cad } = await f.snapshots(); assert.equal(points.entries.length, 0); assert.equal(cad.proposals.length, 0);
+  });
+  await t.test('missing active AOI', async t => {
+    const f = await httpFixture(t), { areaOfInterest: _, ...noArea } = f.scene;
+    f.outputs.push([tool({ settings })]); assert.equal((await f.run(f.call(noArea))).at(-1)?.kind, 'error');
+    assert.equal(f.requests.at(-1)!.tools[0].tools.some((item: { name: string }) => item.name === 'scan_area_candidates'), false);
+    const { points, cad } = await f.snapshots(); assert.equal(points.entries.length, 0); assert.equal(cad.proposals.length, 0);
+  });
 });
 
 test('real engine cell-budget failure with unavailable index hashes remains valid through HTTP and UI validator', async t => {

@@ -45,6 +45,27 @@ function fixture(turn: (r: ModelTurnRequest) => Response | Promise<Response> = r
 async function ready(f: ReturnType<typeof fixture>) { await f.client.refreshModels(); }
 const lastSnapshots = (client: ModelChatController) => client.view.messages.at(-1)!.inspections!;
 
+test('skill discovery preserves all workflow calls and provider rounds with independent overflow limits', async () => {
+  const skills = Array.from({ length: MODEL_CLIENT_LIMITS.maxSkillTools }, (_, i) => i % 2 ? 'load_skill' : 'list_skills');
+  const workflows = Array<string>(MODEL_CLIENT_LIMITS.maxTools).fill('inspect_scene');
+  const transcript = (names: string[]) => [start(), ...Array.from({ length: names.length + 1 }, (_, i) => [
+    snapshot(request, i + 1), phase(request, i + 1), phase(request, i + 1, 'completed'),
+    ...(i < names.length ? [{ kind: 'tool', requestId: request.requestId, name: names[i], context: {} }] : []),
+  ]).flat(), done()];
+  const accepted: ModelChatEvent[] = [];
+  assert.equal(await streamModelTurn(request, new AbortController().signal, event => { accepted.push(event); },
+    async () => response(transcript([...skills, ...workflows]))), 'inspection-conversation');
+  const totalTools = MODEL_CLIENT_LIMITS.maxSkillTools + MODEL_CLIENT_LIMITS.maxTools;
+  assert.equal(accepted.filter(event => event.kind === 'tool').length, totalTools);
+  assert.equal(accepted.filter(event => event.kind === 'request-inspection').length, totalTools + 1);
+  assert.equal(totalTools + 1, MODEL_INSPECTION_LIMITS.rounds);
+  // Keep each overflow below the round ceiling, so the independent tool guard must reject it.
+  for (const [names, message] of [[skills.concat('load_skill'), /Skill tool budget/], [workflows.concat('inspect_scene'), /Tool budget/]] as const) {
+    await assert.rejects(streamModelTurn(request, new AbortController().signal, () => {},
+      async () => response(transcript(names))), message);
+  }
+});
+
 // Transport and contracts are exercised together; these are inert NDJSON fixtures, not live provider requests.
 test('inspection validation freezes accepted snapshots and rejects wrong bindings, bounds and unknown shapes', () => {
   const good = validateModelEvent(snapshot(), request);

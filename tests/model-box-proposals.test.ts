@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { withProductSkills, isWorkflowTool, assertSkillLoaded } from './helpers/product-skill-transport';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -18,13 +19,13 @@ async function fixture(t: { after(fn: () => unknown): void }) {
   const auth: ModelAuth = { status: () => ({ mode: 'api-key', authenticated: true, ready: true, planUsageEnabled: false, selectedAccount: null, accounts: [] }),
     credentialGeneration: () => 'generation', onCredentialChange: () => () => {},
     credential: async () => ({ mode: 'api-key', bearer: 'synthetic-fixture', baseUrl: 'https://unused.invalid', constraints: { billing: 'api-key', responsesOnly: false } }) };
-  const requests: Record<string, unknown>[] = []; const outputs: unknown[][] = [];
+  const requests: Record<string, unknown>[] = [], skillRequests: Record<string, unknown>[] = []; const outputs: unknown[][] = [];
   let beforeResponse: (() => void) | undefined;
-  const model = new ProviderModel(auth, async (url, init) => {
+  const model = new ProviderModel(auth, withProductSkills(async (url, init) => {
     if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'model-one' }] });
     requests.push(JSON.parse(String(init?.body))); beforeResponse?.();
     return sse(outputs.shift() ?? []);
-  });
+  }, ['synthetic-boxes'], skillRequests));
   t.after(async () => { model.close(); await rm(root, { recursive: true, force: true }); });
   await model.models(freshSignal());
   const scene: ModelScene = { mode: 'demo', project: { ...authority.binding(), entityIds: [], points: [] }, toronto: [] };
@@ -36,10 +37,10 @@ async function fixture(t: { after(fn: () => unknown): void }) {
     await model.turn(call(s), b, async event => { events.push(canonicalModelChatEvent(event)); }, signal);
     return events;
   };
-  return { root, authority, model, scene, bound, requests, outputs, run, call, setBeforeResponse(fn: () => void) { beforeResponse = fn; } };
+  return { root, authority, model, scene, bound, requests, skillRequests, outputs, run, call, setBeforeResponse(fn: () => void) { beforeResponse = fn; } };
 }
 const advertised = (body: Record<string, unknown>) => (body.tools as { tools: { name: string }[] }[])[0].tools.map(t => t.name);
-const proposalEvents = (events: ModelChatEvent[]) => events.filter((e): e is Extract<ModelChatEvent, { kind: 'tool' }> => e.kind === 'tool');
+const proposalEvents = (events: ModelChatEvent[]) => events.filter((e): e is Extract<ModelChatEvent, { kind: 'tool' }> => isWorkflowTool(e));
 
 test('model create/update dispatch returns exact retained proposals without mutation; human approval remains possible after turn close', async t => {
   const f = await fixture(t); const before = f.authority.snapshot();
@@ -47,10 +48,13 @@ test('model create/update dispatch returns exact retained proposals without muta
   f.outputs.push([tool('propose_box_create', parameters), tool('propose_box_update', { ...parameters, entityId: box.id })], []);
   const events = await f.run();
   const tools = proposalEvents(events); assert.equal(tools.length, 2);
+  assert.equal(f.skillRequests.length, 1); assert.equal(f.requests.length + f.skillRequests.length, 3);
+  assert.deepEqual(events.filter(e => e.kind === 'tool').map(e => e.name), ['load_skill', 'propose_box_create', 'propose_box_update']);
   assert.deepEqual(tools.map(e => e.name), ['propose_box_create', 'propose_box_update']);
   assert.deepEqual(f.authority.snapshot(), before);
-  assert.deepEqual(advertised(f.requests[0]), ['inspect_scene', 'propose_box_create', 'propose_box_update']);
-  assert.match(String(f.requests[0].instructions), /Never claim a proposal is committed/u);
+  assert.deepEqual(advertised(f.requests[0]), ['list_skills', 'load_skill', 'inspect_scene', 'propose_box_create', 'propose_box_update']);
+  assertSkillLoaded(f.requests[0], 'synthetic-boxes');
+  assert.match(String(f.requests[0].instructions), /Human Accept of each change is required/u);
   const context = f.bound.context as { availableProjectBoxes: unknown[] };
   assert.deepEqual(context.availableProjectBoxes, before.project.entities.filter(e => e.kind === 'box'));
   const proposals = tools.map(e => {
@@ -62,7 +66,7 @@ test('model create/update dispatch returns exact retained proposals without muta
     return wrapper.proposal;
   });
   const input = f.requests[1].input as { type?: string; output?: string }[];
-  assert.deepEqual(input.filter(i => i.type === 'function_call_output').map(i => JSON.parse(i.output!)), tools.map(e => e.context));
+  assert.deepEqual(input.filter(i => i.type === 'function_call_output' && !JSON.parse(i.output!).kind?.startsWith('runtime-skill')).map(i => JSON.parse(i.output!)), tools.map(e => e.context));
   await f.bound.close();
   const proposal = proposals[0];
   const result = f.authority.approve({ ...f.authority.binding(), proposalId: proposal.proposalId, digest: proposal.digest, humanApproved: true });
@@ -77,7 +81,7 @@ test('proposal tools are not advertised or callable outside a bound synthetic de
     for (const name of ['propose_box_create', 'propose_box_update']) {
       f.outputs.push([tool(name, parameters)]);
       await assert.rejects(f.run(scene, forged), { code: 'unsupported-tool' });
-      assert.deepEqual(advertised(f.requests.at(-1)!), ['inspect_scene']);
+      assert.deepEqual(advertised(f.requests.at(-1)!), ['list_skills', 'load_skill', 'inspect_scene']);
     }
     const bound = await bindModelScene(scene, f.authority, f.root, freshSignal());
     assert.equal(bound.proposeBox, undefined); await bound.close();

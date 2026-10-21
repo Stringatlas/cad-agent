@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { withProductSkills } from './helpers/product-skill-transport';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -87,7 +88,7 @@ test('runtime observes object receipts, rebinds selected refs, rejects unrelated
 test('provider rejects malformed object inputs and approval tools before dispatch', async t => {
   const f = await fixture(t), bound = await f.bind(), auth = new ProviderAuth({ mode: 'api-key', apiKey: 'fixture' });
   let output: unknown[] = [], attempts = 0;
-  const model = new ProviderModel(auth, async url => String(url).endsWith('/models') ? Response.json({ data: [{ id: 'test' }] }) : new Response(`data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output } })}\n\n`, { headers: { 'content-type': 'text/event-stream' } }));
+  const model = new ProviderModel(auth, withProductSkills(async url => String(url).endsWith('/models') ? Response.json({ data: [{ id: 'test' }] }) : new Response(`data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output } })}\n\n`, { headers: { 'content-type': 'text/event-stream' } }), ['scene-objects']));
   t.after(() => { model.close(); auth.close(); });
   const catalog = await model.models(signal);
   const guarded = { ...bound, async proposePointCreate(): Promise<SceneObjectProposal> { attempts++; throw new Error('not dispatched'); }, async listObjects() { attempts++; return {}; }, async getObject() { attempts++; return {}; } };
@@ -111,11 +112,11 @@ test('provider advertises strict object tools, emits exact candidate and observe
     [{ type: 'function_call', namespace: 'scene', name: 'propose_point_create', call_id: 'create', arguments: JSON.stringify({ name: 'A', input: { kind: 'position', position: [2, 3, 4] } }) }],
     [{ type: 'function_call', namespace: 'scene', name: 'list_objects', call_id: 'list', arguments: JSON.stringify({ offset: 0, limit: 32 }) }], [],
   ];
-  const model = new ProviderModel(auth, async (url, init) => {
+  const model = new ProviderModel(auth, withProductSkills(async (url, init) => {
     if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'test' }] });
     requests.push(JSON.parse(String(init?.body)));
     return new Response(`data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output: calls.shift() ?? [] } })}\n\n`, { headers: { 'content-type': 'text/event-stream' } });
-  });
+  }, ['scene-objects']));
   t.after(() => { model.close(); auth.close(); });
   const catalog = await model.models(signal), call: ModelTurnRequest = { requestId: 'req', conversationId: null, generation: catalog.generation, model: 'test', text: 'create A', scene: f.scene };
   const runtime = createModelAgentRuntime(call, bound, f.project, f.root, signal, new ModelBrowserBroker('req', signal, async () => undefined), f.editing);

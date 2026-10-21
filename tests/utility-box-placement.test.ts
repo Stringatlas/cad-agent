@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { withProductSkills } from './helpers/product-skill-transport';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -99,7 +100,7 @@ test('missing, sparse and unsupported terrain fail closed; sampled slope flags b
 test('model assessment → exact native ghost → human approval, no model acceptance; client dispatch and source binding', async t => {
   const f = await fixture(t), bound = await f.bind(); t.after(() => bound.close());
   const auth = new ProviderAuth({ mode: 'api-key', apiKey: 'fixture-only' }); let round = 0;
-  const model = new ProviderModel(auth, async (url, init) => {
+  const model = new ProviderModel(auth, withProductSkills(async (url, init) => {
     if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'test-model' }] });
     const body = JSON.parse(String(init?.body)); const names = body.tools[0].tools.map((v: { name: string }) => v.name);
     assert.ok(names.includes('assess_utility_box')); assert.ok(names.includes('propose_utility_box')); assert.ok(!names.some((n: string) => n.includes('approve')));
@@ -111,7 +112,7 @@ test('model assessment → exact native ghost → human approval, no model accep
       output = [{ type: 'function_call', namespace: 'scene', name: 'propose_utility_box', call_id: 'propose', arguments: JSON.stringify({ assessmentId: assessment.assessmentId }) }];
     }
     round++; return new Response(`data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output } })}\n\n`, { headers: { 'content-type': 'text/event-stream' } });
-  }); t.after(() => { model.close(); auth.close(); }); const catalog = await model.models(signal());
+  }, ['utility-box-placement'])); t.after(() => { model.close(); auth.close(); }); const catalog = await model.models(signal());
   const call: ModelTurnRequest = { requestId: 'utility', conversationId: null, generation: catalog.generation, model: 'test-model', text: 'What would need to change to put a utility box at Point 1? Show a hypothetical box.', scene: f.scene };
   const events: unknown[] = []; await model.turn(call, bound, async e => { const event = canonicalModelChatEvent(e); validateModelEvent(event, call); events.push(event); }, signal());
   const pending = await f.cad.execute('snapshot') as TorontoCadSnapshot; assert.equal(pending.bodies.length, 0); assert.equal(pending.proposals.length, 1); assert.ok(pending.proposals[0].mesh.triangles.length);

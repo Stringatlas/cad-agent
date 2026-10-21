@@ -4,6 +4,9 @@
   import TorontoCad from './TorontoCad.svelte';
   import PlacementSearch from './PlacementSearch.svelte';
   import AreaCandidates from './AreaCandidates.svelte';
+  import SceneMarks from './SceneMarks.svelte';
+  import { canonicalSceneMarkSnapshot, type SceneMarkSnapshot } from '@spatial/contracts';
+  import { sceneMarksMatchScene } from './scene-marks-client';
   import { areaCandidatesMatchScene, validateAreaCandidateResult } from './area-candidate-client';
   import type { AreaCandidateResult } from '@spatial/contracts';
   import { validatePlacementShortlist, placementMatchesScene } from './placement-search-client';
@@ -220,6 +223,34 @@
   function retryCrop() { if (projected) void loadSelection(projected); else void loadCrop(); }
   let areaInput = $state<AreaOfInterestInput>();
   let placementSearch = $state<PlacementSearch>();
+  let sceneMarks = $state<SceneMarkSnapshot>();
+  let selectedSceneMark = $state<string>();
+  let sceneMarkAuthority = $state(''), sceneMarkArea = $state('');
+  const sceneMarksInvalidated = $derived(!!viewerError || !mounted || !!areaInput?.pending || !!areaInput?.error ||
+    !!sceneProposals.length || !!pointPreview || pointAuthorityBlocked || cadView.needsRefresh || !!cadView.snapshot?.proposals.length ||
+    objectView.needsRefresh || !!objectView.snapshot?.proposals.length || cadView.busy || objectView.busy);
+  export function receiveSceneMarks(value: unknown): void {
+    // Conversation cancellation/reset is annotation-only, independent of scene readiness.
+    // Forget its revision too so the next conversation can begin at revision zero.
+    if (value === undefined) {
+      sceneMarks = undefined; selectedSceneMark = undefined;
+      sceneMarkAuthority = ''; sceneMarkArea = ''; viewer?.setSceneMarks();
+      return;
+    }
+    const snapshot = canonicalSceneMarkSnapshot(value);
+    if (!alive || sceneMarksInvalidated || !sceneMarksMatchScene(snapshot, cadArtifact, sceneSnapshot, cadView.snapshot, objectView.snapshot)) throw new Error('Location annotations no longer match the scene. Explore again.');
+    if (sceneMarks && snapshot.annotationRevision < sceneMarks.annotationRevision) throw new Error('Stale location annotations.');
+    sceneMarks = snapshot; selectedSceneMark = undefined;
+    sceneMarkAuthority = placementAuthorityKey; sceneMarkArea = JSON.stringify(areaInput?.area) ?? '';
+    areaCandidates = undefined; selectedCandidate = undefined; viewer?.setAreaCandidates();
+    viewer?.setSceneMarks(snapshot);
+  }
+  $effect(() => {
+    if (sceneMarks && (sceneMarksInvalidated || sceneMarkAuthority !== placementAuthorityKey || sceneMarkArea !== (JSON.stringify(areaInput?.area) ?? '') ||
+      !sceneMarksMatchScene(sceneMarks, cadArtifact, sceneSnapshot, cadView.snapshot, objectView.snapshot))) {
+      sceneMarks = undefined; selectedSceneMark = undefined; viewer?.setSceneMarks();
+    }
+  });
   let areaCandidates = $state<AreaCandidateResult>();
   let selectedCandidate = $state<string>();
   let candidateAuthority = $state('');
@@ -234,6 +265,7 @@
       areaCandidatesMatchScene(result, areaInput?.area, sceneSnapshot, cadView.snapshot);
     await tick();
     if (!matches()) throw new Error('Candidate result no longer matches the active area or source-only scene. Scan again.');
+    sceneMarks = undefined; selectedSceneMark = undefined; viewer?.setSceneMarks();
     areaCandidates = result; candidateAuthority = authority; selectedCandidate = undefined;
     viewer?.setAreaCandidates(result);
     await tick();
@@ -379,7 +411,10 @@
         {:else if feedback.canRetry}<div class="inline-crop-actions"><button data-testid="quick-retry-crop" onclick={retryCrop} disabled={!!viewerError}>Retry street detail</button></div>{/if}
       </div>
     </section>
-    <aside class:has-placement={!!areaInput?.area}>
+    <aside class:has-placement={!!areaInput?.area || !!sceneMarks?.marks.length}>
+      {#if sceneMarks?.marks.length}
+        <SceneMarks snapshot={sceneMarks} selected={selectedSceneMark} onselect={(id, position) => { selectedSceneMark = id; viewer?.setSceneMarks(sceneMarks ? $state.snapshot(sceneMarks) : undefined, id); viewer?.focusPosition(position); }} />
+      {/if}
       {#if areaCandidates}
         <AreaCandidates result={areaCandidates} selected={selectedCandidate} onselect={(id, position) => { selectedCandidate = id; viewer?.setAreaCandidates(areaCandidates ? $state.snapshot(areaCandidates) : undefined, id); viewer?.focusPosition(position); }} />
       {/if}

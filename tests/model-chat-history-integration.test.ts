@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { withProductSkills } from './helpers/product-skill-transport';
 import test, { type TestContext } from 'node:test';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
@@ -26,12 +27,13 @@ const deferred = <T>() => {
   const promise = new Promise<T>(done => { resolve = done; });
   return { promise, resolve };
 };
-async function fixture(t: TestContext, rounds: (body: ProviderBody, round: number) => Item[]) {
+async function fixture(t: TestContext, rounds: (body: ProviderBody, round: number) => Item[], skillIds: readonly string[] = []) {
   const root = await mkdtemp(join(tmpdir(), 'spatial-chat-history-'));
   const authority = new ProjectSession(join(root, 'project.json'));
   const auth = new ProviderAuth({ mode: 'api-key', apiKey: 'synthetic-never-live' });
-  const requests: ProviderBody[] = [], turns: ModelTurnRequest[] = [];
-  const routes = createModelChatRoutes(auth, authority, root, async (url, init) => {
+  // Keep original workflow numbering distinct from the explicit skill-load network rounds.
+  const requests: ProviderBody[] = [], skillRequests: Record<string, unknown>[] = [], turns: ModelTurnRequest[] = [];
+  const routes = createModelChatRoutes(auth, authority, root, withProductSkills(async (url, init) => {
     assert.match(String(url), /^https:\/\/api\.openai\.com\/v1\/(models|responses)$/u);
     if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'fixture-model' }] });
     assert.equal(init?.method, 'POST');
@@ -43,7 +45,7 @@ async function fixture(t: TestContext, rounds: (body: ProviderBody, round: numbe
       for (let offset = 0; offset < bytes.length; offset += 11) controller.enqueue(bytes.slice(offset, offset + 11));
       controller.close();
     } }), { headers: { 'content-type': 'text/event-stream' } });
-  });
+  }, skillIds, skillRequests));
   const server = createServer((req, res) => { void routes.handle(req, res).then(handled => {
     if (!handled) { res.statusCode = 404; res.end(); }
   }); });
@@ -60,7 +62,7 @@ async function fixture(t: TestContext, rounds: (body: ProviderBody, round: numbe
     await new Promise<void>(resolve => server.close(() => resolve()));
     await rm(root, { recursive: true, force: true });
   });
-  return { root, authority, fetcher, requests, turns, scene };
+  return { root, authority, fetcher, requests, skillRequests, turns, scene };
 }
 function completed(controller: ModelChatController) {
   assert.equal(controller.view.phase, 'completed', controller.view.code);
@@ -143,7 +145,7 @@ test('completed provider history survives catalog discovery failure and a confir
 test('human approval pauses the controller loop until external authority acceptance, then replays the actual receipt', { timeout: 10000 }, async t => {
   const proposed = deferred<BoxProposal>(), waiting = deferred<void>();
   const call = tool('propose_box_create', 'history-proposal', { entityId: 'history-created-box', center: [1, 2, 3], dimensions: [1, 1, 1] });
-  const f = await fixture(t, (_body, round) => round === 1 ? [call] : [answer('The human accepted the proposal.')]);
+  const f = await fixture(t, (_body, round) => round === 1 ? [call] : [answer('The human accepted the proposal.')], ['synthetic-boxes']);
   const before = f.authority.binding().projectRevision;
   const controller = new ModelChatController(() => {}, f.fetcher, 5000, 1000, {
     onproposal: proposal => proposed.resolve(proposal as BoxProposal),
@@ -165,7 +167,8 @@ test('human approval pauses the controller loop until external authority accepta
   // This action is deliberately outside any model/browser callback.
   f.authority.approve({ ...f.authority.binding(), proposalId: proposal.proposalId, digest: proposal.digest, humanApproved: true });
   await pending; completed(controller); assert.equal(f.requests.length, 2);
-  const result = JSON.parse(results(f.requests[1])[0].output);
+  assert.equal(f.skillRequests.length, 1); assert.equal(f.requests.length + f.skillRequests.length, 3);
+  const result = JSON.parse(results(f.requests[1]).find(item => item.call_id === call.call_id)!.output);
   assert.equal(result.humanDecision.outcome, 'accepted');
   assert.equal(result.humanDecision.scene.project.projectRevision, before + 1);
   assert.equal(f.authority.proposalDecision(proposal.proposalId), 'accepted');
@@ -173,7 +176,7 @@ test('human approval pauses the controller loop until external authority accepta
   assert.equal(await controller.send('Remember my acceptance.'), true); completed(controller);
   assert.ok(f.turns[1].conversationId);
   assert.equal(f.turns[1].scene.project?.projectRevision, before + 1);
-  assert.deepEqual(results(f.requests[2]), results(f.requests[1]));
+  assert.deepEqual(results(f.requests[2]).filter(item => item.call_id === call.call_id), results(f.requests[1]).filter(item => item.call_id === call.call_id));
 });
 
 test('a provider cannot bypass human approval with an invented approval tool', { timeout: 10000 }, async t => {
@@ -217,7 +220,7 @@ async function torontoArea(root: string): Promise<ModelScene> {
 
 test('Toronto inspect_scene → query_aoi_points → final answer completes through the real client and retains source results', { timeout: 15000 }, async t => {
   const inspect = tool('inspect_scene', 'aoi-inspection'), query = tool('query_aoi_points', 'aoi-query', { label: 6, maxResults: 8 });
-  const f = await fixture(t, (_body, round) => round === 1 ? [inspect] : round === 2 ? [query] : [answer('One original Pole is inside this AOI.')]);
+  const f = await fixture(t, (_body, round) => round === 1 ? [inspect] : round === 2 ? [query] : [answer('One original Pole is inside this AOI.')], ['scene-inspection']);
   const scene = await torontoArea(f.root);
   const artifact = await SemanticArtifact.open(f.root);
   const { index } = await getSemanticDiskIndex(artifact); await artifact.close();
@@ -226,15 +229,16 @@ test('Toronto inspect_scene → query_aoi_points → final answer completes thro
   t.after(() => controller.dispose()); controller.bind(scene); await controller.refreshModels();
   assert.equal(await controller.send('Inspect the scene, then find original Pole points in this AOI.'), true);
   completed(controller); assert.equal(f.requests.length, 3);
-  assert.deepEqual(results(f.requests[2]).map(item => item.call_id), [inspect.call_id, query.call_id]);
-  const result = JSON.parse(results(f.requests[2])[1].output);
+  assert.equal(f.skillRequests.length, 1); assert.equal(f.requests.length + f.skillRequests.length, 4);
+  assert.deepEqual(results(f.requests[2]).filter(item => !item.call_id.startsWith('fixture_load_')).map(item => item.call_id), [inspect.call_id, query.call_id]);
+  const result = JSON.parse(results(f.requests[2]).find(item => item.call_id === query.call_id)!.output);
   assert.equal(result.complete, true); assert.equal(result.totalCount, 1); assert.equal(result.truncated, false);
   assert.equal(result.domain, 'original-source-points'); assert.equal(result.elevationScope, 'all-elevations');
   assert.equal(result.binding.frameId, 'toronto3d-local-v1'); assert.equal(result.binding.units, 'm');
   assert.deepEqual(result.points[0].position, [1, 1, 5]); assert.equal(result.points[0].semanticType, 'Pole');
   assert.deepEqual(result.points[0].selectReference, { kind: 'toronto-point', key: { sourceFileId: 1, sourceRow: 0 } });
   assert.equal(result.cadVerification, false); assert.equal(result.independentVerification, false);
-  assert.equal(controller.view.messages.at(-1)?.tools.length, 2);
+  assert.equal(controller.view.messages.at(-1)?.tools.length, 3);
   assert.equal(await controller.send('Remember the returned original source point.'), true); completed(controller);
-  assert.deepEqual(results(f.requests[3]), results(f.requests[2]));
+  assert.deepEqual(results(f.requests[3]).filter(item => !item.call_id.startsWith('fixture_load_')), results(f.requests[2]).filter(item => !item.call_id.startsWith('fixture_load_')));
 });

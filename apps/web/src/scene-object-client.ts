@@ -1,18 +1,12 @@
 import { canonicalSceneObjectProposal, canonicalSceneObjectProposalRequest, canonicalSceneObjectSnapshot, type SceneObjectInput, type SceneObjectSnapshot, type AuthoredObjectReference, type DatumPoint } from '@spatial/contracts';
-import { torontoReadonlyFetch } from './toronto-readonly-fetch';
+import { torontoAuthorityRequest } from './toronto-authority-transport';
 
 export type SceneObjectAction = 'refresh' | 'propose' | 'approve' | 'decline' | 'undo';
 export type SceneObjectTransport = (action: SceneObjectAction, body: unknown, signal: AbortSignal) => Promise<unknown>;
-export const sceneObjectTransport: SceneObjectTransport = async (action, body, signal) => {
-  const response = await torontoReadonlyFetch(`/datasets/toronto3d/objects${action === 'refresh' ? '' : `/${action}`}`, {
-    method: action === 'refresh' ? 'GET' : 'POST', headers: body ? { 'Content-Type': 'application/json' } : {}, ...(body ? { body: JSON.stringify(body) } : {}), signal,
-  });
-  if (!response.headers.get('content-type')?.startsWith('application/json')) throw new Error('Invalid object authority response');
-  const text = await response.text(); if (text.length > 1_000_000) throw new Error('Oversized object authority response');
-  const reply = JSON.parse(text);
-  if (!response.ok || reply.ok !== true) throw new Error(`Object authority: ${reply.error?.code ?? response.status}`);
-  return reply.result;
-};
+export const sceneObjectTransport: SceneObjectTransport = (action, body, signal) => torontoAuthorityRequest({
+  endpoint: '/datasets/toronto3d/objects', maxResponseLength: 1_000_000,
+  responseName: 'object authority', errorPrefix: 'Object authority: ',
+}, action, body, signal);
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 export function authoredReference(snapshot: SceneObjectSnapshot, object: DatumPoint): AuthoredObjectReference {
   if (!snapshot.objects.some(value => same(value, object))) throw new Error('Datum is not committed');

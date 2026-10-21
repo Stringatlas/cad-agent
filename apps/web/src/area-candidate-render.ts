@@ -49,9 +49,9 @@ export function createAreaCandidateRender(scene: THREE.Scene) {
   return {
     get count() { return entries.length; },
     get layout() { return layout; },
-    set(result?: AreaCandidateResult, selected?: string) {
+    set(result?: Pick<AreaCandidateResult, 'candidates'> | { readonly marks: readonly { readonly id: string; readonly rank: number; readonly position: readonly [number, number, number] }[] }, selected?: string) {
       clear();
-      for (const candidate of result?.candidates ?? []) {
+      for (const candidate of (result && 'marks' in result ? result.marks : result?.candidates) ?? []) {
         const isSelected = candidate.id === selected;
         const canvas = document.createElement('canvas'); canvas.width = 156; canvas.height = 90;
         const ctx = canvas.getContext('2d')!;

@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { MODEL_CHAT_LIMITS as L, MODEL_VISUAL_LIMITS, canonicalModelTurnRequest, type ModelChatEvent, type ModelTurnRequest } from '@spatial/contracts';
-import { ProviderModel, ModelError, type ModelAuth, type ModelTransport, type BoundModelScene } from './provider-model';
+import { ProviderModel, ModelError, inspectAgentTools, type ModelAuth, type ModelTransport, type BoundModelScene } from './provider-model';
 import { ModelBrowserBroker } from './model-browser-broker';
 import { createModelAgentRuntime, retryModelSceneRead } from './model-agent-runtime';
 import { ModelVisualBroker } from './model-visual-broker';
@@ -41,17 +41,23 @@ export function createModelChatRoutes(auth: ModelAuth, authority: ProjectSession
     close() { closed = true; active?.abort(); unsubscribe(); model.close(); },
     async handle(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1');
-      if (!['/chat/models', '/chat/turn', '/chat/tool-result', '/chat/browser-result'].includes(url.pathname)) return false;
+      if (!['/chat/tools', '/chat/models', '/chat/turn', '/chat/tool-result', '/chat/browser-result'].includes(url.pathname)) return false;
       response.setHeader('Cache-Control', 'no-store'); response.setHeader('X-Content-Type-Options', 'nosniff');
       const send = (status: number, code: string) => { response.statusCode = status; response.setHeader('Connection', 'close'); response.end(JSON.stringify({ error: { code } })); };
       const origins = new Set([`http://127.0.0.1:${request.socket.localPort}`, 'http://127.0.0.1:5173']);
       if (!origins.has(`http://${request.headers.host ?? ''}`) || (request.headers.origin !== undefined && !origins.has(request.headers.origin)) ||
         (request.headers['sec-fetch-site'] !== undefined && !['same-origin', 'same-site', 'none'].includes(String(request.headers['sec-fetch-site'])))) { send(403, 'local-only'); return true; }
-      const catalog = url.pathname === '/chat/models', browserResult = url.pathname === '/chat/browser-result', toolResult = url.pathname === '/chat/tool-result' || browserResult;
+      const toolsInspection = url.pathname === '/chat/tools';
+      const catalog = url.pathname === '/chat/models' || toolsInspection, browserResult = url.pathname === '/chat/browser-result', toolResult = url.pathname === '/chat/tool-result' || browserResult;
       const requestLimit = toolResult && !browserResult ? MODEL_VISUAL_LIMITS.resultBytes : MODEL_VISUAL_LIMITS.requestBytes;
       if (request.method !== (catalog ? 'GET' : 'POST') || url.search || (request.url?.length ?? 0) > 512 || request.headers['content-encoding'] ||
         (catalog && (request.headers['transfer-encoding'] || Number(request.headers['content-length'] ?? 0) !== 0)) ||
         (!catalog && (!/^application\/json(?:\s*;\s*charset=utf-8)?$/iu.test(request.headers['content-type'] ?? '') || Number(request.headers['content-length'] ?? 0) > requestLimit))) { send(400, 'invalid-request'); return true; }
+      if (toolsInspection) {
+        if (closed) { send(400, 'closed'); return true; }
+        response.setHeader('Content-Type', 'application/json; charset=utf-8');
+        response.end(JSON.stringify(inspectAgentTools())); return true;
+      }
       if (toolResult) {
         // Browser-only callback; never admit a new model operation or credential call here.
         if (!request.headers.origin || !origins.has(request.headers.origin)) { send(403, 'local-only'); return true; }

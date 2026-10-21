@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { withProductSkills } from './helpers/product-skill-transport';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { AreaCandidateJudgement } from '../apps/server/src/area-candidate-judgement';
@@ -50,7 +51,7 @@ const response = (output: unknown[]) => new Response(`data: ${JSON.stringify({ t
 async function providerFixture(options: { unavailable?: boolean; stale?: boolean; premature?: boolean } = {}) {
   const requests: any[] = [], events: ModelChatEvent[] = []; let scan: AreaCandidateResult | undefined, receipt: string | undefined, checks = 0;
   const auth = { status: () => ({ mode: 'api-key', ready: true, authenticated: true }), credentialGeneration: () => 'generation', onCredentialChange: () => () => {}, credential: async () => ({ mode: 'api-key', bearer: 'fake', constraints: { billing: 'api-key', responsesOnly: false } }) } as unknown as ModelAuth;
-  const model = new ProviderModel(auth, async (url, init) => {
+  const model = new ProviderModel(auth, withProductSkills(async (url, init) => {
     if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'mock-model' }] });
     const body = JSON.parse(String(init?.body)); requests.push(body);
     if (requests.length === 1) return response([tool('scan_area_candidates', { settings: pool().settings })]);
@@ -69,7 +70,7 @@ async function providerFixture(options: { unavailable?: boolean; stale?: boolean
       return response([tool('finalize_area_candidates', { scanId: scan!.assessment!.scanId, captureId: receipt, selections: [selection('evidence-3'), selection('evidence-1')] })]);
     }
     return response([]);
-  });
+  }, ['area-candidates']));
   const scene: BoundModelScene = { context: {}, check: async () => {}, close: async () => {}, scanAreaCandidates: async () => pool(),
     checkAreaCandidates: async () => { checks++; if (options.stale && checks > 1) throw Error('stale source/authority'); },
     captureScene: async request => options.unavailable ? undefined : image(request, scan!) };
@@ -80,13 +81,13 @@ async function providerFixture(options: { unavailable?: boolean; stale?: boolean
 }
 test('mock provider scan → targeted image delivered → model subset judgement → final UI tool event', async () => {
   const f = await providerFixture(); const tools = f.events.filter(e => e.kind === 'tool');
-  assert.deepEqual(tools.map(e => e.name), ['scan_area_candidates','capture_scene','finalize_area_candidates']);
+  assert.deepEqual(tools.map(e => e.name), ['load_skill','scan_area_candidates','capture_scene','finalize_area_candidates']);
   const result = (tools.at(-1)!.context as { result: AreaCandidateResult }).result;
   assert.deepEqual(validateAreaCandidateResult(result).candidates.map(c => c.id), ['evidence-3','evidence-1']); assert.ok(f.checks >= 3);
 });
 test('unavailable image leaves only provisional evidence; stale guard and capture+judgement same response fail closed', async () => {
   const f = await providerFixture({ unavailable: true });
   const tools = f.events.filter(e => e.kind === 'tool'); assert.equal(tools.some(e => e.name === 'finalize_area_candidates'), false);
-  assert.equal((tools[0].context as { result: AreaCandidateResult }).result.assessment!.kind, 'provisional');
+  assert.equal((tools.find(e => e.name === 'scan_area_candidates')!.context as { result: AreaCandidateResult }).result.assessment!.kind, 'provisional');
   await assert.rejects(providerFixture({ stale: true })); await assert.rejects(providerFixture({ premature: true }));
 });

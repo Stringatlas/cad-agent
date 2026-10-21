@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { withProductSkills } from './helpers/product-skill-transport';
 import assert from 'node:assert/strict';
 import { canonicalModelBrowserAction, canonicalModelCaptureRequest, canonicalModelChatEvent, type ModelCaptureColorMode, type ModelCaptureRequest } from '../packages/contracts/src/model-chat';
 import { type ModelChatEvent, type ModelScene, type ModelTurnRequest } from '@spatial/contracts';
@@ -34,12 +35,12 @@ const signal = new AbortController().signal;
 async function fixture(t: { after(fn: () => unknown): void }, args?: unknown, capabilities: Partial<BoundModelScene> = {}) {
   const auth = new ProviderAuth({ mode: 'api-key', apiKey: 'fixture-only' });
   const bodies: Record<string, any>[] = [], events: ModelChatEvent[] = [];
-  const model = new ProviderModel(auth, async (url, init) => {
+  const model = new ProviderModel(auth, withProductSkills(async (url, init) => {
     if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'fixture' }] });
     bodies.push(JSON.parse(String(init?.body)));
     const output = bodies.length === 1 && args !== undefined ? [{ type: 'function_call', namespace: 'scene', name: 'capture_scene', call_id: 'capture-1', arguments: JSON.stringify(args) }] : [];
     return new Response(`data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output } })}\n\n`, { headers: { 'content-type': 'text/event-stream' } });
-  });
+  }, ['visual-inspection']));
   t.after(() => { model.close(); auth.close(); });
   const catalog = await model.models(signal);
   const call: ModelTurnRequest = { requestId: 'r', conversationId: null, generation: catalog.generation, model: 'fixture', text: 'Inspect the scene.', scene };
@@ -71,7 +72,7 @@ for (const view of views.slice(0, 3)) for (const colorMode of [undefined, 'rgb',
   const event = f.events.find(e => e.kind === 'tool' && e.name === 'capture_scene');
   assert.ok(event?.kind === 'tool');
   assert.deepEqual(event.context, { status: 'unavailable' });
-  const output = f.bodies[1].input.find((item: { type: string }) => item.type === 'function_call_output');
+  const output = f.bodies[1].input.find((item: { type: string }) => item.type === 'function_call_output' && (item as { call_id?: string }).call_id === 'capture-1');
   assert.deepEqual(JSON.parse(output.output), { status: 'unavailable' });
 });
 

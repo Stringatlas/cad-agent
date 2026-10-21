@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { withProductSkills } from './helpers/product-skill-transport';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import { deflateSync } from 'node:zlib';
@@ -39,14 +40,15 @@ function observation(): VisualObservation {
 const complete = (output: unknown[] = [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Grounded' }] }]) => new Response(`data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output } })}\n\n`, { headers: { 'content-type': 'text/event-stream' } });
 const tool = (args: unknown) => ({ type: 'function_call', namespace: 'scene', name: 'resolve_visual_pixel', call_id: 'pixel-call', arguments: JSON.stringify(args) });
 async function fixture(t: { after(fn: () => unknown): void }, args: unknown = { observationId: 'observation-one', x: 1, y: 1 }) {
-  const root = await mkdtemp(join(tmpdir(), 'spatial-visual-model-')), requests: Record<string, unknown>[] = [];
+  const root = await mkdtemp(join(tmpdir(), 'spatial-visual-model-')), requests: Record<string, unknown>[] = [], skillRequests: Record<string, unknown>[] = [];
+  // Workflow requests retain their numbering; load requests are real additional network rounds.
   const server = createDemoServer({ projectPath: join(root, 'project.json'), datasetRoot: join(root, 'absent'), provider: { mode: 'api-key', apiKey: 'fake-no-live-key' },
-    modelTransport: async (url, init) => {
+    modelTransport: withProductSkills(async (url, init) => {
       if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'fixture-vision-vNext' }, { id: 'fixture-image-rejected' }] });
       const body = JSON.parse(String(init?.body)); requests.push(body);
       if (body.model === 'fixture-image-rejected') return Response.json({ error: { code: 'unsupported_image', message: 'Fixture rejects images' } }, { status: 400 });
       return requests.length === 1 ? complete([tool(args)]) : complete();
-    } });
+    }, ['visual-inspection'], skillRequests) });
   server.listen(0, '127.0.0.1'); await once(server, 'listening'); const address = server.address(); assert.ok(address && typeof address !== 'string'); const base = `http://127.0.0.1:${address.port}`;
   t.after(async () => { await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }); await rm(root, { recursive: true, force: true }); });
   const catalog = await (await fetch(base + '/chat/models')).json(), snapshot = (await (await fetch(base + '/project/session')).json()).result.snapshot;
@@ -56,7 +58,7 @@ async function fixture(t: { after(fn: () => unknown): void }, args: unknown = { 
     scene: { mode: 'demo', toronto: [], project: { sessionId: snapshot.sessionId, projectRevision: snapshot.project.revision, frameId: snapshot.frameId, units: 'm', entityIds: [], points: [] } }, visualObservation: boundVisual };
   const post = (body: unknown) => fetch(base + '/chat/turn', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   const result = (body: unknown, origin: string | null = base) => fetch(base + '/chat/tool-result', { method: 'POST', headers: { 'content-type': 'application/json', ...(origin ? { origin } : {}) }, body: JSON.stringify(body) });
-  return { server, base, call, requests, post, result };
+  return { server, base, call, requests, skillRequests, post, result };
 }
 async function readEvents(response: Response, onEvent?: (e: ModelChatEvent) => Promise<void>) {
   assert.equal(response.status, 200); const events: ModelChatEvent[] = [], reader = response.body!.getReader(); let pending = '';
@@ -96,10 +98,11 @@ test('image pixel roundtrip is nonce-bound, origin-guarded, one-use, truthful an
     assert.equal((await f.result(answer)).status, 400);
   });
   assert.equal(e.at(-1)?.kind, 'done'); assert.equal(f.requests.length, 2);
+  assert.equal(f.skillRequests.length, 1); assert.equal(f.requests.length + f.skillRequests.length, 3);
   const first = f.requests[0], input = first.input as { role?: string; content?: unknown }[];
   assert.equal(first.model, 'fixture-vision-vNext');
   assert.deepEqual((input[0].content as unknown[])[1], { type: 'input_image', image_url: f.call.visualObservation!.image.dataUrl, detail: 'high' });
-  const inspections = e.filter(v => v.kind === 'request-inspection'); assert.equal(inspections.length, 2);
+  const inspections = e.filter(v => v.kind === 'request-inspection'); assert.equal(inspections.length, 3); // skill load + pixel call + answer
   for (const inspection of inspections) if (inspection.kind === 'request-inspection') { assert.equal(inspection.inspection.omissions.includes('image-bytes'), true); assert.equal(inspection.inspection.bodyJson.includes('data:image/png'), false); assert.ok(inspection.inspection.bodyJson.includes(f.call.visualObservation!.image.sha256)); assert.ok(inspection.inspection.bodyJson.includes('resolve_visual_pixel')); }
   const context = e.find(v => v.kind === 'tool' && v.name === 'resolve_visual_pixel'); assert.ok(context?.kind === 'tool'); assert.equal((context.context as { recordValidation: string }).recordValidation, 'not-server-verified');
   const done = e.at(-1); assert.ok(done?.kind === 'done');
@@ -203,7 +206,7 @@ test('JPEG crop HTTP roundtrip transmits only compressed bytes, reports truthful
     if (x === 1) assert.deepEqual(events.at(-1), { kind: 'error', requestId: call.requestId, code: 'invalid-visual-pixel' });
     assert.equal(JSON.stringify(f.requests).includes(v.image.dataUrl), false);
     assert.ok(JSON.stringify(f.requests).includes(call.visualObservation!.image.dataUrl));
-    const inspection = events.find(e => e.kind === 'request-inspection'); assert.ok(inspection?.kind === 'request-inspection');
+    const inspection = events.find(e => e.kind === 'request-inspection' && e.inspection.bodyJson.includes('Runtime skill visual-inspection:')); assert.ok(inspection?.kind === 'request-inspection');
     const body = JSON.parse(inspection.inspection.bodyJson), image = body.input[0].content[1].image;
     assert.equal(image.mimeType, 'image/jpeg'); assert.equal(image.width, 1); assert.equal(image.height, 1);
     assert.ok(!inspection.inspection.bodyJson.includes('base64'));
@@ -240,7 +243,7 @@ test('HTTP admits decoded JPEGs at both upper byte boundaries and omits bytes fr
     assert.equal(events.at(-1)?.kind, 'done'); assert.equal(f.requests.length, 2);
     const providerImage = ((f.requests[0].input as { content: { image_url?: string }[] }[])[0].content)[1];
     assert.equal(providerImage.image_url === image.dataUrl, true);
-    const inspections = events.filter(e => e.kind === 'request-inspection'); assert.equal(inspections.length, 2);
+    const inspections = events.filter(e => e.kind === 'request-inspection'); assert.equal(inspections.length, 3); // includes the explicit skill round
     for (const event of inspections) if (event.kind === 'request-inspection') {
       assert.equal(event.inspection.omissions.includes('image-bytes'), true);
       assert.equal(event.inspection.bodyJson.includes('base64'), false);

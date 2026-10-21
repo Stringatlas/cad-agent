@@ -52,6 +52,7 @@ chat are first-class design channels; AI changes remain ghosts until individuall
 ## Skills
 - Rendering, picking, transforms: spatial-rendering.
 - CAD operations and tessellation: geometry-integration.
+- Adding/modifying product-agent tools: read [.agents/skills/product-agent-tools/SKILL.md](.agents/skills/product-agent-tools/SKILL.md).
 - Product-agent tools and benchmarks: harness-evaluation.
 - Browser checks: inspect and use pi-browser-harness.
 - Before stopping or transferring work: inspect and use handoff.

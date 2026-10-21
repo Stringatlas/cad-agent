@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { withProductSkills } from './helpers/product-skill-transport';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { deflateSync } from 'node:zlib';
@@ -57,11 +58,12 @@ const tool = (name: string, args: unknown, id: number) => ({ type: 'function_cal
 const message = { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Observed actual human outcome.' }] };
 async function fixture(t: { after(fn: () => unknown): void }, rounds: (body: Record<string, any>, round: number) => unknown[]) {
   const root = await mkdtemp(join(tmpdir(), 'spatial-agent-runtime-')), authority = new DecisionProject(join(root, 'project.json'));
-  const auth = new ProviderAuth({ mode: 'api-key', apiKey: 'fixture-not-live' }), requests: Record<string, any>[] = [];
-  const routes = createModelChatRoutes(auth, authority, root, async (url, init) => {
+  const auth = new ProviderAuth({ mode: 'api-key', apiKey: 'fixture-not-live' }), requests: Record<string, any>[] = [], skillRequests: Record<string, unknown>[] = [];
+  // requests counts workflow responses; skillRequests counts the additional real load round per turn.
+  const routes = createModelChatRoutes(auth, authority, root, withProductSkills(async (url, init) => {
     if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'fixture-model' }] });
     const body = JSON.parse(String(init?.body)); requests.push(body); return output(rounds(body, requests.length));
-  });
+  }, ['synthetic-boxes', 'visual-inspection', 'scene-inspection'], skillRequests));
   const server = createServer((req, res) => { void routes.handle(req, res).then(handled => { if (!handled) { res.statusCode = 404; res.end(); } }); });
   server.listen(0, '127.0.0.1'); await once(server, 'listening'); const address = server.address(); assert.ok(address && typeof address !== 'string');
   const base = `http://127.0.0.1:${address.port}`;
@@ -70,7 +72,7 @@ async function fixture(t: { after(fn: () => unknown): void }, rounds: (body: Rec
   const catalog = await (await fetcher('/chat/models')).json();
   const scene: ModelScene = { mode: 'demo', project: { ...authority.binding(), entityIds: [], points: [] }, toronto: [] };
   const call: ModelTurnRequest = { requestId: 'agent-request', conversationId: null, generation: catalog.generation, model: 'fixture-model', text: 'Inspect and propose, then wait for me.', scene };
-  return { authority, requests, fetcher, call, scene };
+  return { authority, requests, skillRequests, fetcher, call, scene };
 }
 function decide(authority: DecisionProject, proposal: BoxProposal, decision: 'accepted' | 'declined') {
   const request = { ...authority.binding(), proposalId: proposal.proposalId, digest: proposal.digest };
@@ -80,7 +82,7 @@ function decide(authority: DecisionProject, proposal: BoxProposal, decision: 'ac
 for (const decision of ['accepted', 'declined'] as const) test(`proposal publishes immediately, pauses for actual ${decision} receipt and resumes on rebound authority`, async t => {
   const f = await fixture(t, (body, round) => {
     if (round === 1) return [tool('propose_box_create', { entityId: 'agent-created', center: [1, 2, 3], dimensions: [1, 1, 1] }, round)];
-    const result = JSON.parse(body.input.find((i: any) => i.type === 'function_call_output').output);
+    const result = JSON.parse(body.input.find((i: any) => i.type === 'function_call_output' && i.call_id === 'agent-call-1').output);
     assert.equal(result.humanDecision.outcome, decision);
     assert.equal(result.humanDecision.scene.project.projectRevision, f.call.scene.project!.projectRevision + (decision === 'accepted' ? 1 : 0));
     return [message];
@@ -90,19 +92,20 @@ for (const decision of ['accepted', 'declined'] as const) test(`proposal publish
   const conversationId = await streamModelTurn(f.call, AbortSignal.timeout(5000), async event => {
     seen.push(event);
     if (event.kind === 'approval-result') resumedScene = event.scene;
-    if (event.kind === 'tool') {
+    if (event.kind === 'tool' && event.name === 'propose_box_create') {
       assert.equal(f.requests.length, 1); assert.equal(f.authority.snapshot().project.revision, before);
       await delay(30); assert.equal(f.requests.length, 1); // provider must not continue while waiting
       decide(f.authority, (event.context as { proposal: BoxProposal }).proposal, decision); approved = true;
     }
   }, f.fetcher);
-  assert.ok(approved); assert.equal(f.requests.length, 2);
+  assert.ok(approved); assert.equal(f.requests.length, 2); assert.equal(f.skillRequests.length, 1);
+  assert.equal(f.requests.length + f.skillRequests.length, 3, 'load, proposal, then post-decision response');
   assert.deepEqual(seen.filter(e => e.kind.startsWith('approval')).map(e => e.kind), ['approval-wait', 'approval-result']);
   assert.equal(seen.at(-1)?.kind, 'done');
   assert.equal(f.authority.snapshot().project.entities.some(e => e.id === 'agent-created'), decision === 'accepted');
   assert.equal(JSON.stringify(f.requests[0].tools).includes('approve'), false);
   await streamModelTurn({ ...f.call, requestId: 'agent-continuation', conversationId, scene: resumedScene }, AbortSignal.timeout(5000), () => {}, f.fetcher);
-  assert.equal(f.requests.length, 3); // authority rebind updates the retained conversation binding too
+  assert.equal(f.requests.length, 3); assert.equal(f.skillRequests.length, 2); // each user turn must reload, even after authority rebind
 });
 
 test('current/top-down/arbitrary screenshots, then model-selected reference, flow back into subsequent provider rounds without permission', async t => {
@@ -130,6 +133,7 @@ test('current/top-down/arbitrary screenshots, then model-selected reference, flo
     },
   });
   assert.deepEqual(seenCaptures, captures); assert.equal(selected, 1); assert.equal(f.requests.length, 5);
+  assert.equal(f.skillRequests.length, 1); assert.equal(f.requests.length + f.skillRequests.length, 6);
 });
 
 test('initial image proposal is visible and human-acceptable before EOF', async t => {
@@ -169,7 +173,7 @@ test('forged selected reference position fails before another provider dispatch'
 test('unrelated mutation while paused is stale, not a fabricated approval or decline', async t => {
   const f = await fixture(t, (_body, round) => round === 1 ? [tool('propose_box_create', { entityId: 'agent-pending', center: [1, 2, 3], dimensions: [1, 1, 1] }, round)] : [message]);
   await assert.rejects(streamModelTurn(f.call, AbortSignal.timeout(5000), event => {
-    if (event.kind === 'tool') {
+    if (event.kind === 'tool' && event.name === 'propose_box_create') {
       const other = f.authority.propose({ ...f.authority.binding(), edit: { kind: 'create-box', entityId: 'other', center: [9, 2, 3], dimensions: [1, 1, 1] } });
       decide(f.authority, other, 'accepted');
     }

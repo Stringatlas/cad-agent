@@ -12,9 +12,12 @@ import { ProjectSession } from './project-session';
 import { getSemanticDiskIndex } from './semantic-disk-index';
 import { SpatialPageIndex } from './spatial-page-index';
 import { TORONTO_SEMANTIC_LABELS } from '@spatial/contracts';
-import { SemanticArtifact } from './semantic-artifact';
+import { SemanticArtifact, digest } from './semantic-artifact';
+import { canonicalPerceptionQuery, perceptionWitness, queryPerceptionBox, type ModelPointQuery } from './model-perception';
+import { readPreprocessing } from './preprocessing-summary';
+import { createGroundSurface } from './ground-surface';
 import { ModelError, type BoundModelScene } from './provider-model';
-import { assessUtilityBox, checkPlacementTerrain, UTILITY_BOX_PRESET, type UtilityBoxAssessment } from './utility-box-placement';
+import { assessUtilityBox, checkPlacementTerrain, type UtilityBoxAssessment } from './utility-box-placement';
 
 // One source reduction per authority, including across simultaneous chat sessions.
 const activeAreaScans = new WeakSet<PointOverrideSession>();
@@ -40,19 +43,39 @@ export async function bindModelScene(scene: ModelScene, authority: ProjectSessio
       const object = objectState?.objects.find(object => object.id === ref.objectId);
       if (!objectState || !object || ref.sessionId !== objectState.sessionId || ref.revision !== objectState.revision || ref.objectRevision !== object.objectRevision || ref.frameId !== object.frameId || ref.units !== object.units) throw new ModelError('stale-scene');
     }
-    if (scene.toronto.length || scene.areaOfInterest || visual && scene.mode === 'toronto' || torontoEditing) {
-      artifact = await SemanticArtifact.open(directory, signal);
-      if (objectState && objectState.artifactRevision !== artifact.dataset.revision) throw new ModelError('stale-scene');
-      if (pointState && pointState.artifactRevision !== artifact.dataset.revision || cadState && cadState.artifactRevision !== artifact.dataset.revision) throw new ModelError('stale-scene');
-      if (scene.areaOfInterest && scene.areaOfInterest.artifactRevision !== artifact.dataset.revision) throw new ModelError('stale-scene');
-      for (const point of scene.toronto) {
-        if (point.artifactRevision !== artifact.dataset.revision) throw new ModelError('stale-scene');
-        if (point.key.sourceRow >= artifact.sourceCounts[point.key.sourceFileId] || point.position.some((v, i) =>
-          v < artifact!.dataset.bounds.min[i] - .002 || v > artifact!.dataset.bounds.max[i] + .002)) throw new ModelError('invalid-scene');
+    if (scene.mode === 'toronto' || scene.toronto.length || scene.areaOfInterest) {
+      try { artifact = await SemanticArtifact.open(directory, signal); }
+      catch (error) {
+        // Empty Toronto context can still chat without a locally installed dataset.
+        // Attached references/images and editing authorities must fail closed instead.
+        if (scene.toronto.length || scene.areaOfInterest || visual || torontoEditing || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
-      await artifact.check(signal);
+      if (artifact) {
+        if (objectState && objectState.artifactRevision !== artifact.dataset.revision) throw new ModelError('stale-scene');
+        if (pointState && pointState.artifactRevision !== artifact.dataset.revision || cadState && cadState.artifactRevision !== artifact.dataset.revision) throw new ModelError('stale-scene');
+        if (scene.areaOfInterest && scene.areaOfInterest.artifactRevision !== artifact.dataset.revision) throw new ModelError('stale-scene');
+        for (const point of scene.toronto) {
+          if (point.artifactRevision !== artifact.dataset.revision) throw new ModelError('stale-scene');
+          if (point.key.sourceRow >= artifact.sourceCounts[point.key.sourceFileId] || point.position.some((v, i) =>
+            v < artifact!.dataset.bounds.min[i] - .002 || v > artifact!.dataset.bounds.max[i] + .002)) throw new ModelError('invalid-scene');
+        }
+        await artifact.check(signal);
+      }
     }
     const retained = artifact;
+    // A bound lifetime owns only the BVH; disk cache owns its own bounded read lifecycle.
+    // Retry failed initialization rather than retaining an aborted/rejected promise.
+    let spatialPending: Promise<{ spatial: SpatialPageIndex; index: Awaited<ReturnType<typeof getSemanticDiskIndex>>['index'] }> | undefined;
+    const getSpatial = (querySignal: AbortSignal) => {
+      if (!retained || closed) throw new ModelError('stale-scene');
+      spatialPending ??= (async () => {
+        const { index } = await getSemanticDiskIndex(retained, querySignal);
+        const spatial = await SpatialPageIndex.create(retained, index, querySignal);
+        return { index, spatial };
+      })().catch(error => { spatialPending = undefined; throw error; });
+      return spatialPending;
+    };
+    let perceptionBusy = false;
     const placements = new Map<string, Extract<UtilityBoxAssessment, { status: 'assessed' }>>();
     const checkEditing = async (querySignal: AbortSignal) => {
       if (!torontoEditing || !pointState || !cadState) return;
@@ -86,10 +109,20 @@ export async function bindModelScene(scene: ModelScene, authority: ProjectSessio
       return { searchGeometry: 'original-prepared-dataset', pointName: point.name, request, outcome };
     };
     return {
-      context: { ...(scene.areaOfInterest ? { areaOfInterest: { ...scene.areaOfInterest, source: 'user-selected-xy-rectangle',
+      ...(scene.mode === 'toronto' && retained ? { sceneMarkBinding: {
+        artifactRevision: retained.dataset.revision, frameId: 'toronto3d-local-v1' as const, units: 'm' as const,
+        localOrigin: [627285, 4841948, 0] as const,
+        ...(pointState ? { points: { sessionId: pointState.sessionId, revision: pointState.revision } } : {}),
+        ...(cadState ? { cad: { sessionId: cadState.sessionId, revision: cadState.revision } } : {}),
+        ...(objectState ? { objects: { sessionId: objectState.sessionId, revision: objectState.revision } } : {}),
+      } } : {}),
+      context: { ...(retained ? { sceneBounds: retained.dataset.bounds, spatialFrame: { datasetId: retained.dataset.id,
+          artifactRevision: retained.dataset.revision, frameId: 'toronto3d-local-v1', ...retained.dataset.coordinates,
+          domain: 'original-source-local', worldFromLocal: 'translation-by-localOrigin',
+          limitation: 'Bounds and measurements describe original prepared records, not accepted edits or rendered ghosts.' } } : {}), ...(scene.areaOfInterest ? { areaOfInterest: { ...scene.areaOfInterest, source: 'user-selected-xy-rectangle',
         elevationScope: 'all-elevations', referencePlane: 'orbit-target-z-not-terrain', purpose: 'spatial-query-footprint-not-geometry-authority' } } : {}),
         objects: (scene.objects ?? []).map(reference => ({ reference, object: objectState!.objects.find(object => object.id === reference.objectId) })),
-        utilityBoxPreset: UTILITY_BOX_PRESET, mode: scene.mode, project, selectedGeometry, availableProjectBoxes, toronto: scene.toronto.map(point => ({ ...point,
+        mode: scene.mode, project, selectedGeometry, availableProjectBoxes, toronto: scene.toronto.map(point => ({ ...point,
         source: 'user-attached-toronto-record-reference', artifactValidation: 'revision-and-metadata-checked',
         recordValidation: 'unverified', mapping: 'unmapped-to-project' })),
       ...(torontoEditing ? { torontoEditing: { points: { sessionId: pointState!.sessionId, revision: pointState!.revision, artifactRevision: pointState!.artifactRevision, overrideCount: pointState!.entries.length,
@@ -98,8 +131,8 @@ export async function bindModelScene(scene: ModelScene, authority: ProjectSessio
           bodies: cadState!.bodies.map(({ bodyId, operation }) => ({ bodyId, operation })),
           proposals: cadState!.proposals.map(({ proposalId, operation }) => ({ proposalId, operation })) },
         ...(objectState ? { objects: { sessionId: objectState.sessionId, revision: objectState.revision, artifactRevision: objectState.artifactRevision, count: objectState.objects.length } } : {}), volatile: true } } : {}),
-      capabilities: { scanAreaCandidates: !!torontoEditing && !!scene.areaOfInterest && !!retained, searchPlacementSites: !!torontoEditing?.placement && !!scene.areaOfInterest, proposePlacementSite: !!torontoEditing?.placement, queryAoiPoints: scene.mode === 'toronto' && !!scene.areaOfInterest && !!retained, inspectScene: true, listObjects: !!objectState, getObject: !!objectState, pointCreateProposals: !!objectState, authoredObjectKinds: objectState ? ['datum-point'] : [], authoredReferenceConsumers: objectState ? ['get_object', 'propose_point_create'] : [], nearestLabel: scene.mode === 'toronto' && scene.toronto.length > 0 && !!retained, boxParameterProposals: canPropose,
-        utilityBoxAssessment: !!torontoEditing && scene.toronto.length > 0, pointMoveProposals: !!torontoEditing && scene.toronto.length > 0, cadSolidProposals: !!torontoEditing, geometryMutation: false, cadVerification: !!torontoEditing },
+      capabilities: { queryPoints: scene.mode === 'toronto' && !!retained, groundElevation: scene.mode === 'toronto' && !!retained, queryAoiPoints: scene.mode === 'toronto' && !!scene.areaOfInterest && !!retained, inspectScene: true, listObjects: !!objectState, getObject: !!objectState, pointCreateProposals: !!objectState, authoredObjectKinds: objectState ? ['datum-point'] : [], authoredReferenceConsumers: objectState ? ['get_object', 'propose_point_create'] : [], nearestLabel: scene.mode === 'toronto' && scene.toronto.length > 0 && !!retained, boxParameterProposals: canPropose,
+        pointMoveProposals: !!torontoEditing && scene.toronto.length > 0, cadSolidProposals: !!torontoEditing, geometryMutation: false, cadVerification: !!torontoEditing },
       nearestLabelSearchGeometry: 'original-prepared-dataset',
       limitations: ['Toronto original point record/position is not independently verified by this chat attachment boundary.',
         'Toronto and synthetic project frames are separate; no mapping exists.',
@@ -325,6 +358,66 @@ export async function bindModelScene(scene: ModelScene, authority: ProjectSessio
           return proposal;
         },
       } satisfies Pick<BoundModelScene, 'proposeBox'> : {}),
+      ...(scene.mode === 'toronto' && retained ? {
+        async queryPoints(args: ModelPointQuery, querySignal: AbortSignal) {
+          let request;
+          try { request = canonicalPerceptionQuery(args); } catch { throw new ModelError('invalid-spatial-query'); }
+          const outer = AbortSignal.any([signal, querySignal]); outer.throwIfAborted();
+          if (closed) throw new ModelError('stale-scene');
+          if (perceptionBusy) return { status: 'unavailable', complete: false, reason: 'spatial-query-busy' };
+          perceptionBusy = true;
+          const combined = AbortSignal.any([outer, AbortSignal.timeout(30000)]), started = performance.now();
+          try {
+            await retained.check(combined); await checkEditing(combined);
+            const { spatial, index } = await getSpatial(combined);
+            const remaining = Math.floor(30000 - (performance.now() - started));
+            if (remaining <= 0) throw new RangeError('Spatial query deadline exceeded');
+            const options = { signal: combined, maxMilliseconds: remaining, label: request.label ?? undefined, maxResults: request.maxResults };
+            const result = request.operation === 'box' ? await queryPerceptionBox(spatial, index, request, combined, remaining) :
+              request.operation === 'radius' ? await spatial.radius(request.position!, request.radiusMeters!, options) : await spatial.nearest(request.position!, options);
+            await retained.check(combined); await checkEditing(combined); combined.throwIfAborted();
+            if (closed) throw new ModelError('stale-scene');
+            const points = 'points' in result ? result.points : result.point ? [result.point] : [];
+            return { ...result, ...('point' in result ? { point: result.point ? perceptionWitness(result.point) : null } : {}),
+              points: points.map(perceptionWitness), operation: request.operation, query: request,
+              domain: 'original-source-points', selection: request.operation === 'nearest' ? 'exact-nearest-source-record' : 'deterministic-capped-subset-not-ranked',
+              independentVerification: false, cadVerification: false,
+              limitations: 'Exact original-source record measurements only; accepted point edits, authored objects, CAD bodies and ghosts shown in captures are excluded. Counts/witnesses are not clearance, suitability, free-space proof or recommendations.' };
+          } catch (error) {
+            outer.throwIfAborted(); if (closed) throw new ModelError('stale-scene');
+            await retained.check(outer); await checkEditing(outer);
+            if (combined.aborted || error instanceof RangeError) return { status: 'unavailable', complete: false, reason: 'spatial-query-resource-limit', domain: 'original-source-points' };
+            throw error;
+          } finally { perceptionBusy = false; }
+        },
+        async groundElevation(args: { x: number; y: number }, querySignal: AbortSignal) {
+          if (!args || Object.keys(args).sort().join(',') !== 'x,y' || !Number.isFinite(args.x) || !Number.isFinite(args.y) || Math.abs(args.x) > 1e7 || Math.abs(args.y) > 1e7) throw new ModelError('invalid-ground-query');
+          const { x, y } = args;
+          const outer = AbortSignal.any([signal, querySignal]); outer.throwIfAborted();
+          if (closed) throw new ModelError('stale-scene');
+          if (perceptionBusy) return { status: 'unavailable', complete: false, reason: 'spatial-query-busy' };
+          perceptionBusy = true;
+          const combined = AbortSignal.any([outer, AbortSignal.timeout(5000)]);
+          try {
+            await retained.check(combined); await checkEditing(combined);
+            const preprocessing = await readPreprocessing(retained.dataset, undefined, combined);
+            const preprocessingHash = digest(JSON.stringify(preprocessing));
+            const ground = createGroundSurface(preprocessing.ground).elevationAt(x, y);
+            // Re-read the fixed operator path; do not return an estimate if its support changed.
+            if (digest(JSON.stringify(await readPreprocessing(retained.dataset, undefined, combined))) !== preprocessingHash) throw new ModelError('stale-scene');
+            await retained.check(combined); await checkEditing(combined); combined.throwIfAborted();
+            if (closed) throw new ModelError('stale-scene');
+            return { binding: { ...preprocessing.binding, preprocessingHash }, position: [x, y], ground,
+              domain: 'original-source-ground', independentVerification: false, cadVerification: false,
+              limitations: 'Ground/Road_markings cell minima at cell centers; low-outlier sensitive. Four-supported-corner interpolation with slope cutoff, no extrapolation/hole filling. Spread is observed range, not uncertainty. Recorded source/index hashes are binding, not a fresh source audit. Excludes accepted edits and ghosts; not terrain, foundation or clearance certification.' };
+          } catch (error) {
+            outer.throwIfAborted(); if (closed) throw new ModelError('stale-scene');
+            await retained.check(outer); await checkEditing(outer);
+            if (error instanceof ModelError) throw error;
+            return { status: 'unavailable', complete: false, domain: 'original-source-ground', reason: 'preprocessing-missing-stale-invalid-or-over-budget' };
+          } finally { perceptionBusy = false; }
+        },
+      } satisfies Pick<BoundModelScene, 'queryPoints' | 'groundElevation'> : {}),
       ...(scene.mode === 'toronto' && scene.areaOfInterest && retained ? {
         async queryAoiPoints(args, querySignal) {
           if (closed) throw new ModelError('stale-scene');
@@ -336,8 +429,7 @@ export async function bindModelScene(scene: ModelScene, authority: ProjectSessio
           const started = performance.now();
           try {
             await retained.check(combined); await checkEditing(combined);
-            const { index } = await getSemanticDiskIndex(retained, combined);
-            const spatial = await SpatialPageIndex.create(retained, index, combined);
+            const { spatial } = await getSpatial(combined);
             const remaining = Math.floor(30000 - (performance.now() - started));
             if (remaining <= 0) throw new RangeError('AOI query deadline exceeded');
             const result = await spatial.aoi(scene.areaOfInterest!.corners, {
@@ -367,7 +459,7 @@ export async function bindModelScene(scene: ModelScene, authority: ProjectSessio
         nearestLabel,
       } satisfies Pick<BoundModelScene, 'nearestLabel'> : {}),
       async check() { if (closed) throw new ModelError('stale-scene'); signal.throwIfAborted(); if (scene.project) authority.context(scene.project); await retained?.check(signal); await checkEditing(signal); signal.throwIfAborted(); },
-      async close() { closed = true; await retained?.close(); },
+      async close() { closed = true; spatialPending = undefined; await retained?.close(); },
     };
   } catch (error) { await artifact?.close(); throw error; }
 }

@@ -95,7 +95,7 @@
     <option value="demo">Synthetic sandbox</option>
     <option value="pole">Find nearest</option>
   </select>
-  <div class="header-actions"><button class="chat-toggle" aria-label="Toggle chat" aria-pressed={chatOpen} onclick={() => chatOpen = !chatOpen}>Chat</button><ProviderAccount /></div>
+  <div class="header-actions"><a class="tools-link" href="/tools">Tools</a><button class="chat-toggle" aria-label="Toggle chat" aria-pressed={chatOpen} onclick={() => chatOpen = !chatOpen}>Chat</button><ProviderAccount /></div>
 </header>
 <div id="workspace" class="integrated-workspace" class:chat-closed={!chatOpen} data-testid="shared-workspace">
   <div class="scene-source">
@@ -108,7 +108,7 @@
     {:else}<ClosestPole />{/if}
     {#if mode === 'demo'}<ProposalReview {view} {controller} />{/if}
   </div>
-  <div class="chat-shell" class:mobile-open={chatOpen}><Chat {objectReferences} {selectedObject} onclearobject={() => toronto?.clearObjectSelection()} {objectBlocked} onobjectproposal={() => objectRefresh++} onareacandidates={async (result, current) => { const source = toronto, generation = sourceGeneration; if (mode !== 'toronto' || !source || !current()) throw new Error('Toronto candidates unavailable.'); await source.receiveAreaCandidates(result, () => mode === 'toronto' && source === toronto && generation === sourceGeneration && current()); }} onplacementsearch={async (result, current) => { const source = toronto, generation = sourceGeneration; if (mode !== 'toronto' || !source || !current()) throw new Error('Toronto placement unavailable.'); await source.receivePlacementSearch(result, () => mode === 'toronto' && source === toronto && generation === sourceGeneration && current()); }} onselectreference={selectAgentReference} onauthorityrefresh={refreshAgentAuthorities} {areaInput} {pointBlocked} onpointproposal={() => pointRefresh++} {torontoCadBlocked} oncadproposal={() => cadRefresh++} ontorontostreaming={value => torontoStreaming = value} {pointOverrides} onverifiedresult={selectVerified} {visualSource} snapshot={view.snapshot} {view} {controller} sceneMode={mode} {points} {pointStatus} onclearpoint={name => { if (mode === 'demo') controller.removePoint(name); else { points = points.filter(point => point.name !== name); pointStatus = ''; } }} /></div>
+  <div class="chat-shell" class:mobile-open={chatOpen}><Chat {objectReferences} {selectedObject} onclearobject={() => toronto?.clearObjectSelection()} {objectBlocked} onobjectproposal={() => objectRefresh++} onscenemarks={snapshot => { if (mode !== 'toronto' || !toronto) throw new Error('Location annotations unavailable.'); toronto.receiveSceneMarks(snapshot); }} onareacandidates={async (result, current) => { const source = toronto, generation = sourceGeneration; if (mode !== 'toronto' || !source || !current()) throw new Error('Toronto candidates unavailable.'); await source.receiveAreaCandidates(result, () => mode === 'toronto' && source === toronto && generation === sourceGeneration && current()); }} onplacementsearch={async (result, current) => { const source = toronto, generation = sourceGeneration; if (mode !== 'toronto' || !source || !current()) throw new Error('Toronto placement unavailable.'); await source.receivePlacementSearch(result, () => mode === 'toronto' && source === toronto && generation === sourceGeneration && current()); }} onselectreference={selectAgentReference} onauthorityrefresh={refreshAgentAuthorities} {areaInput} {pointBlocked} onpointproposal={() => pointRefresh++} {torontoCadBlocked} oncadproposal={() => cadRefresh++} ontorontostreaming={value => torontoStreaming = value} {pointOverrides} onverifiedresult={selectVerified} {visualSource} snapshot={view.snapshot} {view} {controller} sceneMode={mode} {points} {pointStatus} onclearpoint={name => { if (mode === 'demo') controller.removePoint(name); else { points = points.filter(point => point.name !== name); pointStatus = ''; } }} /></div>
 </div>
 {#if mode === 'demo'}
 <details class="project-controls" data-testid="project-controls">
@@ -147,6 +147,8 @@
   button:hover { color: #fff; background: #ffffff0c; } button[aria-pressed="true"] { color: #fff; background: #36373d; box-shadow: 0 1px 4px #0003; }
   button:disabled { opacity: .45; }
   .header-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .tools-link { display: inline-flex; align-items: center; min-height: 44px; padding: 5px 8px; color: #b4b5be; text-decoration: none; }
+  .tools-link:hover { color: #fff; }
   .synthetic .header-actions { padding-right: 65px; }
   .integrated-workspace { position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 360px; overflow: hidden; }
   .integrated-workspace.chat-closed { grid-template-columns: minmax(0, 1fr); }

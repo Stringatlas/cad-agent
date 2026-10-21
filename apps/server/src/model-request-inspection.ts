@@ -79,6 +79,8 @@ export function inspectModelRequest(body: Record<string, unknown>, mode: 'api-ke
         t.parameters = { type: 'object', properties: {}, required: [], additionalProperties: false };
       else if (tool.name === 'resolve_visual_pixel' && JSON.stringify(tool.parameters) === JSON.stringify({ type: 'object', properties: { observationId: { type: 'string' }, x: { type: 'integer', minimum: 0 }, y: { type: 'integer', minimum: 0 } }, required: ['observationId', 'x', 'y'], additionalProperties: false }))
         t.parameters = { type: 'object', properties: { observationId: { type: 'string' }, x: { type: 'integer', minimum: 0 }, y: { type: 'integer', minimum: 0 } }, required: ['observationId', 'x', 'y'], additionalProperties: false };
+      else if (tool.name === 'load_skill' && JSON.stringify(tool.parameters) === JSON.stringify({ type: 'object', properties: { skillId: { type: 'string', maxLength: 80 } }, required: ['skillId'], additionalProperties: false }))
+        t.parameters = { type: 'object', properties: { skillId: { type: 'string', maxLength: 80 } }, required: ['skillId'], additionalProperties: false };
       else { omissions.add('unrecognized-fields'); t.parameters = { omitted: 'unrecognized-schema' }; }
       return t;
     });

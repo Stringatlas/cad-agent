@@ -14,6 +14,7 @@ import { createCropLayer } from './crop-render';
 import { pointColors, POINT_TYPE_KEY, UNKNOWN_POINT_COLOR, type PointColorMode } from './point-colors';
 import { createTorontoCadRender } from './toronto-cad-render';
 import { createAreaCandidateRender } from './area-candidate-render';
+import type { SceneMarkSnapshot } from '@spatial/contracts';
 import type { AreaCandidateResult } from '@spatial/contracts';
 import { createPlacementSearchRender, type PlacementPreview } from './placement-search-render';
 import { createPreprocessingLayer, type PreprocessingSummary } from './preprocessing-overlays';
@@ -59,16 +60,19 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
   const cad = createTorontoCadRender(scene);
   const placement = createPlacementSearchRender(scene);
   const areaCandidates = createAreaCandidateRender(scene);
+  const sceneMarks = createAreaCandidateRender(scene);
   let candidateEvidence: AreaCandidateResult | undefined;
   // Covers both live frames and visual-capture's temporary camera synchronously.
   const annotationSize = new THREE.Vector2();
   scene.onBeforeRender = (_renderer, _scene, renderCamera) => {
     renderer.getSize(annotationSize);
     const canvasBounds = renderer.domElement.getBoundingClientRect();
-    const shortlist = host.parentElement?.parentElement?.querySelector('[data-testid="area-candidate-shortlist"]')?.closest('aside')?.getBoundingClientRect();
+    const shortlist = host.parentElement?.parentElement?.querySelector('[data-testid="area-candidate-shortlist"], [data-testid="scene-mark-list"]')?.closest('aside')?.getBoundingClientRect();
     const excluded = shortlist ? [{ x: shortlist.left - canvasBounds.left, y: shortlist.top - canvasBounds.top, width: shortlist.width, height: shortlist.height }] : [];
     areaCandidates.update(renderCamera as THREE.PerspectiveCamera, annotationSize.x, annotationSize.y, excluded);
     host.dataset.areaCandidateLabels = JSON.stringify(areaCandidates.layout);
+    sceneMarks.update(renderCamera as THREE.PerspectiveCamera, annotationSize.x, annotationSize.y, excluded);
+    host.dataset.sceneMarkLabels = JSON.stringify(sceneMarks.layout);
   };
   const authoredObjects = createSceneObjectRender(scene);
   const preprocessing = createPreprocessingLayer(scene);
@@ -132,7 +136,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       pointColorMode: colorMode,
       ...(colorMode === 'type' ? { pointTypeKey: [...POINT_TYPE_KEY, { label: null, name: 'Unknown', color: UNKNOWN_POINT_COLOR }] } : {}),
       observation: 'capture-time-rendered-scene-not-current-geometry',
-      layers: { areaCandidatePoints: areaCandidates.count, placementPreviewRenderObjects: placement.count, areaOfInterest: areaOverlay.visible, cadSolidsOrGhosts: cad.captureBlocked, pointEditsOrPreview: pointOverrides.captureBlocked, derivedOverlays: preprocessing.count, authoredDatumsOrGhosts: authoredObjects.count },
+      layers: { areaCandidatePoints: areaCandidates.count + sceneMarks.count, placementPreviewRenderObjects: placement.count, areaOfInterest: areaOverlay.visible, cadSolidsOrGhosts: cad.captureBlocked, pointEditsOrPreview: pointOverrides.captureBlocked, derivedOverlays: preprocessing.count, authoredDatumsOrGhosts: authoredObjects.count },
       pointProvenance: pointOverrides.captureBlocked || authoredObjects.count ? 'unavailable-for-edited-imagery' : 'original-source-records-only',
       pointCountScope: 'overview-adaptive-manual-detail-only-excludes-edit-preview-and-fallback-markers',
       scope: 'Displayed scene including CAD solids, pending ghosts, point edits and overlays when present; not whole-dataset or authoritative geometry evidence' }),
@@ -483,6 +487,12 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       host.dataset.areaCandidates = JSON.stringify(result?.candidates.map(c => ({ rank: c.rank, position: c.position })) ?? []);
       visual.invalidate();
     },
+    setSceneMarks(snapshot?: SceneMarkSnapshot, selected?: string) {
+      if (disposed || gpuFailed) return;
+      sceneMarks.set(snapshot, selected);
+      host.dataset.sceneMarks = JSON.stringify(snapshot?.marks.map(mark => ({ id: mark.id, rank: mark.rank, position: mark.position })) ?? []);
+      visual.invalidate();
+    },
     setPlacementPreview(preview?: PlacementPreview) {
       if (disposed) return;
       placement.set(preview); visual.invalidate();
@@ -613,7 +623,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       flight.dispose(); visual.dispose(); areaOverlay.dispose();
       controls.removeEventListener('change', controlsChanged);
       disposed = true; clearDetail(); pickCache?.dispose(); pickCache = undefined; finishGesture();
-      pointOverrides.dispose(); cad.dispose(); placement.dispose(); areaCandidates.dispose(); delete host.dataset.areaCandidates; delete host.dataset.areaCandidateLabels; preprocessing.dispose(); authoredObjects.dispose();
+      pointOverrides.dispose(); cad.dispose(); placement.dispose(); areaCandidates.dispose(); sceneMarks.dispose(); delete host.dataset.sceneMarks; delete host.dataset.sceneMarkLabels; delete host.dataset.areaCandidates; delete host.dataset.areaCandidateLabels; preprocessing.dispose(); authoredObjects.dispose();
       markerGeometry.dispose(); markerMaterial.dispose(); winnerGeometry.dispose(); winnerMaterial.dispose(); lineGeometry.dispose(); lineMaterial.dispose();
       for (const name of draftMarkers.keys()) removeDraftMarker(name);
       delete host.dataset.draftMarkers;

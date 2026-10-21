@@ -1,6 +1,7 @@
 export { ADAPTIVE_BINARY_MIME, ADAPTIVE_BINARY_LIMITS, encodeAdaptiveBinary, decodeAdaptiveBinary } from './adaptive-binary';
 export type { AdaptiveBinaryIdentity, AdaptiveBinaryInput, AdaptiveBinaryPayload } from './adaptive-binary';
 export * from './scene-objects';
+export * from './scene-marks';
 export type { AreaCandidate, AreaCandidateResult, AreaCandidateSettings } from './area-candidates';
 export { canonicalPlacementIntent, unresolvedPlacementFields, canonicalResolvedPlacementSpecification } from './placement';
 export type { PlacementBinding, PlacementArea, PlacementRankingMetric, PlacementValues, PlacementField, PlacementAssumption, PlacementIntent, ResolvedPlacementSpecification } from './placement';

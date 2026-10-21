@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { withProductSkills } from './helpers/product-skill-transport';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -37,10 +38,10 @@ async function fixture(t: { after(fn: () => unknown): void }) {
     frameId: 'toronto3d-local-v1', units: 'm', localOrigin: [627285, 4841948, 0], corners: [[0, 0, 100], [4, 0, 100], [4, 4, 100], [0, 4, 100]] } };
   const outputs: unknown[][] = [], requests: Record<string, unknown>[] = [];
   const server = createDemoServer({ datasetRoot: root, projectPath: join(root, 'project.json'), provider: { mode: 'api-key', apiKey: 'synthetic-not-a-credential' },
-    modelTransport: async (url, init) => {
+    modelTransport: withProductSkills(async (url, init) => {
       if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'fixture-model' }] });
       requests.push(JSON.parse(String(init?.body))); return sse(outputs.shift() ?? []);
-    } });
+    }, ['placement-search']) });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); assert.ok(address && typeof address !== 'string'); const base = `http://127.0.0.1:${address.port}`;
   const fetcher: typeof fetch = (input, init) => fetch(base + String(input), init);
@@ -112,28 +113,49 @@ test('fake provider AOI search connects shared viewer/session shortlist, later e
 });
 
 test('strict settings/candidate allowlists reject model corners, operations, foreign candidates, and model approval without a CAD mutation', async t => {
-  const f = await fixture(t);
   const invalid = [
-    ['search_placement_sites', { settings, area: f.scene.areaOfInterest }], ['search_placement_sites', { settings: { ...settings, corners: [] } }],
-    ['search_placement_sites', { settings: { ...settings, dimensions: [1, -1, 1] } }], ['search_placement_sites', { settings: { ...settings, frontAccessDepth: -1 } }],
-    ['search_placement_sites', { settings: { ...settings, maxGroundSlopeDegrees: 90 } }], ['search_placement_sites', { settings: { ...settings, spacingMeters: 0 } }],
-    ['search_placement_sites', { settings: { ...settings, allowedYawDegrees: [45] } }], ['search_placement_sites', { settings: { dimensions: [1, 1, 1] } }],
-    ['propose_placement_site', { searchId: 'foreign', candidateId: 'foreign', operation: { kind: 'box' } }],
-    ['propose_placement_site', { searchId: '', candidateId: 'site' }], ['approve', {}], ['approve_placement_site', {}], ['undo', {}],
+    ['search_placement_sites', (scene: ModelScene) => ({ settings, area: scene.areaOfInterest })],
+    ['search_placement_sites', () => ({ settings: { ...settings, corners: [] } })],
+    ['search_placement_sites', () => ({ settings: { ...settings, dimensions: [1, -1, 1] } })], ['search_placement_sites', () => ({ settings: { ...settings, frontAccessDepth: -1 } })],
+    ['search_placement_sites', () => ({ settings: { ...settings, maxGroundSlopeDegrees: 90 } })], ['search_placement_sites', () => ({ settings: { ...settings, spacingMeters: 0 } })],
+    ['search_placement_sites', () => ({ settings: { ...settings, allowedYawDegrees: [45] } })], ['search_placement_sites', () => ({ settings: { dimensions: [1, 1, 1] } })],
+    ['propose_placement_site', () => ({ searchId: 'foreign', candidateId: 'foreign', operation: { kind: 'box' } })],
+    ['propose_placement_site', () => ({ searchId: '', candidateId: 'site' })], ['approve', () => ({})], ['approve_placement_site', () => ({})], ['undo', () => ({})],
   ] as const;
-  for (const [name, args] of invalid) {
-    f.outputs.push([tool(name, args)]); const events = await f.run(); assert.equal(events.at(-1)?.kind, 'error', name);
-  }
-  f.outputs.push([tool('search_placement_sites', { settings })], []); const r = shortlist(await f.run());
-  for (const args of [{ searchId: r.searchId, candidateId: 'foreign' }, { searchId: 'foreign', candidateId: r.candidates[0].id }]) {
+  // Response EOF can precede admission cleanup; independent inputs need independent servers.
+  for (const [index, [name, args]] of invalid.entries()) await t.test(`malformed input ${index + 1}: ${name}`, async t => {
+    const f = await fixture(t);
+    f.outputs.push([tool(name, args(f.scene))]); const events = await f.run(); assert.equal(events.at(-1)?.kind, 'error', name);
+    assert.equal((await f.snapshot()).proposals.length, 0); assert.equal((await f.snapshot()).bodies.length, 0);
+  });
+  await t.test('valid search does not mutate CAD', async t => {
+    const f = await fixture(t);
+    f.outputs.push([tool('search_placement_sites', { settings })], []); shortlist(await f.run());
+    assert.equal((await f.snapshot()).proposals.length, 0); assert.equal((await f.snapshot()).bodies.length, 0);
+  });
+  for (const foreign of ['candidate', 'search'] as const) await t.test(`foreign ${foreign}`, async t => {
+    const f = await fixture(t);
+    // Seed retained candidates through HTTP so the rejection is this server's only chat turn.
+    const search = await f.post(PLACEMENT + '/search', { area: f.scene.areaOfInterest, settings }); assert.equal(search.status, 200);
+    const r = search.body.result as PlacementSearchResponse;
+    const args = foreign === 'candidate' ? { searchId: r.searchId, candidateId: 'foreign' } : { searchId: 'foreign', candidateId: r.candidates[0].id };
     f.outputs.push([tool('propose_placement_site', args)]); assert.equal((await f.run()).at(-1)?.kind, 'error');
-  }
-  assert.equal((await f.snapshot()).proposals.length, 0); assert.equal((await f.snapshot()).bodies.length, 0);
-  const { areaOfInterest: _, ...noArea } = f.scene;
-  f.outputs.push([tool('search_placement_sites', { settings })]); assert.equal((await f.run(f.call(noArea))).at(-1)?.kind, 'error');
-  assert.ok(!tools(f.requests.at(-1)!).some(t => t.name === 'search_placement_sites'));
-  f.outputs.push([tool('propose_placement_site', { searchId: r.searchId, candidateId: r.candidates[0].id })]);
-  assert.equal((await f.run(f.call({ mode: 'demo', project: null, toronto: [] }))).at(-1)?.kind, 'error');
+    assert.equal((await f.snapshot()).proposals.length, 0); assert.equal((await f.snapshot()).bodies.length, 0);
+  });
+  await t.test('missing active AOI', async t => {
+    const f = await fixture(t), { areaOfInterest: _, ...noArea } = f.scene;
+    f.outputs.push([tool('search_placement_sites', { settings })]); assert.equal((await f.run(f.call(noArea))).at(-1)?.kind, 'error');
+    assert.ok(!tools(f.requests.at(-1)!).some(t => t.name === 'search_placement_sites'));
+    assert.equal((await f.snapshot()).proposals.length, 0); assert.equal((await f.snapshot()).bodies.length, 0);
+  });
+  await t.test('demo scene cannot propose a retained Toronto candidate', async t => {
+    const f = await fixture(t);
+    const search = await f.post(PLACEMENT + '/search', { area: f.scene.areaOfInterest, settings }); assert.equal(search.status, 200);
+    const r = search.body.result as PlacementSearchResponse;
+    f.outputs.push([tool('propose_placement_site', { searchId: r.searchId, candidateId: r.candidates[0].id })]);
+    assert.equal((await f.run(f.call({ mode: 'demo', project: null, toronto: [] }))).at(-1)?.kind, 'error');
+    assert.equal((await f.snapshot()).proposals.length, 0); assert.equal((await f.snapshot()).bodies.length, 0);
+  });
 });
 
 test('viewer HTTP search is usable by model; latest-search invalidation cannot be bypassed', async t => {

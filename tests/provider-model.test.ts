@@ -245,8 +245,14 @@ for (const [stream, expected] of [
   await assert.rejects(turn(f), code(expected)); assert.equal(f.requests.length, 2); f.model.close();
 });
 test('total SSE byte cap includes ignored/comment frames', async () => {
-  const f = fixture(); await f.model.models(signal()); f.queue.push(sse((': ' + 'x'.repeat(1000) + '\n\n').repeat(1100), 8192));
-  await assert.rejects(turn(f), code('provider-limit')); f.model.close();
+  const f = fixture(); await f.model.models(signal());
+  const comment = ': ' + 'x'.repeat(Math.min(1000, L.frameBytes - 16)) + '\n\n';
+  const stream = comment.repeat(Math.floor(L.providerBytes / Buffer.byteLength(comment)) + 1);
+  assert.ok(Buffer.byteLength(comment) < L.frameBytes); assert.ok(Buffer.byteLength(stream) > L.providerBytes);
+  f.queue.push(sse(stream, 8192));
+  const events: ModelChatEvent[] = [];
+  await assert.rejects(f.model.turn(f.call(), bound, async e => { events.push(e); }, signal()), code('provider-limit'));
+  assert.equal(f.requests.length, 2); assert.ok(!events.some(e => e.kind === 'done' || e.kind === 'tool' || e.kind === 'delta')); f.model.close();
 });
 test('completion is not published or committed until SSE EOF', async () => {
   const f = fixture(); await f.model.models(signal()); let upstream!: ReadableStreamDefaultController<Uint8Array>;
@@ -293,19 +299,43 @@ test('partial failed continuation does not enter server-owned replay', async () 
   f.queue.push(sse(complete())); await turn(f, f.call({ conversationId: id, text: 'Actual retry' }));
   const input = JSON.stringify(f.requests.at(-1)?.body?.input); assert.ok(!input.includes('Failed user text')); assert.ok(!input.includes('Partial never replayed')); f.model.close();
 });
-test('done-only encrypted reasoning counts toward full history before further inference/publication', async () => {
-  const f = fixture('chatgpt'); await f.model.models(signal()); let conversationId: string | null = null;
-  for (let i = 0; i < 3; i++) {
-    const reasoning = { type: 'reasoning', id: `rs_done_limit_${i}`, summary: [], encrypted_content: 'e'.repeat(120000) };
-    f.queue.push(sse(event({ type: 'response.output_item.done', output_index: 0, item: reasoning }) +
-      complete([{ type: 'reasoning', id: reasoning.id, summary: [] }, message()]), 16384));
-    if (i === 2) await assert.rejects(turn(f, f.call({ conversationId })), code('history-limit'));
-    else {
-      const events = await turn(f, f.call({ conversationId }));
+for (const doneOnly of [true, false]) test(`${doneOnly ? 'done-only encrypted reasoning' : 'full replay'} history bytes bounded before further inference/publication`, async () => {
+  const f = fixture(doneOnly ? 'chatgpt' : 'api-key'); await f.model.models(signal()); let conversationId: string | null = null;
+  const payloadBytes = L.frameBytes - 4096;
+  const turns = Math.floor(L.historyBytes / payloadBytes) + 1;
+  assert.ok(turns < L.turns, 'Exercise byte budget, not turn budget');
+  for (let i = 0; i < turns; i++) {
+    const last = i === turns - 1;
+    f.queue.push(() => {
+      const input = f.requests.at(-1)!.body!.input as unknown[];
+      const reasoning = { type: 'reasoning', id: `rs_history_${i}`, summary: [], encrypted_content: '' };
+      const baseBytes = Buffer.byteLength(JSON.stringify([...input, reasoning, message('')]));
+      const padding = last ? L.historyBytes + 1 - baseBytes : payloadBytes;
+      assert.ok(padding > 0 && padding <= payloadBytes);
+      reasoning.encrypted_content = 'e'.repeat(padding);
+      const projectedBytes = Buffer.byteLength(JSON.stringify([...input, reasoning, message('')]));
+      if (last) assert.equal(projectedBytes, L.historyBytes + 1);
+      else assert.ok(projectedBytes <= L.historyBytes);
+      const frames = doneOnly ? [event({ type: 'response.output_item.done', output_index: 0, item: reasoning }),
+        complete([{ type: 'reasoning', id: reasoning.id, summary: [] }, message('')])] : [complete([reasoning, message('')])];
+      assert.ok(frames.every(frame => Buffer.byteLength(frame) < L.frameBytes));
+      return sse(frames.join(''), 16384);
+    });
+    const events: ModelChatEvent[] = [];
+    const pending = f.model.turn(f.call({ conversationId }), bound, async e => { events.push(e); }, signal());
+    if (last) {
+      await assert.rejects(pending, code('history-limit'));
+      assert.ok(!events.some(e => e.kind === 'done' || e.kind === 'tool' || e.kind === 'delta'));
+    } else {
+      await pending;
+      assert.equal(events.at(-1)?.kind, 'done');
       conversationId = (events.at(-1) as Extract<ModelChatEvent, { kind: 'done' }>).conversationId;
     }
+    assert.equal(f.requests.length, i + 2, 'No retry or further inference');
   }
-  assert.equal(f.requests.length, 4); f.model.close();
+  f.queue.push(sse(complete())); await turn(f, f.call({ conversationId }));
+  assert.ok(!JSON.stringify(f.requests.at(-1)!.body!.input).includes(`rs_history_${turns - 1}`), 'Rejected output was not committed');
+  f.model.close();
 });
 test('done-item reconciliation retains terminal-only raw fields while matching canonical shared fields', async () => {
   const f = fixture(); await f.model.models(signal());
@@ -322,12 +352,6 @@ test('done-item visible content cannot bypass output limits when no deltas were 
   await assert.rejects(turn(f), code('output-limit')); f.model.close();
 });
 
-test('full replay history bytes bounded before further inference/publication', async () => {
-  const f = fixture(); await f.model.models(signal()); let id: string | null = null;
-  for (let i = 0; i < 2; i++) { f.queue.push(sse(complete([{ type: 'reasoning', encrypted_content: 'e'.repeat(120000), summary: [] }, message()]), 16384)); const events = await turn(f, f.call({ conversationId: id })); id = (events.at(-1) as Extract<ModelChatEvent, { kind: 'done' }>).conversationId; }
-  f.queue.push(sse(complete([{ type: 'reasoning', encrypted_content: 'e'.repeat(120000), summary: [] }, message()]), 16384));
-  await assert.rejects(turn(f, f.call({ conversationId: id })), code('history-limit')); f.model.close();
-});
 test('official structured plan errors preserve safe recovery category for HTTP and SSE without provider text', async () => {
   for (const [provider, expected] of [
     ['subscription_sharing_user_not_eligible', 'plan-user-not-eligible'], ['subscription_sharing_unsupported_capability', 'unsupported-capability'],

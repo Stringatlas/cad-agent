@@ -6,8 +6,8 @@ import { SCENE_POINT_LIMIT, canonicalScenePointName, canonicalSceneContextReques
 import { protocolRecord, protocolKeys, protocolToken, protocolHash, protocolInteger, canonicalProtocolJson } from './tool-protocol';
 
 export const MODEL_CHAT_LIMITS = Object.freeze({ requestBytes: 65536, textChars: 12000, conversations: 8,
-  conversationTtlMs: 30 * 60 * 1000, turns: 16, historyBytes: 256 * 1024, imageHistoryBytes: 12 * 1024 * 1024, providerBytes: 1024 * 1024,
-  outputChars: 32000, frameBytes: 128 * 1024, deadlineMs: 15 * 60 * 1000, models: 128, toolCalls: 16, requestsPerMinute: 30 });
+  conversationTtlMs: 30 * 60 * 1000, turns: 16, historyBytes: 512 * 1024, imageHistoryBytes: 12 * 1024 * 1024, providerBytes: 4 * 1024 * 1024, streamBytes: 16 * 1024 * 1024,
+  outputChars: 32000, frameBytes: 128 * 1024, deadlineMs: 15 * 60 * 1000, models: 128, toolCalls: 64, skillCalls: 16, requestsPerMinute: 30 });
 export interface ModelTorontoPoint {
   readonly name: ScenePointName; readonly datasetId: 'toronto3d'; readonly artifactRevision: string;
   readonly key: { readonly sourceFileId: number; readonly sourceRow: number }; readonly position: Vec3;
@@ -35,7 +35,7 @@ export interface ModelTurnRequest {
   readonly requestId: string; readonly conversationId: string | null; readonly generation: string;
   readonly model: string; readonly text: string; readonly scene: ModelScene; readonly visualObservation?: ModelVisualObservation;
 }
-export const MODEL_INSPECTION_LIMITS = Object.freeze({ rounds: 17, snapshotBytes: 49152, textChars: 12000, inputItems: 128 });
+export const MODEL_INSPECTION_LIMITS = Object.freeze({ rounds: 81, snapshotBytes: 49152, textChars: 12000, inputItems: 128 });
 export type ModelInspectionOmission = 'credentials-and-headers' | 'opaque-reasoning' | 'unrecognized-fields' | 'truncated' | 'image-bytes';
 export interface ModelRequestInspection {
   readonly round: number; readonly mode: 'api-key' | 'chatgpt'; readonly continuation: boolean;
@@ -92,7 +92,7 @@ export type ModelChatEvent =
   | { readonly kind: 'approval-result'; readonly requestId: string; readonly proposalId: string; readonly authority: ModelProposalAuthority; readonly outcome: 'accepted' | 'declined' | 'invalidated'; readonly scene: ModelScene }
   | { readonly kind: 'start'; readonly requestId: string; readonly conversationId: string; readonly model: string }
   | { readonly kind: 'delta'; readonly requestId: string; readonly text: string }
-  | { readonly kind: 'tool'; readonly requestId: string; readonly name: 'finalize_area_candidates' | 'scan_area_candidates' | 'search_placement_sites' | 'propose_placement_site' | 'query_aoi_points' | 'list_objects' | 'get_object' | 'propose_point_create' | 'inspect_scene' | 'capture_scene' | 'select_reference' | 'resolve_visual_pixel' | 'nearest_label' | 'propose_box_create' | 'propose_box_update' | 'propose_point_move' | 'propose_point_move_to_nearest_label' | 'propose_cad_box' | 'propose_cad_cylinder' | 'assess_utility_box' | 'propose_utility_box'; readonly context: unknown }
+  | { readonly kind: 'tool'; readonly requestId: string; readonly name: 'query_points' | 'ground_elevation' | 'set_scene_marks' | 'get_scene_marks' | 'list_skills' | 'load_skill' | 'finalize_area_candidates' | 'scan_area_candidates' | 'search_placement_sites' | 'propose_placement_site' | 'query_aoi_points' | 'list_objects' | 'get_object' | 'propose_point_create' | 'inspect_scene' | 'capture_scene' | 'select_reference' | 'resolve_visual_pixel' | 'nearest_label' | 'propose_box_create' | 'propose_box_update' | 'propose_point_move' | 'propose_point_move_to_nearest_label' | 'propose_cad_box' | 'propose_cad_cylinder' | 'assess_utility_box' | 'propose_utility_box'; readonly context: unknown }
   | { readonly kind: 'tool-request'; readonly requestId: string; readonly toolCallId: string; readonly nonce: string; readonly observationId: string; readonly x: number; readonly y: number }
   | { readonly kind: 'done'; readonly requestId: string; readonly conversationId: string }
   | { readonly kind: 'error'; readonly requestId: string; readonly code: string };
@@ -190,7 +190,7 @@ export function canonicalModelChatEvent(value: unknown): ModelChatEvent {
       if (r.kind === 'approval-result') { if (typeof r.outcome !== 'string' || !['accepted', 'declined', 'invalidated'].includes(r.outcome)) throw new TypeError('Invalid approval outcome'); canonicalModelScene(r.scene); } break;
     case 'start': protocolKeys(r, ['kind', 'requestId', 'conversationId', 'model']); protocolToken(r.conversationId); boundedText(r.model, 256); break;
     case 'delta': protocolKeys(r, ['kind', 'requestId', 'text']); boundedText(r.text, MODEL_CHAT_LIMITS.outputChars); break;
-    case 'tool': protocolKeys(r, ['kind', 'requestId', 'name', 'context']); if (typeof r.name !== 'string' || !['finalize_area_candidates', 'scan_area_candidates', 'search_placement_sites', 'propose_placement_site', 'query_aoi_points', 'list_objects', 'get_object', 'propose_point_create', 'inspect_scene', 'capture_scene', 'select_reference', 'resolve_visual_pixel', 'nearest_label', 'propose_box_create', 'propose_box_update', 'propose_point_move', 'propose_point_move_to_nearest_label', 'propose_cad_box', 'propose_cad_cylinder', 'assess_utility_box', 'propose_utility_box'].includes(String(r.name)) || canonicalProtocolJson(r.context).length > MODEL_CHAT_LIMITS.frameBytes / 2) throw new TypeError('Invalid tool context'); break;
+    case 'tool': protocolKeys(r, ['kind', 'requestId', 'name', 'context']); if (typeof r.name !== 'string' || !['query_points', 'ground_elevation', 'set_scene_marks', 'get_scene_marks', 'list_skills', 'load_skill', 'finalize_area_candidates', 'scan_area_candidates', 'search_placement_sites', 'propose_placement_site', 'query_aoi_points', 'list_objects', 'get_object', 'propose_point_create', 'inspect_scene', 'capture_scene', 'select_reference', 'resolve_visual_pixel', 'nearest_label', 'propose_box_create', 'propose_box_update', 'propose_point_move', 'propose_point_move_to_nearest_label', 'propose_cad_box', 'propose_cad_cylinder', 'assess_utility_box', 'propose_utility_box'].includes(String(r.name)) || canonicalProtocolJson(r.context).length > MODEL_CHAT_LIMITS.frameBytes / 2) throw new TypeError('Invalid tool context'); break;
     case 'tool-request': protocolKeys(r, ['kind', 'requestId', 'toolCallId', 'nonce', 'observationId', 'x', 'y']);
       if (typeof r.toolCallId !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/u.test(r.toolCallId)) throw new TypeError('Invalid tool call ID');
       protocolToken(r.nonce); protocolToken(r.observationId); protocolInteger(r.x, 4095); protocolInteger(r.y, 4095); break;

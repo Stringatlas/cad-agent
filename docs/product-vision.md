@@ -21,6 +21,12 @@ Follow the standing [UX principles](ux-principles.md): **YAGNI, Apple-style rest
 ## Toronto is the product workspace
 Toronto3D is the actual editing workspace. Synthetic geometry is a development/test fixture, not the destination for CAD product features. [Task034](tasks/034-toronto-cad-workspace.md) implements the authorized first Toronto slice: AI-proposed source-point translations and real OpenCascade box/cylinder solid candidates, visible in place with individual human Accept/Decline and checked Undo. Implementation and verification status live in that task. Toronto geometry uses its own local-meter frame directly; no synthetic-project mapping is implied. Volatile state and unsupported broader modeling must remain explicit.
 
+## Model-directed scene interaction
+
+The product agent owns decomposition, visual/spatial exploration, hypotheses, candidate generation, measurement choices, judgement and iteration. Tools should be composable scene interfaces—not prepackaged decision algorithms wrapped in chat narration. Deterministic computation is appropriate for factual measurements, efficient source access, geometry verification and authority checks, not a mandatory candidate universe. Runtime skills explain these interfaces and evidence limits without prescribing a fixed task chain.
+
+[Task069](tasks/069-model-directed-scene-exploration.md) implements bounded coordinate queries, observed ground elevation and lightweight C1–Cn hypotheses that the model can generate/revise/reorder independently of scan pools. These annotations do not create geometry or certify suitability. Mock-provider browser evidence establishes transport/rendering, not real-model exploration quality; geometry proposals still require each human approval.
+
 ## Required scene understanding
 
 These are **must-haves**, not optional viewer polish:
