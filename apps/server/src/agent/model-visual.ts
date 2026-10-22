@@ -60,6 +60,12 @@ export async function validateModelVisual(call: ModelTurnRequest, signal: AbortS
   // Capture binding describes a past observation, not the authority granting tools.
   // Validate its source/frame shape without comparing it to current session/revision.
   const b = visual.binding;
+  if (call.scene.mode === 'cloud') {
+    const c = call.scene.cloud;
+    if (!c || b.sourceId !== c.id || b.frameId !== c.frameId || typeof b.sourceRevision !== 'string' || !b.sourceRevision.length ||
+      JSON.stringify(b.origin) !== JSON.stringify(c.localOrigin)) throw new ModelError('invalid-visual-observation');
+    return visual;
+  }
   if (call.scene.mode !== 'toronto' || b.sourceId !== 'toronto3d' || b.frameId !== 'toronto3d-local-v1' ||
     typeof b.sourceRevision !== 'string' || !b.sourceRevision.length || JSON.stringify(b.origin) !== '[627285,4841948,0]') throw new ModelError('invalid-visual-observation');
   return visual;

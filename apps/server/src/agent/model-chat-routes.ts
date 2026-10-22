@@ -31,7 +31,7 @@ async function writeEvent(response: ServerResponse, event: ModelChatEvent, signa
   });
 }
 /** One admission includes catalog/credentials, body reading, scene checks and all tool rounds. */
-export function createModelChatRoutes(auth: ModelAuth, directory: string, transport?: ModelTransport, editing?: ModelEditingAuthorities) {
+export function createModelChatRoutes(auth: ModelAuth, directory: string, transport?: ModelTransport, editing?: ModelEditingAuthorities, clouds?: Readonly<Record<string, string>>) {
   const model = new ProviderModel(auth, transport);
   let active: AbortController | undefined, closed = false, windowStart = Date.now(), calls = 0;
   let broker: ModelVisualBroker | undefined, browserBroker: ModelBrowserBroker | undefined, boundActive: BoundModelScene | undefined, readingToolResult = false;
@@ -108,10 +108,10 @@ export function createModelChatRoutes(auth: ModelAuth, directory: string, transp
         const visual = await validateModelVisual(call, controller.signal);
         if (call.generation !== auth.credentialGeneration()) throw new ModelError('stale-account');
         // Bind dataset metadata and the separate Toronto editing authorities.
-        bound = await retryModelSceneRead(() => bindModelScene(call!.scene, directory, controller.signal, visual, editing), controller.signal);
+        bound = await retryModelSceneRead(() => bindModelScene(call!.scene, directory, controller.signal, visual, editing, clouds), controller.signal);
         broker = new ModelVisualBroker(call.requestId, controller.signal, emit);
         browserBroker = new ModelBrowserBroker(call.requestId, controller.signal, emit);
-        const runtime = createModelAgentRuntime(call, bound, directory, controller.signal, browserBroker, editing);
+        const runtime = createModelAgentRuntime(call, bound, directory, controller.signal, browserBroker, editing, clouds);
         bound = new Proxy(runtime, { get(target, key) {
           if (key === 'resolveVisualPixel') return (args: { observationId: string; x: number; y: number }, toolCallId: string) => broker!.resolve(args, toolCallId);
           return Reflect.get(target, key);

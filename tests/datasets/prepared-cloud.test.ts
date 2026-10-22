@@ -44,7 +44,7 @@ test('second cloud actually loads with a different origin, frame, IDs and no sem
   const f = await fixture(t), info = await f.reader.info();
   assert.equal(info.descriptor.id, 'quarry-west'); assert.equal(info.descriptor.frameId, 'quarry-local-v3');
   assert.deepEqual(info.descriptor.coordinates.localOrigin, [123400, 432100, 80]);
-  assert.deepEqual(info.capabilities, { boundedSample: true, semanticLabels: false, fullResolution: false, editing: false });
+  assert.deepEqual(info.capabilities, { boundedSample: true, adaptiveDisplay: true, semanticLabels: false, instanceLabels: false, fullResolution: false, editing: false });
   assert.equal(info.totalPoints, 4);
   const sample = await f.reader.sample(info.revision, { budget: 4, depth: 0 });
   assert.deepEqual(sample.positions, [10, 20, -5, 11, 21, -4, 12, 22, -3, 13, 23, -2]);

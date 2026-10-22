@@ -8,8 +8,8 @@
 | `chat/` | Conversation UI, model transport, draft references and tool inspector. |
 | `chat/visual/` | Screenshot attachments, cropping and visual-observation UI. |
 | `components/` | Shared Markdown and human-approval UI. |
-| `viewer/` | Shared camera, orbit, viewport and capture helpers. |
-| `scenes/dales/` | Read-only DALES scene, viewer and prepared-cloud client. |
+| `viewer/` | Shared point-cloud viewport, RGB/semantic/instance colors, camera, orbit and capture helpers. |
+| `scenes/point-cloud/` | Dataset-aware prepared-cloud workspace, client and adaptive native-node viewer; STPLS3D inventory. |
 | `scenes/toronto/` | Toronto workspace/viewer composition and authority transport. |
 | `scenes/toronto/cad/` | CAD client, controls and disposable render cache. |
 | `scenes/toronto/points/` | Point edits, semantic presentation and previews. |

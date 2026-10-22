@@ -22,7 +22,7 @@ for (const [index, view] of views.entries()) {
     if (colorMode === undefined) assert.equal(Object.hasOwn(canonicalModelCaptureRequest(view), 'colorMode'), false);
   });
   test(`capture variant ${index} rejects invalid modes and extra fields`, () => {
-    for (const colorMode of [null, '', 'RGB', 'semantic', 'height', 0, false, [], {}]) {
+    for (const colorMode of [null, '', 'RGB', 'height', 0, false, [], {}]) {
       assert.throws(() => canonicalModelCaptureRequest({ ...view, colorMode }), TypeError);
       assert.throws(() => canonicalModelBrowserAction({ kind: 'capture', request: { ...view, colorMode } }), TypeError);
     }
@@ -62,7 +62,7 @@ for (const [index, view] of views.entries()) test(`provider forwards ${view.kind
   assert.deepEqual(JSON.parse(output.output), { status: 'unavailable' });
 });
 
-for (const args of [{ kind: 'current', colorMode: null }, { kind: 'top-down', colorMode: 'semantic' }, { kind: 'current', colorMode: 'rgb', extra: true }]) test(`provider rejects invalid capture args ${JSON.stringify(args)}`, async t => {
+for (const args of [{ kind: 'current', colorMode: null }, { kind: 'top-down', colorMode: 'height' }, { kind: 'current', colorMode: 'rgb', extra: true }]) test(`provider rejects invalid capture args ${JSON.stringify(args)}`, async t => {
   let invoked = false;
   const f = await fixture(t, args, { async captureScene() { invoked = true; return undefined; } });
   await assert.rejects(f.run(), (error: unknown) => error instanceof ModelError && error.code === 'unsupported-tool');

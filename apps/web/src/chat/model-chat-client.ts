@@ -54,7 +54,8 @@ export function validateModelEvent(value: unknown, request: ModelTurnRequest): M
   if (r.kind === 'delta' && (typeof r.text !== 'string' || !r.text.length || r.text.length > MODEL_CLIENT_LIMITS.outputChars)) throw new Error('Invalid text delta');
   if (r.kind === 'tool') {
     if (!['list_skills', 'load_skill', 'inspect_scene', 'capture_scene', 'select_reference'].includes(String(r.name)) &&
-      !(['query_points', 'ground_elevation', 'set_scene_marks', 'get_scene_marks'].includes(String(r.name)) && request.scene.mode === 'toronto') &&
+      !(['query_points', 'query_elevation'].includes(String(r.name)) && request.scene.mode === 'cloud') &&
+      !(['query_points', 'query_elevation', 'ground_elevation', 'set_scene_marks', 'get_scene_marks'].includes(String(r.name)) && request.scene.mode === 'toronto') &&
       !(['query_aoi_points', 'search_placement_sites', 'scan_area_candidates', 'finalize_area_candidates'].includes(String(r.name)) && request.scene.mode === 'toronto' && request.scene.areaOfInterest) &&
       !(r.name === 'propose_placement_site' && request.scene.mode === 'toronto') && !(r.name === 'resolve_visual_pixel' && request.visualObservation) &&
       !(['nearest_label', 'assess_utility_box', 'propose_utility_box'].includes(String(r.name)) && request.scene.mode === 'toronto' && request.scene.toronto.length > 0) &&
@@ -366,11 +367,16 @@ export class ModelChatController {
         }) && same({ ...scene, objects: previousObjects }, previous);
       const selection = this.selecting;
       const point = scene.toronto.at(-1);
-      const selectionChange = selection && point && scene.toronto.length === previous.toronto.length + 1 &&
+      const selectionChange = selection?.kind === 'toronto-point' && point && scene.toronto.length === previous.toronto.length + 1 &&
         same(point.key, selection.key) && same({ ...scene, toronto: scene.toronto.slice(0, -1) }, previous);
-      if (objectApprovalChange || selectionChange) { this.acceptAgentScene(scene); return; }
+      const cloudPoint = scene.cloud?.points.at(-1);
+      const cloudSelectionChange = selection?.kind === 'cloud-point' && previous.cloud && scene.cloud && cloudPoint &&
+        scene.cloud.points.length === previous.cloud.points.length + 1 && same(cloudPoint.key, selection.key) &&
+        same({ ...scene, cloud: { ...scene.cloud, points: scene.cloud.points.slice(0, -1) } }, previous);
+      if (objectApprovalChange || selectionChange || cloudSelectionChange) { this.acceptAgentScene(scene); return; }
     }
-    const sameSession = this.scene?.mode === scene.mode;
+    const sameSession = this.scene?.mode === scene.mode && (scene.mode !== 'cloud' ||
+      this.scene.cloud?.id === scene.cloud?.id && this.scene.cloud?.revision === scene.cloud?.revision && this.scene.cloud?.frameId === scene.cloud?.frameId);
     if (!this.active && sameSession) {
       this.proposalEvents.oninvalidate?.(); this.acceptAgentScene(scene); return;
     }

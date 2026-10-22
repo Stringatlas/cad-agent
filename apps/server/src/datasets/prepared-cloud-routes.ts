@@ -1,23 +1,12 @@
+import { openPreparedElevation } from './prepared-elevation';
+import { canonicalElevationCoordinates, type ElevationLayer } from '@spatial/contracts';
+import { encodePreparedNode, PREPARED_NODE_MIME } from '@spatial/contracts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { fileURLToPath } from 'node:url';
-import { join } from 'node:path';
 import { createPreparedCloudRegistry } from './prepared-cloud';
-
-/** Operator-owned inventory. Tiles have independent local frames; never merge by filename. */
-export const DALES_TILES = Object.freeze([
-  '5080_54435', '5085_54320', '5095_54440', '5095_54455', '5100_54495', '5105_54405',
-  '5105_54460', '5110_54320', '5110_54460', '5110_54475', '5110_54495', '5115_54480',
-  '5130_54355', '5135_54495', '5140_54445', '5145_54340', '5145_54405', '5145_54460',
-  '5145_54470', '5145_54480', '5150_54340', '5160_54330', '5165_54390', '5165_54395',
-  '5180_54435', '5180_54485', '5185_54390', '5185_54485', '5190_54400',
-]);
-export const DEFAULT_PREPARED_ROOT = fileURLToPath(new URL('../../../../data/processed/dales2/', import.meta.url));
-export function dalesRegistrations(root = DEFAULT_PREPARED_ROOT): Readonly<Record<string, string>> {
-  return Object.fromEntries(DALES_TILES.map(tile => [`dales2-${tile.replace('_', '-')}`, join(root, tile)]));
-}
+import { preparedCloudRegistrations, preparedCloudName } from './scene-registry';
 
 /** Read-only bounded sampling only. No Toronto routes, edit/session authority or client-supplied paths. */
-export function createPreparedCloudRoutes(registrations = dalesRegistrations()) {
+export function createPreparedCloudRoutes(registrations = preparedCloudRegistrations()) {
   const registry = createPreparedCloudRegistry(registrations);
   const ids = new Set(Object.keys(registrations));
   let active = 0;
@@ -39,14 +28,33 @@ export function createPreparedCloudRoutes(registrations = dalesRegistrations()) 
     if (request.headers.range) { send(416, { error: 'Raw ranges are not exposed' }); return true; }
     if ((request.url?.length ?? 0) > 1024) { send(400, { error: 'Query too long' }); return true; }
     if (url.pathname === '/datasets/prepared' && !url.search) {
-      send(200, { scenes: [...ids].map(id => ({ id, name: id.startsWith('dales2-') ? `DALES-2 · ${id.slice(7).replace('-', '_')}` : id })) });
+      send(200, { scenes: [...ids].map(id => ({ id, name: preparedCloudName(id) })) });
       return true;
     }
-    const match = /^\/datasets\/prepared\/([a-zA-Z0-9][a-zA-Z0-9._:-]{0,127})(\/sample)?$/.exec(url.pathname);
+    const match = /^\/datasets\/prepared\/([a-zA-Z0-9][a-zA-Z0-9._:-]{0,127})(\/(?:sample|point|display-hierarchy|display-node|elevation|elevation-grid|elevation-query))?$/.exec(url.pathname);
     if (!match || !ids.has(match[1])) { send(404, { error: 'Unknown scene' }); return true; }
-    const sample = !!match[2], keys = [...url.searchParams.keys()];
+    const sample = match[2] === '/sample', point = match[2] === '/point', keys = [...url.searchParams.keys()];
+    const elevation = match[2] === '/elevation' || match[2] === '/elevation-grid' || match[2] === '/elevation-query';
+    const elevationGrid = match[2] === '/elevation-grid', elevationQuery = match[2] === '/elevation-query';
+    const hierarchy = match[2] === '/display-hierarchy', native = match[2] === '/display-node';
     const revision = url.searchParams.get('revision') ?? '', budget = url.searchParams.get('budget') ?? '', depth = url.searchParams.get('depth') ?? '';
-    if ((!sample && keys.length) || (sample && (keys.length !== 3 || new Set(keys).size !== 3 || keys.some(k => !['revision', 'budget', 'depth'].includes(k)) ||
+    const fileId = url.searchParams.get('sourceFileId') ?? '', row = url.searchParams.get('sourceRow') ?? '';
+    if (elevation) {
+      const required = ['revision', ...(elevationGrid ? ['modelRevision', 'layer', 'maxSize'] : elevationQuery ? ['modelRevision', 'x', 'y'] : [])];
+      let valid = keys.length === required.length && new Set(keys).size === keys.length && keys.every(k => required.includes(k)) && /^[a-f0-9]{64}$/.test(revision);
+      if (elevationGrid || elevationQuery) valid &&= /^[a-f0-9]{64}$/.test(url.searchParams.get('modelRevision') ?? '');
+      if (elevationGrid) valid &&= ['dtm', 'dsm', 'ndsm'].includes(url.searchParams.get('layer') ?? '') && /^(1[6-9]|[2-9]\d|1\d{2}|2[0-4]\d|25[0-6])$/.test(url.searchParams.get('maxSize') ?? '');
+      if (elevationQuery) { try { canonicalElevationCoordinates({ x: Number(url.searchParams.get('x')), y: Number(url.searchParams.get('y')) }); valid &&= ['x', 'y'].every(k => !!url.searchParams.get(k)?.trim()); } catch { valid = false; } }
+      if (!valid) { send(400, { error: 'Invalid elevation query' }); return true; }
+    }
+    if (point && (keys.length !== 3 || new Set(keys).size !== 3 || keys.some(k => !['revision', 'sourceFileId', 'sourceRow'].includes(k)) ||
+      !/^[a-f0-9]{64}$/.test(revision) || !/^(0|[1-9]\d{0,4})$/.test(fileId) || Number(fileId) > 65535 || !/^(0|[1-9]\d{0,9})$/.test(row) || Number(row) > 0xffffffff)) {
+      send(400, { error: 'Expected revision and original source key' }); return true;
+    }
+    if ((hierarchy || native) && (keys.length !== (native ? 2 : 1) || new Set(keys).size !== keys.length || keys.some(k => !['revision', ...(native ? ['name'] : [])].includes(k)) || !/^[a-f0-9]{64}$/.test(revision) || (native && !/^r[0-7]{0,24}$/.test(url.searchParams.get('name') ?? '')))) {
+      send(400, { error: 'Expected bound native display request' }); return true;
+    }
+    if ((!sample && !point && !hierarchy && !native && !elevation && keys.length) || (sample && (keys.length !== 3 || new Set(keys).size !== 3 || keys.some(k => !['revision', 'budget', 'depth'].includes(k)) ||
       !/^[a-f0-9]{64}$/.test(revision) || !/^[1-9]\d{0,5}$/.test(budget) || Number(budget) > 100000 || !/^[01]$/.test(depth)))) {
       send(400, { error: 'Expected revision, budget=1..100000 and depth=0..1' }); return true;
     }
@@ -57,6 +65,33 @@ export function createPreparedCloudRoutes(registrations = dalesRegistrations()) 
     const deadline = setTimeout(abort, 10000); deadline.unref();
     try {
       const reader = registry.open(match[1]);
+      if (elevation) {
+        const source = await reader.info(controller.signal);
+        if (source.revision !== revision) throw new Error('Stale source revision');
+        const model = await openPreparedElevation(registrations[match[1]], source, controller.signal);
+        if (!model) { send(404, { error: 'Elevation model not prepared' }); return true; }
+        if ((elevationGrid || elevationQuery) && model.info.revision !== url.searchParams.get('modelRevision')) throw new Error('Stale model revision');
+        const result = elevationGrid ? await model.grid(url.searchParams.get('layer') as ElevationLayer, Number(url.searchParams.get('maxSize')), controller.signal)
+          : elevationQuery ? await model.query({ x: Number(url.searchParams.get('x')), y: Number(url.searchParams.get('y')) }, controller.signal) : model.info;
+        if ((await reader.info(controller.signal)).revision !== revision) throw new Error('Source changed');
+        send(200, result); return true;
+      }
+      if (hierarchy) { send(200, await reader.displayHierarchy(revision, controller.signal)); return true; }
+      if (native) {
+        const bytes = encodePreparedNode(await reader.displayNode(revision, url.searchParams.get('name')!, controller.signal));
+        controller.signal.throwIfAborted();
+        if (!response.destroyed && !response.writableEnded) {
+          response.statusCode = 200; response.setHeader('Content-Type', PREPARED_NODE_MIME); response.setHeader('Cache-Control', 'no-store');
+          response.setHeader('Content-Length', bytes.byteLength); response.end(bytes);
+        }
+        return true;
+      }
+      if (point) {
+        const result = await reader.queryOriginal(revision, { operation: 'key', key: { sourceFileId: Number(fileId), sourceRow: Number(row) }, maxResults: 1 }, controller.signal);
+        const cloud = await reader.info(controller.signal);
+        if (cloud.revision !== revision || result.count !== 1) throw new Error('Unknown or stale source point');
+        controller.signal.throwIfAborted(); send(200, { cloud, point: result.points[0] }); return true;
+      }
       const result = sample ? await reader.sample(revision, { budget: Number(budget), depth: Number(depth) }, controller.signal, 'display') : await reader.info(controller.signal);
       controller.signal.throwIfAborted();
       send(200, result);

@@ -16,7 +16,7 @@ const removed = /assess_utility_box|propose_utility_box|search_placement_sites|p
 const pole: ModelScene = { mode: 'pole', toronto: [] };
 const toronto: ModelScene = { mode: 'toronto', toronto: [{ name: 'Point 1', datasetId: 'toronto3d', artifactRevision: 'a'.repeat(64), key: { sourceFileId: 1, sourceRow: 0 }, position: [0, 0, 0], frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] }] };
 const unavailable = async (): Promise<never> => { assert.fail('Inspector must never execute scene tools'); };
-const bound: BoundModelScene = { context: {}, async check() {}, async close() {}, queryPoints: unavailable, groundElevation: unavailable,
+const bound: BoundModelScene = { context: {}, async check() {}, async close() {}, queryPoints: unavailable, queryElevation: unavailable, groundElevation: unavailable,
   queryAoiPoints: unavailable, listObjects: unavailable, getObject: unavailable, proposePointCreate: unavailable,
   captureScene: unavailable, selectReference: unavailable, nearestLabel: unavailable,
   proposePointMove: unavailable, proposeNearestPointMove: unavailable, proposeCad: unavailable };

@@ -144,7 +144,7 @@ test('removed decision workflows stay absent before and after Toronto geometry l
 });
 
 test('catalog has unique stable IDs and immutable workflow metadata, not development skills', () => {
-  assert.equal(PRODUCT_SKILLS.length, 5);
+  assert.equal(PRODUCT_SKILLS.length, 6);
   assert.equal(new Set(PRODUCT_SKILLS.map(skill => skill.id)).size, PRODUCT_SKILLS.length);
   assert.ok(Object.isFrozen(PRODUCT_SKILLS));
   for (const skill of PRODUCT_SKILLS) {

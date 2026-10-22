@@ -19,11 +19,15 @@ Example end-state: select Point 1 and Point 2, ask “build a channel between th
 Follow the standing [UX principles](ux-principles.md): **YAGNI, Apple-style restraint, clear information hierarchy and progressive disclosure**. The scene, selected object/type, chat intent and per-change approval are primary. Session IDs, revisions, provenance narration, routine status and methodological caveats remain accessible on demand—not permanent paragraphs/panels over the scene. Selected points expose semantic types; derived clusters/layers have compact accessible meaning through a key or contextual inspection. Preserve actionable failures/recovery and truthful estimate labels without turning safety into repetitive engineering copy. Validate the idle workspace as carefully as pending/error states, on desktop and mobile. Every future agent must follow this guidance, not merely copy the current UI.
 
 ## Dataset workspace
-[Task077](tasks/077-dales2-scene.md) makes DALES-2 the default scene: 29 separately
-normalized local tiles with native semantics and read-only sampled inspection.
-DALES agent chat and editing are not yet integrated; Toronto tools must never
-operate on DALES references or implicitly map its frames. Toronto remains an
-explicit alternative and the currently implemented approval-gated editing workspace.
+[Task081](tasks/081-shared-cloud-workspace.md) makes STPLS3D the default scene
+and deletes the DALES viewer code. Its 25 independently bound scenes offer RGB,
+native-instance and semantic display, original-source queries, captures and
+numbered references through shared viewer/agent interfaces. Task082 adds four
+real-world scenes, and Task083 adds camera-driven native octree refinement within
+a bounded point budget. Exact source queries operate independently of display LOD. Toronto remains an
+explicit alternative with its existing human-approved editing capabilities.
+Prepared-cloud editing is not implemented; no scene inherits another scene's
+taxonomy, frame or authority. Scene switching clears old references and continuation.
 
 Toronto3D is the actual editing workspace. Synthetic geometry is a development/test fixture, not the destination for CAD product features. [Task034](tasks/034-toronto-cad-workspace.md) implements the authorized first Toronto slice: AI-proposed source-point translations and real OpenCascade box/cylinder solid candidates, visible in place with individual human Accept/Decline and checked Undo. Implementation and verification status live in that task. Toronto geometry uses its own local-meter frame directly; no synthetic-project mapping is implied. Volatile state and unsupported broader modeling must remain explicit.
 
@@ -45,6 +49,14 @@ These are **must-haves**, not optional viewer polish:
 Begin with clustering: [task037](tasks/037-semantic-instance-clustering.md) and its [offline artifact contract](semantic-instance-clustering.md) add bounded full-resolution class-specific voxel components with exact source memberships. [Task038](tasks/038-street-testing-preprocessing.md) follows with a focused full-resolution testing view, an eye toggle for derived observations, sparse observed ground, approximate quality-reported fits and a bounded page-tree spatial-query library. These are not verified CAD solids; holes/outliers, fit bias, overlapping-page performance and model-tool integration remain explicit follow-up gates. Libraries are allowed when useful; prefer the smallest scalable implementation over speculative infrastructure. Scene integration must keep the same CAD-first approval and provenance invariants.
 
 ## Prior bounded implementation
+
+[Task084](tasks/084-dtm-dsm.md) begins gridded elevation for prepared STPLS3D:
+observed classified-ground DTM and upper-surface DSM, viewer layers and
+scene-bound agent queries. Library-backed GeoTIFF artifacts retain support and
+NoData; ground under buildings and suitability are not inferred.
+[Methods and limits](elevation-models.md) distinguish source cells from the
+disposable preview. Toronto integration and evaluated terrain filtering remain
+future work.
 Task033 exposes model `scene.propose_box_create` and `scene.propose_box_update` for the bound synthetic project. Exact retained proposals appear as translucent scene ghosts with individual Accept/Decline. Parameter checks, stale-revision rejection, explicit Save and checked Undo reuse project authority. Acceptance invalidates other proposals from the old revision; they are never silently rebased. Ghosts are excluded from authoritative picking and remain non-authoritative in screenshot observations. Task045 permits mixed-scene captures and historical images without cancelling chat on camera motion; capture-time metadata and conservative pixel grounding never replace current tool/approval bindings.
 
 These synthetic edits remain **box parameter edits, not OpenCascade solids**. Task034 now adds separate Toronto-native OpenCascade box/cylinder candidates and AI source-point proposals with human approval; the original sandbox remains independent. Toronto uses its own authority and local frame, with no Toronto-to-synthetic mapping. Channels, booleans in the workspace, durable CAD bodies and broader verified modification tools remain future milestones.

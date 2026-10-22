@@ -4,7 +4,7 @@
 
 [Task078](tasks/078-source-folder-hierarchy.md) groups application implementations
 by responsibility. The [web source map](../apps/web/src/README.md) covers shared
-UI/viewer helpers and feature-local Toronto/DALES modules; the
+UI/viewer helpers and feature-local Toronto/prepared-cloud modules; the
 [server source map](../apps/server/src/README.md) covers agent, auth, CAD, dataset,
 spatial, preprocessing, placement and scene modules. Entrypoints remain at each
 source root. This is a file organization change within the existing package and
@@ -12,12 +12,22 @@ authority boundaries; historical task records may reference the former flat path
 
 ## Product framing
 
-[Task077](tasks/077-dales2-scene.md) makes DALES-2 the default, read-only sampled
-scene. An operator-owned prepared-cloud registry exposes 29 independent tiles,
-revision-bound bounded samples and native semantics through separate routes and
-rendering. These normalized local frames are not merged. DALES mounts no Toronto
-chat/edit authority; generic agent and editing bindings remain unimplemented.
-Toronto is still explicit opt-in with its existing approval-gated capabilities.
+[Task081](tasks/081-shared-cloud-workspace.md) replaces the DALES viewer with
+STPLS3D and deletes the DALES viewer implementation/registration. The operator
+registry exposes 25 independent prepared scenes. Shared viewport, orbit, capture
+and color utilities support Toronto and the prepared-cloud viewer. STPLS3D
+preserves native RGB, semantic IDs and signed instances, with three display modes.
+The shared agent registry/dispatcher derives tools and semantic filters from the
+bound adapter. The prepared adapter offers original-source nearest/radius/box
+queries, capture and source-reference selection; its initial overview is sampled. Task083 adds native-node adaptive display through
+revision-bound binary routes, sharing the screen-space planner in
+`apps/web/src/viewer/adaptive-plan.ts` with Toronto. A serial loader and bounded
+packed GPU cache refine visible regions, while Float64 CPU arrays retain original
+point identity. Display limits never grant whole-source coverage or edit authority.
+Scene ID, revision, frame and origin bind references and conversation continuation.
+Toronto retains its approval-gated editing adapter. Prepared-cloud editing,
+authored objects, marks and terrain adapters are not implemented. Frames are
+never implicitly merged. Earlier DALES task records describe historical behavior.
 
 Task073 removes the synthetic workspace and its project persistence, parameter-box edits,
 agent interfaces and fixture-only browser checks. Toronto remains the workspace. The CAD
@@ -167,13 +177,22 @@ samples with explicit frame/origin/source IDs and optional semantic mappings.
 Missing semantics never defaults to Toronto classes; read access never grants
 edit permissions. Raw format conversion remains an offline, format-specific job.
 
-This is not yet a generic product scene registry: viewer/HTTP/chat/editing still
-use the configured Toronto path and contracts. Integrating another scene must
-bind all observations, references, tool capabilities and authorities to its own
-dataset/frame/revision before enabling interactions. See [dataset guide](datasets.md)
-for supported layouts, actual capabilities, Git-tracked recipes and limitations.
+Task081 wires that registry to HTTP, a shared sampled viewer and the product
+agent's read-only capabilities. A separate cloud scene contract binds source
+references to the selected dataset/frame/revision; it cannot carry Toronto AOIs
+or edit authorities. Original-source queries scan physical records with bounded
+buffers and capped witnesses; counts and nearest results do not depend on LOD.
+The existing Toronto adapter retains its indexes, terrain and approval authorities.
+See [dataset guide](datasets.md) for supported layouts and limits.
 
 ## Toolchain and distribution
+
+Task084 adds a separate derived elevation adapter for prepared STPLS3D clouds.
+Offline Rasterio/GDAL writes source-bound standard GeoTIFFs; server-side
+GeoTIFF.js supplies bounded windows through read-only routes and the conditional
+`query_elevation` product tool. Shared contracts carry frame, units, revisions,
+support and NoData. The web viewer owns only a disposable Three.js preview;
+the raster adapter owns measurement values. See [elevation models](elevation-models.md).
 
 The private pnpm 10 workspace targets Node 22 (`>=22.12.0 <23`) with TypeScript 5.9, Svelte 5, Vite 7 and Three.js. Workspace packages export TypeScript source; they are not published or independently emitted distributions.
 

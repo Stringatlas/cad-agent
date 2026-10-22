@@ -1,5 +1,9 @@
 # Dataset acquisition and reproducibility
 
+Prepared STPLS3D scenes also have source-bound DTM/DSM GeoTIFFs, viewer layers and
+read-only agent elevation queries; see [elevation models](elevation-models.md)
+for generation, methods, NoData and coordinate limits.
+
 Git tracks **instructions and small recipes**, not licensed point-cloud data or
 compiled tools. A fresh clone can inspect expected source identity and rebuild
 instructions without copying an ignored developer tooling folder.
@@ -142,19 +146,33 @@ Semantic storage supports uint8, uint16 or float integer class IDs; unmapped
 sampled labels fail closed. No labels means no `labels` array and
 `semanticLabels: false`, not an invented Toronto taxonomy. All readers currently
 report `boundedSample: true`, `fullResolution: false` and `editing: false`.
-Samples use the existing harness bounds (at most 4096 points, depth 0–3), not a
+Optional native instances are declared as
+`"instances": {"attribute":"instance_id","type":"int32","unassigned":-100}`;
+the reader validates that layout and returns signed `instances` alongside labels.
+`instanceLabels` reports their availability; no IDs are inferred from RGB.
+Harness samples use the existing bounds (at most 4096 points, depth 0–3), not a
 full-cloud audit. Large/proxy levels outside those bounds are not certified as
 readable merely because metadata loads. The revision binds descriptor/metadata,
 first hierarchy chunk and asset identities; it is **not** a whole-file integrity
 hash. Source checksums and full offline validation remain separate requirements.
 
-`tests/datasets/prepared-cloud.test.ts` constructs a real on-disk second-cloud fixture
-with different source IDs, origin and optional non-Toronto semantics. The adapter
-is a callable server module, **not yet wired to HTTP, the viewer, chat, picking,
-full-resolution streaming or editing**. Product wiring must bind every reference,
-query and authority to the selected cloud/frame/revision and explicitly disable
-unsupported tools. A new raw format additionally needs an importer and validation;
-adding `cloud.json` alone does not convert it.
+Task081 exposes the operator registry through `/datasets/prepared`, revision-bound
+`/:id/sample` (display budget up to 100,000, depth 0–1) and `/:id/point` lookups.
+The STPLS3D viewer and agent share those identities. `queryOriginal` scans all
+physical source records using bounded buffers, independently of display LOD,
+and returns nearest/radius/box observations with at most 64 witnesses. Counts
+are exact; witness caps do not imply truncated counts. This scan is not the
+Toronto disk index, independent nearest verifier, terrain model or edit authority.
+`adaptiveDisplay: true` exposes Task083 native octree display via
+`/:id/display-hierarchy?revision=...` and binary
+`/:id/display-node?revision=...&name=r...`. These traverse complete proxy
+hierarchies but return only bounded native nodes (at most 65,536 points each),
+with exact RGB, semantic/instance attributes and original source keys.
+`fullResolution: false` means an unbounded whole-cloud display is not provided; original-source query
+coverage is reported separately in each query result. Scene/frame/revision/origin
+bind agent context and continuation. Unsupported tools remain unavailable.
+A new raw format still needs its own importer and validation; adding `cloud.json`
+alone does not convert it. See [Task081](tasks/081-shared-cloud-workspace.md).
 
 ## Verification levels
 

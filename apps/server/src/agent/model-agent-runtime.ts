@@ -23,10 +23,10 @@ export async function retryModelSceneRead<T>(read: () => Promise<T>, signal: Abo
 export interface ApprovalObservation { readonly outcome: 'accepted' | 'declined' | 'invalidated'; readonly scene: ModelScene; readonly context: unknown }
 /** Browser RPC never supplies a decision. Only successful authority operations create decision receipts. */
 export function createModelAgentRuntime(call: ModelTurnRequest, initial: BoundModelScene, directory: string,
-  signal: AbortSignal, browser: ModelBrowserBroker, editing?: ModelEditingAuthorities) {
+  signal: AbortSignal, browser: ModelBrowserBroker, editing?: ModelEditingAuthorities, clouds?: Readonly<Record<string, string>>) {
   let scene = call.scene, current = initial;
   const rebind = async (next: ModelScene) => {
-    const bound = await retryModelSceneRead(() => bindModelScene(next, directory, signal, undefined, editing), signal);
+    const bound = await retryModelSceneRead(() => bindModelScene(next, directory, signal, undefined, editing, clouds), signal);
     const old = current; current = bound; scene = next; await old.close();
   };
   const approval = async (kind: ModelProposalAuthority, proposalId: string): Promise<ApprovalObservation> => {
@@ -78,11 +78,19 @@ export function createModelAgentRuntime(call: ModelTurnRequest, initial: BoundMo
       const revision = context.torontoEditing?.points.artifactRevision ?? scene.toronto[0]?.artifactRevision ?? scene.areaOfInterest?.artifactRevision;
       if (!revision) throw new ModelError('invalid-scene');
       position = (await readSourcePoint(directory, { revision, key: reference.key }, signal)).position;
+    } else if (scene.mode === 'cloud' && reference.kind === 'cloud-point' && current.resolveReference) {
+      position = await current.resolveReference(reference, signal);
     } else throw new ModelError('invalid-scene');
     const result = await browser.request({ kind: 'select-reference', reference }, toolCallId);
     await retryModelSceneRead(() => current.check(), signal);
     if (result.status !== 'selected') return { status: 'unavailable' as const };
     const next = result.scene;
+    if (reference.kind === 'cloud-point') {
+      const previous = scene.cloud, cloud = next.cloud, added = cloud?.points.at(-1);
+      if (next.mode !== 'cloud' || !previous || !cloud || cloud.points.length !== previous.points.length + 1 || !added ||
+        canonicalProtocolJson(added.key) !== canonicalProtocolJson(reference.key) || canonicalProtocolJson(added.position) !== canonicalProtocolJson(position) ||
+        canonicalProtocolJson({ ...next, cloud: { ...cloud, points: cloud.points.slice(0, -1) } }) !== canonicalProtocolJson(scene)) throw new ModelError('invalid-tool-result');
+    }
     if (reference.kind === 'toronto-point') {
       const added = next.toronto.at(-1);
       if (next.toronto.length !== scene.toronto.length + 1 || !added || canonicalProtocolJson(added.key) !== canonicalProtocolJson(reference.key) ||

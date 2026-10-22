@@ -11,6 +11,7 @@ export interface VisualCaptureOptions {
   coverage: (captureCamera?: THREE.PerspectiveCamera) => VisualCoverage;
   /** Synchronous render-only recoloring; must not invalidate captures or change UI state. */
   pointColorMode?: { get: () => ModelCaptureColorMode; set: (mode: ModelCaptureColorMode) => void };
+  supportedColorModes?: readonly ModelCaptureColorMode[];
   /** Displayed point layers; blocking scene meshes are included automatically. */
   points: () => THREE.Object3D[];
   resolve: (object: THREE.Object3D, index: number) => VisualPointProvenance | undefined;
@@ -87,6 +88,7 @@ export function createVisualCapture(options: VisualCaptureOptions) {
       if (![width, height].every(n => Number.isSafeInteger(n) && n > 0 && n <= LIMITS.maxDimension)) throw new Error('Visual viewport exceeds capture limits');
       const view = canonicalModelCaptureRequest(request ?? { kind: 'current' });
       if (view.colorMode !== undefined && !options.pointColorMode) throw new Error('Capture point color mode unavailable in this viewer');
+      if (view.colorMode !== undefined && options.supportedColorModes && !options.supportedColorModes.includes(view.colorMode)) throw new Error('Capture color mode unavailable for this dataset');
       const liveColorMode = options.pointColorMode?.get();
       const recolor = view.colorMode !== undefined && view.colorMode !== liveColorMode;
       const frozenCamera = camera.clone();

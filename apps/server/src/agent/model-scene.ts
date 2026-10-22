@@ -17,6 +17,8 @@ import { readPreprocessing } from '../preprocessing/preprocessing-summary';
 import { createGroundSurface } from '../spatial/ground-surface';
 import { ModelError, type BoundModelScene } from './provider-model';
 import { assessUtilityBox, checkPlacementTerrain, type UtilityBoxAssessment } from '../placement/utility-box-placement';
+import { bindCloudModelScene } from './cloud-model-scene';
+import { preparedCloudRegistrations } from '../datasets/scene-registry';
 
 // One source reduction per authority, including across simultaneous chat sessions.
 const activeAreaScans = new WeakSet<PointOverrideSession>();
@@ -24,7 +26,8 @@ const activeAreaScans = new WeakSet<PointOverrideSession>();
 export interface ModelEditingAuthorities { readonly points: PointOverrideSession; readonly cad: TorontoCadSession; readonly objects?: SceneObjectSession; readonly placement?: PlacementSearchSession }
 
 /** Attachment metadata remains unverified; nearestLabel separately resolves original records and independently verifies its indexed result. */
-export async function bindModelScene(scene: ModelScene, directory: string, signal: AbortSignal, visual?: ModelVisualObservation, editing?: ModelEditingAuthorities): Promise<BoundModelScene> {
+export async function bindModelScene(scene: ModelScene, directory: string, signal: AbortSignal, visual?: ModelVisualObservation, editing?: ModelEditingAuthorities, clouds = preparedCloudRegistrations()): Promise<BoundModelScene> {
+  if (scene.mode === 'cloud') return bindCloudModelScene(scene, clouds, signal);
   signal.throwIfAborted();
   let closed = false;
   let artifact: SemanticArtifact | undefined;
@@ -101,6 +104,7 @@ export async function bindModelScene(scene: ModelScene, directory: string, signa
       return { searchGeometry: 'original-prepared-dataset', pointName: point.name, request, outcome };
     };
     return {
+      semanticLabels: Object.keys(TORONTO_SEMANTIC_LABELS).map(Number),
       ...(scene.mode === 'toronto' && retained ? { sceneMarkBinding: {
         artifactRevision: retained.dataset.revision, frameId: 'toronto3d-local-v1' as const, units: 'm' as const,
         localOrigin: [627285, 4841948, 0] as const,

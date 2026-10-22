@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { createPointCloudViewport } from '../../viewer/point-cloud-viewport';
 import { SCENE_POINT_LIMIT, type CropBox, type CropSelection, type PointObservation, type DatasetInfo, type Vec3, type PointOverrideSnapshot, type PointMoveProposal, type TorontoCadSnapshot, type ModelCaptureRequest } from '@spatial/contracts';
 import type { SceneObjectSnapshot } from '@spatial/contracts';
 import { createSceneObjectRender } from './objects/scene-object-render';
@@ -26,20 +26,8 @@ import { createPolePickCache, createDetailPickCache, poleGestureKind, isPoleClic
 
 /** Disposable point projection; prepared dataset remains authoritative, not this render cache. */
 export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) => void, onSelect?: (selection: CropSelection) => void, onFailure?: (error: string) => void, onQuery?: (selection: PoleSelection) => void, onAdaptiveStatus?: (stats: AdaptiveStats) => void, onArea?: (corners?: readonly [Vec3, Vec3, Vec3, Vec3], error?: string) => void, onInteraction?: () => void, onObjectSelect?: (id: string) => void) {
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x101927);
-  const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 10_000);
-  camera.up.set(0, 0, 1);
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-  renderer.domElement.setAttribute('aria-label', 'Toronto3D point cloud, meters, right-handed Z-up');
-  renderer.domElement.setAttribute('role', 'img');
-  host.appendChild(renderer.domElement);
-  const controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
-  controls.zoomToCursor = true;
-  controls.maxDistance = 5000;
-  controls.minDistance = 1;
+  const viewportResources = createPointCloudViewport(host, { label: 'Toronto3D point cloud, meters, right-handed Z-up' });
+  const { scene, camera, renderer, controls } = viewportResources;
   const material = new THREE.PointsMaterial({ vertexColors: true, size: 2, sizeAttenuation: false });
   const points = new THREE.Points(new THREE.BufferGeometry(), material);
   scene.add(points);
@@ -116,6 +104,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
   const captureSource = createVisualCapture({
     renderer, scene, camera, target: () => controls.target.toArray() as [number, number, number],
     pointColorMode: { get: () => colorMode, set: applyColorMode },
+    supportedColorModes: ['rgb', 'type', 'semantic'],
     available: () => !disposed && !gpuFailed && !!dataset && !!overview && viewport.sync(),
     binding: () => {
       if (!dataset) throw new Error('Toronto dataset unavailable');
@@ -633,14 +622,13 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       renderer.domElement.removeEventListener('pointercancel', objectCancel, true);
       cancelAnimationFrame(frame);
       resize.disconnect();
-      controls.dispose();
       renderer.domElement.removeEventListener('pointerdown', pointerDown, true); renderer.domElement.removeEventListener('pointermove', pointerMove, true);
       renderer.domElement.removeEventListener('pointerup', pointerUp, true); renderer.domElement.removeEventListener('pointercancel', cancelGesture, true);
       renderer.domElement.removeEventListener('lostpointercapture', cancelGesture, true); renderer.domElement.removeEventListener('webglcontextlost', contextLost);
       overlay.remove();
       points.geometry.dispose(); material.dispose();
       cropLayer.dispose(); selection.geometry.dispose(); selectionMaterials.forEach(value => value.dispose());
-      renderer.dispose(); renderer.domElement.remove();
+      viewportResources.dispose();
     },
   };
 }

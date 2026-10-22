@@ -1,0 +1,171 @@
+{
+  "schema": "spatial-dataset-recipe-v1",
+  "id": "stpls3d-realworld",
+  "adapter": "stpls3d-realworld-ply-v1",
+  "upstream": "https://github.com/meidachen/STPLS3D#25-semantic-annotations",
+  "checksum_provenance": "SHA256 of local originals; not publisher signatures",
+  "coordinates": {
+    "units": "m",
+    "handedness": "right",
+    "upAxis": "Z",
+    "localOrigin": [
+      0,
+      0,
+      0
+    ]
+  },
+  "crs": "Unspecified source local meters; no inter-scene transform inferred",
+  "semantic_classes": {
+    "0": "Ground",
+    "1": "Building",
+    "2": "Low vegetation",
+    "3": "Medium vegetation",
+    "4": "High vegetation",
+    "5": "Vehicle",
+    "6": "Truck",
+    "7": "Aircraft",
+    "8": "Military vehicle",
+    "9": "Bike",
+    "10": "Motorcycle",
+    "11": "Light pole",
+    "12": "Street sign",
+    "13": "Clutter",
+    "14": "Fence",
+    "15": "Road",
+    "17": "Windows",
+    "18": "Dirt",
+    "19": "Grass"
+  },
+  "instances": "Not present in original PLY; none synthesized",
+  "coordinate_grid_m": 0.001,
+  "max_coordinate_error_m": 0.001501,
+  "converter": {
+    "reference_executable_sha256": "b4fc33f94acc807225510c986da27f99e778ffddd32a7a7519b7d9a2ccdf8465"
+  },
+  "sources": [
+    {
+      "file": "OCCC_points.ply",
+      "source_file_id": 1,
+      "scene": "occc",
+      "points": 38914634,
+      "bytes": 622634364,
+      "sha256": "da5c887be997c5a7bbc582bd35508006ebfbe074802c8344be2b39567f016905",
+      "bounds": {
+        "min": [
+          -291.38836669921875,
+          -410.5057678222656,
+          -34.38999557495117
+        ],
+        "max": [
+          383.86175537109375,
+          488.3335266113281,
+          15.769274711608887
+        ]
+      },
+      "semantic_counts": {
+        "1": 14742339,
+        "2": 6685428,
+        "5": 964766,
+        "11": 74233,
+        "13": 145289,
+        "14": 56405,
+        "15": 8636482,
+        "18": 1393234,
+        "19": 6216458
+      }
+    },
+    {
+      "file": "RA_points.ply",
+      "source_file_id": 2,
+      "scene": "ra",
+      "points": 6825065,
+      "bytes": 109201259,
+      "sha256": "3360ba37bf9b8a6da31f6ccaf16df9385f3ca8c70d7cb5195fbd9f431f114004",
+      "bounds": {
+        "min": [
+          -124.32716369628906,
+          -135.25416564941406,
+          0.8722454905509949
+        ],
+        "max": [
+          131.9701690673828,
+          134.0130157470703,
+          18.27903938293457
+        ]
+      },
+      "semantic_counts": {
+        "1": 2388323,
+        "2": 1460336,
+        "5": 133085,
+        "11": 18870,
+        "13": 32383,
+        "14": 333862,
+        "15": 2054448,
+        "18": 32315,
+        "19": 371443
+      }
+    },
+    {
+      "file": "USC_points.ply",
+      "source_file_id": 3,
+      "scene": "usc",
+      "points": 94694849,
+      "bytes": 1515117804,
+      "sha256": "cb12d22557fb068543c51254938d522de2d6ecd65669f40fb3d6203ff5b58106",
+      "bounds": {
+        "min": [
+          -464.1109619140625,
+          -366.32318115234375,
+          25.9304141998291
+        ],
+        "max": [
+          618.6171875,
+          440.770751953125,
+          90.9738540649414
+        ]
+      },
+      "semantic_counts": {
+        "1": 40094389,
+        "2": 27996830,
+        "5": 478130,
+        "11": 179555,
+        "13": 2112812,
+        "14": 819305,
+        "15": 16051158,
+        "18": 828581,
+        "19": 6134089
+      }
+    },
+    {
+      "file": "WMSC_points.ply",
+      "source_file_id": 4,
+      "scene": "wmsc",
+      "points": 9977764,
+      "bytes": 159644443,
+      "sha256": "b654ee6f360c67c4c8292e93260ede8892d611aa159f0938c2df23dfac18aa32",
+      "bounds": {
+        "min": [
+          -266.79168701171875,
+          -177.84178161621094,
+          -77.99011993408203
+        ],
+        "max": [
+          223.61839294433594,
+          115.11868286132812,
+          -28.066471099853516
+        ]
+      },
+      "semantic_counts": {
+        "1": 996180,
+        "2": 2086770,
+        "5": 42033,
+        "11": 6232,
+        "13": 134859,
+        "14": 76296,
+        "15": 754171,
+        "18": 4700616,
+        "19": 1180607
+      }
+    }
+  ]
+}

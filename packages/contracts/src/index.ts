@@ -1,3 +1,6 @@
+export * from './elevation';
+export * from './terrain';
+export * from './prepared-node-binary';
 export { ADAPTIVE_BINARY_MIME, ADAPTIVE_BINARY_LIMITS, encodeAdaptiveBinary, decodeAdaptiveBinary } from './adaptive-binary';
 export type { AdaptiveBinaryIdentity, AdaptiveBinaryInput, AdaptiveBinaryPayload } from './adaptive-binary';
 export * from './scene-objects';
@@ -11,6 +14,8 @@ export { POINT_OVERRIDE_LIMITS, canonicalPointMoveProposalRequest, canonicalPoin
 export type { PointOverrideBinding, PointOverrideEntry, PointOverrideSnapshot, PointMove, PointMoveProposal, PointMoveProposalRequest, PointMoveApprovalRequest, PointMoveUndoRequest, PointOverrideErrorCode, PointOverrideReply } from './point-overrides';
 export { MODEL_VISUAL_LIMITS, canonicalModelVisualObservation, canonicalModelVisualToolResult, modelVisualImageSize, modelVisualSourcePixel } from './model-visual';
 export type { ModelVisualObservation } from './model-visual';
+export { canonicalModelCloudScene } from './cloud-scene';
+export type { ModelCloudScene, ModelCloudPoint } from './cloud-scene';
 export type { ModelVisualToolResult } from './model-visual';
 export { VISUAL_OBSERVATION_LIMITS } from './visual-observation';
 export type { VisualJson, VisualBinding, VisualCoverage, VisualPointProvenance, VisualObservation, VisualPixelResolution } from './visual-observation';

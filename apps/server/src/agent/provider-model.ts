@@ -1,7 +1,9 @@
+import { canonicalElevationCoordinates, type ElevationQuery } from '@spatial/contracts';
 import { randomUUID } from 'node:crypto';
 import type { AgentToolsInspection } from '../../../../packages/contracts/src/agent-tools-inspection';
 import { canonicalPerceptionQuery, type ModelPointQuery } from './model-perception';
 import { SceneExploration, PERCEPTION_TOOLS, MARK_TOOLS } from './scene-exploration';
+import { sceneToolCapabilities } from './scene-capabilities';
 import type { SceneMarkSnapshot } from '@spatial/contracts';
 import { PRODUCT_SKILLS, listProductSkills, loadProductSkill, type ProductSkillId } from './product-agent-skills';
 import type { AreaCandidateSettings, AreaCandidateResult } from '@spatial/contracts';
@@ -278,13 +280,16 @@ const SKILL_TOOLS = [
   { type: 'function', name: 'load_skill', description: 'Read a runtime workflow by catalog skillId, including dependencies. Read instructions in the next request before executing workflow tools. No geometry mutation or capability grant.', parameters: { type: 'object', properties: { skillId: { type: 'string', maxLength: 80 } }, required: ['skillId'], additionalProperties: false }, strict: true },
 ];
 const captureVector = { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 };
-const CAPTURE_TOOL = { type: 'function', name: 'capture_scene', description: 'Capture a browser scene image from current, top-down or an explicit local-meter camera. Optional colorMode: rgb for natural RGB, type for semantic point-type colors (Toronto source layers); omit to use the user’s current mode. Capture preserves the user’s viewport and display mode; unsupported viewers return unavailable. Before recommending candidate locations, use a relevant view and inspect the returned image; top-down helps compare layout. Observation only, not clearance/CAD verification. No geometry mutation or user approval.',
-  parameters: { type: 'object', properties: { kind: { type: 'string', enum: ['current', 'top-down', 'camera'] }, colorMode: { type: 'string', enum: ['rgb', 'type'] }, position: captureVector, target: captureVector, up: captureVector }, required: ['kind'], additionalProperties: false }, strict: false };
+const CAPTURE_TOOL = { type: 'function', name: 'capture_scene', description: 'Capture a browser scene image from current, top-down or an explicit local-meter camera. Optional colorMode: rgb, semantic (type is an alias), or native instance colors when supported; omit to use the user’s current mode. Capture preserves the user’s viewport and display mode; unsupported viewers return unavailable. Before recommending candidate locations, use a relevant view and inspect the returned image; top-down helps compare layout. Observation only, not clearance/CAD verification. No geometry mutation or user approval.',
+  parameters: { type: 'object', properties: { kind: { type: 'string', enum: ['current', 'top-down', 'camera'] }, colorMode: { type: 'string', enum: ['rgb', 'type', 'semantic', 'instance'] }, position: captureVector, target: captureVector, up: captureVector }, required: ['kind'], additionalProperties: false }, strict: false };
 const SELECT_TOOL = { type: 'function', name: 'select_reference', description: 'Add an original Toronto source point by key to numbered scene references. No geometry mutation or user approval.',
   parameters: { type: 'object', properties: { kind: { type: 'string', enum: ['toronto-point'] }, key: { type: 'object', properties: { sourceFileId: { type: 'integer', minimum: 1, maximum: 4 }, sourceRow: { type: 'integer', minimum: 0 } }, required: ['sourceFileId', 'sourceRow'], additionalProperties: false } }, required: ['kind', 'key'], additionalProperties: false }, strict: true };
 type ToolSchema = { type: string; name: string; description: string; parameters: Record<string, unknown>; strict: boolean };
 /** Each registration shares its exact schema and gating conditions with the runtime and inspector. */
+const ELEVATION_TOOL: ToolSchema = { type: 'function', name: 'query_elevation', description: 'Read the bound source raster cell at local-meter x/y: classified DTM terrain elevation, DSM upper-surface elevation, DSM-minus-DTM height and ground/surface support. NoData remains unavailable; no interpolation, geometry edits or clearance claims.', parameters: { type: 'object', properties: { x: { type: 'number', minimum: -10000000, maximum: 10000000 }, y: { type: 'number', minimum: -10000000, maximum: 10000000 } }, required: ['x', 'y'], additionalProperties: false }, strict: true };
+
 const TOOL_REGISTRY: readonly { schema: ToolSchema; gate: string; requirements: readonly string[] }[] = [
+  { schema: ELEVATION_TOOL, gate: 'elevation', requirements: ['Valid scene-bound DTM/DSM GeoTIFF artifacts'] },
   ...SKILL_TOOLS.map(schema => ({ schema, gate: 'always', requirements: [] })),
   ...MARK_TOOLS.map(schema => ({ schema, gate: 'marks', requirements: ['Toronto mode', 'Revision-bound scene mark authority'] })),
   { schema: PERCEPTION_TOOLS[0]!, gate: 'query', requirements: ['Bound original-source spatial query capability'] },
@@ -293,7 +298,7 @@ const TOOL_REGISTRY: readonly { schema: ToolSchema; gate: string; requirements: 
   ...OBJECT_TOOLS.map(schema => ({ schema, gate: 'objects', requirements: ['Toronto mode', 'Bound authored-object list, lookup and point-proposal capabilities'] })),
   ...TOOLS[0]!.tools.map(schema => ({ schema, gate: 'always', requirements: [] })),
   { schema: CAPTURE_TOOL, gate: 'capture', requirements: ['Bound browser capture bridge; viewer may return unavailable'] },
-  { schema: SELECT_TOOL, gate: 'select', requirements: ['Toronto mode', 'Bound browser reference-selection bridge'] },
+  { schema: SELECT_TOOL, gate: 'select', requirements: ['Bound original-source reference resolver', 'Bound browser reference-selection bridge'] },
   { schema: VISUAL_TOOL, gate: 'visual', requirements: ['Current-turn attached or captured image; live pixel grounding may be unavailable'] },
   { schema: NEAREST_TOOL, gate: 'nearest', requirements: ['Toronto mode', 'Attached Toronto source point', 'Bound verified nearest-label capability'] },
   { schema: POINT_MOVE_TOOL, gate: 'moves', requirements: ['Toronto mode', 'Attached Toronto source point', 'Bound point-move proposal authority', 'Individual human Accept before publication'] },
@@ -302,14 +307,24 @@ const TOOL_REGISTRY: readonly { schema: ToolSchema; gate: string; requirements: 
 ];
 
 export function registeredSceneTools(scene: ModelScene, bound: BoundModelScene, visual: boolean, marks: boolean): ToolSchema[] {
-  const gates: Record<string, unknown> = { always: true, marks, query: bound.queryPoints, ground: bound.groundElevation,
-    aoi: bound.queryAoiPoints, objects: scene.mode === 'toronto' && bound.listObjects && bound.getObject && bound.proposePointCreate,
-    capture: bound.captureScene, select: scene.mode === 'toronto' && bound.selectReference, visual,
-    nearest: scene.mode === 'toronto' && scene.toronto.length > 0 && bound.nearestLabel,
-    moves: scene.mode === 'toronto' && scene.toronto.length > 0 && bound.proposePointMove,
-    nearestMoves: scene.mode === 'toronto' && scene.toronto.length > 0 && bound.proposeNearestPointMove,
-    cad: scene.mode === 'toronto' && bound.proposeCad };
-  return TOOL_REGISTRY.filter(entry => gates[entry.gate]).map(entry => entry.schema);
+  const gates = sceneToolCapabilities(scene, bound, visual, marks);
+  return TOOL_REGISTRY.filter(entry => gates[entry.gate as keyof typeof gates]).map(entry => {
+    if (entry.schema.name === 'query_points' && bound.semanticLabels) {
+      const schema = structuredClone(entry.schema);
+      const properties = schema.parameters.properties as Record<string, unknown>;
+      properties.label = { type: ['integer', 'null'], enum: [null, ...bound.semanticLabels] };
+      return schema;
+    }
+    if (entry.schema.name === 'select_reference' && scene.cloud) return {
+      ...entry.schema, description: 'Attach an original source point from this bound cloud by key. Observation only.',
+      parameters: { type: 'object', properties: { kind: { type: 'string', enum: ['cloud-point'] },
+        cloudId: { type: 'string', enum: [scene.cloud.id] }, revision: { type: 'string', enum: [scene.cloud.revision] },
+        key: { type: 'object', properties: { sourceFileId: { type: 'integer', minimum: 0, maximum: 65535 },
+          sourceRow: { type: 'integer', minimum: 0, maximum: 0xffffffff } }, required: ['sourceFileId', 'sourceRow'], additionalProperties: false } },
+        required: ['kind', 'cloudId', 'revision', 'key'], additionalProperties: false },
+    };
+    return entry.schema;
+  });
 }
 
 /** The exact Responses instructions builder, shared by runtime and the explicitly unbound preview. */
@@ -329,8 +344,11 @@ export function inspectAgentTools(): AgentToolsInspection {
 }
 interface Conversation { generation: string; model: string; binding: string; input: unknown[]; turns: number; touched: number; marks?: SceneMarkSnapshot }
 export interface BoundModelScene { readonly context: unknown; check(): Promise<void>; close(): Promise<void>;
+  readonly semanticLabels?: readonly number[];
+  resolveReference?(reference: ModelReferenceSelection, signal: AbortSignal): Promise<Vec3>;
   readonly sceneMarkBinding?: SceneMarkSnapshot['binding'];
   queryPoints?(args: ModelPointQuery, signal: AbortSignal): Promise<unknown>;
+  queryElevation?(args: { x: number; y: number }, signal: AbortSignal): Promise<ElevationQuery>;
   groundElevation?(args: { x: number; y: number }, signal: AbortSignal): Promise<unknown>;
   captureScene?(request: ModelCaptureRequest, toolCallId: string): Promise<ModelVisualObservation | undefined>;
   selectReference?(reference: ModelReferenceSelection, toolCallId: string): Promise<{ status: 'unavailable' } | { status: 'selected'; scene: ModelScene; context: unknown }>;
@@ -450,7 +468,9 @@ export class ProviderModel {
       for (const [id, conversation] of this.conversations) if (this.now() - conversation.touched >= L.conversationTtlMs) this.conversations.delete(id);
       let visual = call.visualObservation;
       let scene = call.scene;
-      const binding = canonicalProtocolJson({ mode: call.scene.mode });
+      const binding = canonicalProtocolJson({ mode: call.scene.mode, ...(call.scene.cloud ? {
+        cloudId: call.scene.cloud.id, revision: call.scene.cloud.revision, frameId: call.scene.cloud.frameId,
+        localOrigin: call.scene.cloud.localOrigin } : {}) });
       const previous = call.conversationId === null ? undefined : this.conversations.get(call.conversationId);
       if (call.conversationId !== null && (!previous || previous.generation !== generation || previous.model !== call.model || previous.binding !== binding)) fail('stale-conversation');
       if ((previous?.turns ?? 0) >= L.turns || (!previous && this.conversations.size >= L.conversations)) fail('history-limit');
@@ -488,11 +508,8 @@ export class ProviderModel {
         historyCheck(); await check();
         // Detach once, then inspect and serialize exactly this effective body, never an independently reconstructed prompt.
         const effectiveInput = input;
-        const nearest = scene.mode === 'toronto' && scene.toronto.length > 0 && bound.nearestLabel;
-        const pointMoves = scene.mode === 'toronto' && scene.toronto.length > 0 && bound.proposePointMove;
-        const nearestMoves = scene.mode === 'toronto' && scene.toronto.length > 0 && bound.proposeNearestPointMove;
-        const cad = scene.mode === 'toronto' && bound.proposeCad;
-        const objects = scene.mode === 'toronto' && bound.listObjects && bound.getObject && bound.proposePointCreate;
+        const capabilities = sceneToolCapabilities(scene, bound, !!visual, !!exploration);
+        const { nearest, moves: pointMoves, nearestMoves, cad, objects } = capabilities;
         const aoiPoints = bound.queryAoiPoints;
         const registered = registeredSceneTools(scene, bound, !!visual, !!exploration);
         const sceneTools = [{ ...TOOLS[0], tools: registered.filter(tool => !SKILL_TOOLS.some(skillTool => skillTool.name === tool.name)) }];
@@ -525,7 +542,7 @@ export class ProviderModel {
         for (const tool of toolCalls) {
           const skillCall = tool.name === 'list_skills' || tool.name === 'load_skill';
           if (skillCall ? ++skillCalls > L.skillCalls : ++calls > L.toolCalls) fail('tool-limit');
-          if (!(['list_skills', 'load_skill'].includes(String(tool.name)) || exploration && ['get_scene_marks', 'set_scene_marks'].includes(String(tool.name)) || bound.queryPoints && tool.name === 'query_points' || bound.groundElevation && tool.name === 'ground_elevation' || aoiPoints && tool.name === 'query_aoi_points' || objects && ['list_objects', 'get_object', 'propose_point_create'].includes(String(tool.name)) || tool.name === 'inspect_scene' || bound.captureScene && tool.name === 'capture_scene' || scene.mode === 'toronto' && bound.selectReference && tool.name === 'select_reference' || visual && tool.name === 'resolve_visual_pixel' || nearest && tool.name === 'nearest_label' || pointMoves && tool.name === 'propose_point_move' || nearestMoves && tool.name === 'propose_point_move_to_nearest_label' || cad && (tool.name === 'propose_cad_box' || tool.name === 'propose_cad_cylinder')) || tool.namespace !== 'scene' || typeof tool.call_id !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/u.test(tool.call_id) || callIds.has(tool.call_id) || typeof tool.arguments !== 'string') fail('unsupported-tool');
+          if (!registered.some(schema => schema.name === tool.name) || tool.namespace !== 'scene' || typeof tool.call_id !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/u.test(tool.call_id) || callIds.has(tool.call_id) || typeof tool.arguments !== 'string') fail('unsupported-tool');
           callIds.add(tool.call_id);
           let args: unknown; try { args = JSON.parse(tool.arguments); } catch { return fail('unsupported-tool'); }
           let context: unknown;
@@ -558,8 +575,12 @@ export class ProviderModel {
             catch { return fail('invalid-scene-marks'); }
           } else if (tool.name === 'query_points') {
             let request: ModelPointQuery;
-            try { request = canonicalPerceptionQuery(record(args) as unknown as ModelPointQuery); } catch { return fail('invalid-spatial-query'); }
+            try { request = canonicalPerceptionQuery(record(args) as unknown as ModelPointQuery, bound.semanticLabels); } catch { return fail('invalid-spatial-query'); }
             await check(); context = await modelAbortable(bound.queryPoints!(request, signal), signal); await check();
+          } else if (tool.name === 'query_elevation') {
+            let argsXY: { x: number; y: number };
+            try { argsXY = canonicalElevationCoordinates(args); } catch { return fail('invalid-spatial-query'); }
+            await check(); context = await modelAbortable(bound.queryElevation!(argsXY, signal), signal); await check();
           } else if (tool.name === 'ground_elevation') {
             const a = record(args);
             if (Object.keys(a).sort().join(',') !== 'x,y' || [a.x, a.y].some(n => typeof n !== 'number' || !Number.isFinite(n) || Math.abs(n) > 1e7)) fail('invalid-ground-query');
@@ -601,7 +622,6 @@ export class ProviderModel {
             } else { observedRound = -1; context = { status: 'unavailable' }; }
           } else if (tool.name === 'select_reference') {
             let reference: ModelReferenceSelection; try { reference = canonicalModelReferenceSelection(args); } catch { return fail('unsupported-tool'); }
-            if (reference.kind !== 'toronto-point') fail('unsupported-tool');
             const selected = await modelAbortable(bound.selectReference!(reference, tool.call_id), signal);
             if (selected.status === 'selected') scene = selected.scene;
             context = selected;

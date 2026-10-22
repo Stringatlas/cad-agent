@@ -9,11 +9,11 @@ export interface ModelPointQuery {
 }
 const vector = (v: unknown): v is Vec3 => Array.isArray(v) && v.length === 3 && v.every(n => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= 1e7);
 /** Copy and defend inputs before any asynchronous work; provider schemas are not authority. */
-export function canonicalPerceptionQuery(args: ModelPointQuery): ModelPointQuery {
+export function canonicalPerceptionQuery(args: ModelPointQuery, allowedLabels: readonly number[] = [0, 1, 2, 3, 4, 5, 6, 7, 8]): ModelPointQuery {
   if (!args || !['nearest', 'radius', 'box'].includes(args.operation) ||
     Object.keys(args).some(k => !['operation', 'position', 'radiusMeters', 'bounds', 'label', 'maxResults'].includes(k)) ||
     !Number.isSafeInteger(args.maxResults) || args.maxResults < 1 || args.maxResults > 64 ||
-    (args.label != null && (!Number.isInteger(args.label) || args.label < 0 || args.label > 8))) throw new RangeError('Invalid spatial query');
+    (args.label != null && (!Number.isInteger(args.label) || !allowedLabels.includes(args.label)))) throw new RangeError('Invalid spatial query');
   if (args.operation === 'box') {
     if (!args.bounds || Object.keys(args.bounds).sort().join(',') !== 'max,min' || !vector(args.bounds.min) || !vector(args.bounds.max) ||
       args.position !== undefined || args.radiusMeters !== undefined) throw new RangeError('Invalid spatial box');

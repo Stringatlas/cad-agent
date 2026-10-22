@@ -28,7 +28,7 @@ export function createDemoServer(options: { datasetRoot?: string; preparedClouds
   const placementRoutes = createPlacementSearchRoutes(placement);
   const objects = new SceneObjectSession(directory, points);
   const objectRoutes = createSceneObjectRoutes(directory, points, objects);
-  const modelRoutes = createModelChatRoutes(auth, directory, options.modelTransport, { points, cad, objects, placement });
+  const modelRoutes = createModelChatRoutes(auth, directory, options.modelTransport, { points, cad, objects, placement }, options.preparedClouds);
   const datasetRoutes = createDatasetRoutes(options.datasetRoot);
   const preparedRoutes = createPreparedCloudRoutes(options.preparedClouds);
   const pointOverrideRoutes = createPointOverrideRoutes(directory, points);

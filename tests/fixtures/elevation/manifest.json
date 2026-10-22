@@ -1,0 +1,133 @@
+{
+  "version": 1,
+  "kind": "classified-dtm-observed-dsm-v1",
+  "source": {
+    "descriptor": {
+      "version": 1,
+      "format": "potree2-uncompressed",
+      "id": "elevation-fixture",
+      "frameId": "elevation-local",
+      "coordinates": {
+        "units": "m",
+        "handedness": "right",
+        "upAxis": "Z",
+        "localOrigin": [
+          0,
+          0,
+          0
+        ]
+      },
+      "sources": [
+        {
+          "id": 42,
+          "name": "fixture.ply",
+          "points": 11
+        }
+      ],
+      "semantics": {
+        "attribute": "semantic_id",
+        "type": "uint8",
+        "classes": {
+          "0": "Ground",
+          "1": "Building",
+          "2": "Vegetation",
+          "15": "Road",
+          "18": "Dirt",
+          "19": "Grass"
+        }
+      }
+    },
+    "revision": "9d5e9a93c084e648b9380b0108e32599ffc6448794b016b25ccc4ca8ed18637a",
+    "bounds": {
+      "min": [
+        0.1,
+        0.1,
+        1
+      ],
+      "max": [
+        2.2,
+        1.1,
+        25
+      ]
+    },
+    "totalPoints": 11,
+    "capabilities": {
+      "boundedSample": true,
+      "adaptiveDisplay": true,
+      "semanticLabels": true,
+      "instanceLabels": false,
+      "fullResolution": false,
+      "editing": false
+    }
+  },
+  "grid": {
+    "width": 3,
+    "height": 2,
+    "origin": [
+      0.0,
+      2.0
+    ],
+    "resolution": 1.0,
+    "rowDirection": "south",
+    "pixelInterpretation": "area"
+  },
+  "settings": {
+    "groundLabels": [
+      0,
+      15,
+      18,
+      19
+    ],
+    "minimumGroundSupport": 3,
+    "dtmMethod": "classified-ground-mean",
+    "dsmMethod": "all-point-maximum",
+    "interpolation": "none",
+    "nodata": "NaN"
+  },
+  "coverage": {
+    "sourcePoints": 11,
+    "groundPoints": 8
+  },
+  "layers": {
+    "dtm": {
+      "min": 1.0,
+      "max": 11.0,
+      "validCells": 2
+    },
+    "dsm": {
+      "min": 6.0,
+      "max": 25.0,
+      "validCells": 4
+    },
+    "ndsm": {
+      "min": 5.0,
+      "max": 9.0,
+      "validCells": 2
+    }
+  },
+  "sourcePayloadSha256": "e696d3de32effc1b00992122a30352a6e4909b59b8369726f0e31c13d0878c91",
+  "assets": {
+    "dtm.tif": {
+      "bytes": 3109,
+      "sha256": "ef86b23b5abf691f4aa703c3fa2b557796edab436432890e1365488dc2d2ddf4"
+    },
+    "dsm.tif": {
+      "bytes": 3121,
+      "sha256": "b06aa1232a16d705b4dbffe998d68e2bade2c8bc0a81f179b7f53b71c9a63629"
+    },
+    "support.tif": {
+      "bytes": 3261,
+      "sha256": "4d46ebe3e251c4851c43a90ff69aa27e274e307b72ba8750d6dec4a99555300d"
+    },
+    "ground-range.tif": {
+      "bytes": 4338,
+      "sha256": "29c78be9ae63a1b4c019a29da6631cd3dd96e0a6b0d85310d5f1f8f8a2075661"
+    }
+  },
+  "libraries": {
+    "numpy": "2.4.4",
+    "rasterio": "1.5.2",
+    "gdal": "3.12.2"
+  },
+  "revision": "0dbd4da5008f2084da026f227607491c248aba1e67aeed2595329d3a1280c8a3"
+}
