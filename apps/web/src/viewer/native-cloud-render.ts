@@ -1,11 +1,13 @@
 import * as THREE from 'three';
+import { MAX_ADAPTIVE_POINTS } from './adaptive-plan';
 import type { PreparedNodePayload } from '@spatial/contracts';
 import { cloudColors, semanticColor, type CloudColorMode } from './cloud-colors';
 
 /** One bounded packed draw buffer; provenance stays in original Float64 native payloads. */
 export function createNativeCloudRender(material: THREE.PointsMaterial, budget: number, unassigned = -100) {
-  if (!Number.isSafeInteger(budget) || budget < 65536 || budget > 3000000) throw new RangeError('Invalid display budget');
-  const positions = new Float32Array(budget * 3), colors = new Uint8Array(budget * 3);
+  if (!Number.isSafeInteger(budget) || budget < 65536 || budget > MAX_ADAPTIVE_POINTS) throw new RangeError('Invalid display budget');
+  let capacity = Math.min(budget, 131072);
+  let positions = new Float32Array(capacity * 3), colors = new Uint8Array(capacity * 3);
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3, true).setUsage(THREE.DynamicDrawUsage));
@@ -13,6 +15,15 @@ export function createNativeCloudRender(material: THREE.PointsMaterial, budget: 
   const points = new THREE.Points(geometry, material); points.visible = false;
   let entries: { payload: PreparedNodePayload; start: number }[] = [], count = 0, mode: CloudColorMode = 'rgb', disposed = false;
   let binding: string | undefined;
+  const resize = (slots: number) => {
+    const nextPositions = new Float32Array(slots * 3), nextColors = new Uint8Array(slots * 3);
+    nextPositions.set(positions.subarray(0, count * 3)); nextColors.set(colors.subarray(0, count * 3));
+    // Dispose the old GPU attributes before replacing them; geometry identity and
+    // source spans remain stable. Three reinitializes it on the next render.
+    geometry.dispose(); positions = nextPositions; colors = nextColors; capacity = slots;
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3, true).setUsage(THREE.DynamicDrawUsage));
+  };
   const palette = new Map<number, readonly number[]>();
   const classColor = (label: number | undefined): readonly number[] => {
     const key = label ?? -1;
@@ -21,7 +32,9 @@ export function createNativeCloudRender(material: THREE.PointsMaterial, budget: 
   };
   const upload = (name: string, start: number, length: number) => {
     const attr = geometry.getAttribute(name) as THREE.BufferAttribute;
-    attr.clearUpdateRanges(); attr.addUpdateRange(start, length); attr.needsUpdate = true;
+    // Several capture nodes can be packed before the next frame. Preserve every
+    // pending upload; a later append must not erase an earlier compaction/recolor.
+    attr.addUpdateRange(start, length); attr.needsUpdate = true;
   };
   const recolor = (payload: PreparedNodePayload, start: number) => {
     const native = cloudColors(payload.colors, payload.labels, payload.instances, mode, classColor, unassigned);
@@ -39,13 +52,31 @@ export function createNativeCloudRender(material: THREE.PointsMaterial, budget: 
   return {
     points,
     get count() { return count; },
+    get capacity() { return capacity; },
+    setBudget(next: number) {
+      if (!Number.isSafeInteger(next) || next < 65536 || next > MAX_ADAPTIVE_POINTS || next < count) throw new RangeError('Invalid display budget');
+      if (disposed) return;
+      if (capacity > next) resize(next);
+      budget = next;
+    },
     get names() { return entries.map(entry => entry.payload.name); },
+    copySource(start: number, length: number, originals: Float64Array, keys: Uint32Array) {
+      if (disposed || start < 0 || length < 0 || start + length > count || originals.length !== length * 3 || keys.length !== length * 2) throw new Error('Invalid capture source range');
+      for (const entry of entries) {
+        const begin = Math.max(start, entry.start), end = Math.min(start + length, entry.start + entry.payload.count);
+        if (end <= begin) continue;
+        const source = begin - entry.start, target = begin - start;
+        originals.set(entry.payload.positions.subarray(source * 3, (source + end - begin) * 3), target * 3);
+        keys.set(entry.payload.sourceIds.subarray(source * 2, (source + end - begin) * 2), target * 2);
+      }
+    },
     add(payload: PreparedNodePayload) {
       if (disposed || entries.some(entry => entry.payload.name === payload.name) || count + payload.count > budget) throw new Error('Invalid native render admission');
       const nextBinding = JSON.stringify([payload.cloudId, payload.revision]);
       if (binding && binding !== nextBinding) throw new Error('Mismatched native render binding');
       const float = Float32Array.from(payload.positions);
       if (!float.every(Number.isFinite)) throw new Error('Native position exceeds render precision');
+      if (count + payload.count > capacity) resize(Math.min(budget, Math.max(count + payload.count, capacity * 2)));
       recolor(payload, count); positions.set(float, count * 3);
       entries.push({ payload, start: count }); binding = nextBinding;
       const start = count; count += payload.count;

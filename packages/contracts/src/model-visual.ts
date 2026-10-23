@@ -1,6 +1,7 @@
 import { assertVec3 } from './index';
 import { canonicalProtocolJson, protocolHash, protocolInteger, protocolKeys, protocolRecord, protocolToken } from './tool-protocol';
 import type { VisualObservation, VisualPixelResolution } from './visual-observation';
+import { canonicalAgentViewReceipt } from './agent-view';
 
 /** Model transport may crop/resample the source capture; viewport and camera always describe the ORIGINAL capture. */
 export interface ModelVisualObservation extends Omit<VisualObservation, 'image'> {
@@ -61,6 +62,7 @@ export function canonicalModelVisualObservation(value: unknown): ModelVisualObse
   if (binding.units !== 'm' || !(typeof binding.sourceRevision === 'string' && binding.sourceRevision.length <= 256 || Number.isSafeInteger(binding.sourceRevision) && (binding.sourceRevision as number) >= 0)) throw new TypeError('Invalid binding');
   const coverage = protocolRecord(r.coverage); protocolToken(coverage.kind); protocolInteger(coverage.displayedPointCount, Number.MAX_SAFE_INTEGER);
   if (typeof coverage.complete !== 'boolean') throw new TypeError('Invalid coverage');
+  if (coverage.agentView !== undefined) canonicalAgentViewReceipt(coverage.agentView);
   const metadata = { ...r, image: { mimeType: image.mimeType, sha256: image.sha256, byteLength: image.byteLength } };
   if (new TextEncoder().encode(canonicalProtocolJson(metadata, { maxStringLength: 4096, maxNodes: 2048, maxArrayLength: 128 })).length > MODEL_VISUAL_LIMITS.metadataBytes) throw new TypeError('Visual metadata limit');
   return JSON.parse(JSON.stringify(r)) as ModelVisualObservation;

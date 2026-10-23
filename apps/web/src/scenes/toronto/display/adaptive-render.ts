@@ -1,10 +1,11 @@
 import * as THREE from 'three';
+import { DEFAULT_ADAPTIVE_POINTS, MAX_ADAPTIVE_POINTS } from '../../../viewer/adaptive-plan';
 import type { AdaptivePayload } from './adaptive-display';
 import { createNativePickCache, type PoleSelection } from '../inspection/pole-picking';
 import { pointTypeColor, type PointColorMode } from './point-colors';
 
 export const ADAPTIVE_BATCH_CAPACITY = 131_072;
-export const ADAPTIVE_RESIDENT_LIMIT = 3_000_000;
+export const ADAPTIVE_RESIDENT_LIMIT = DEFAULT_ADAPTIVE_POINTS;
 
 export interface AdaptiveRenderOptions {
   /** Must be paired. These project committed overrides, never proposals, onto GPU buffers. */
@@ -47,7 +48,7 @@ const linearColors = Uint8Array.from({ length: 256 }, (_, value) => {
 export function createAdaptiveRender(material: THREE.PointsMaterial, options: AdaptiveRenderOptions = {}) {
   const capacity = options.capacity ?? ADAPTIVE_BATCH_CAPACITY;
   const budget = options.pointBudget ?? ADAPTIVE_RESIDENT_LIMIT;
-  if (![65_536, 131_072].includes(capacity) || !Number.isSafeInteger(budget) || budget < 1 || budget > ADAPTIVE_RESIDENT_LIMIT || !!options.register !== !!options.unregister) throw new RangeError('Invalid adaptive render options');
+  if (![65_536, 131_072].includes(capacity) || !Number.isSafeInteger(budget) || budget < 1 || budget > MAX_ADAPTIVE_POINTS || !!options.register !== !!options.unregister) throw new RangeError('Invalid adaptive render options');
   const group = new THREE.Group();
   const nodes = new Map<string, Node>();
   let batches: Batch[] = [], count = 0, disposed = false;
@@ -219,6 +220,23 @@ export function createAdaptiveRender(material: THREE.PointsMaterial, options: Ad
     get count() { return count; },
     get chunks() { return batches.length; },
     get names(): readonly string[] { return [...nodes.keys()]; },
+    captureSource(object: THREE.Object3D) {
+      const batch = batches.find(candidate => candidate.object === object);
+      if (disposed || !batch) return;
+      return { count: batch.count, copy(start: number, length: number, originals: Float64Array, keys: Uint32Array) {
+        if (disposed || start < 0 || length < 0 || start + length > batch.count || originals.length !== length * 3 || keys.length !== length * 2) throw new Error('Invalid capture source range');
+        let cursor = 0;
+        for (const span of batch.spans) {
+          const begin = Math.max(start, cursor), end = Math.min(start + length, cursor + span.count);
+          if (end > begin) {
+            const source = span.start + begin - cursor, target = begin - start, payload = span.node.payload;
+            originals.set((payload.positions as Float64Array).subarray(source * 3, (source + end - begin) * 3), target * 3);
+            keys.set((payload.sourceIds as Uint32Array).subarray(source * 2, (source + end - begin) * 2), target * 2);
+          }
+          cursor += span.count;
+        }
+      } };
+    },
     setColorMode(mode: PointColorMode) {
       if (disposed) throw new Error('Adaptive render is disposed');
       if (mode === colorMode) return;

@@ -6,6 +6,7 @@ export interface ElevationInfo {
   readonly settings: { readonly groundLabels: readonly number[]; readonly minimumGroundSupport: number; readonly dtmMethod: 'classified-ground-mean'; readonly dsmMethod: 'all-point-maximum'; readonly interpolation: 'none'; readonly nodata: 'NaN' };
   readonly layers: Readonly<Record<ElevationLayer, { readonly min: number | null; readonly max: number | null; readonly validCells: number }>>;
   readonly coverage: { readonly sourcePoints: number; readonly groundPoints: number };
+  readonly terrain?: import('./terrain').TerrainInfo;
 }
 export interface ElevationQuery {
   readonly kind: 'elevation-query'; readonly cloudId: string; readonly sourceRevision: string; readonly modelRevision: string;
@@ -21,6 +22,7 @@ export interface ElevationGrid {
   readonly info: ElevationInfo; readonly layer: ElevationLayer; readonly width: number; readonly height: number;
   readonly origin: readonly [number, number]; readonly cellSize: readonly [number, number]; readonly values: readonly (number | null)[];
   readonly resampling: 'nearest';
+  readonly color?: { readonly kind: 'slope'; readonly units: 'degrees'; readonly values: readonly (number | null)[]; readonly min: number | null; readonly max: number | null };
 }
 export function canonicalElevationCoordinates(value: unknown): { x: number; y: number } {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new RangeError('Invalid elevation query');

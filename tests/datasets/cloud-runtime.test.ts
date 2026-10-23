@@ -196,3 +196,81 @@ test('native capture modes round trip and cloud contracts reject mixed coordinat
   for (const colorMode of ['semantic', 'instance'] as const) assert.deepEqual(canonicalModelCaptureRequest({ kind: 'current', colorMode }), { kind: 'current', colorMode });
   assert.throws(() => canonicalModelScene({ mode: 'cloud', toronto: [], cloud: { id: 'x', revision: 'a'.repeat(64), frameId: 'x-local', localOrigin: [0, 0, 0], points: [] }, objects: [] }));
 });
+
+test('prepared hypotheses use checked cloud binding, survive continuation and exclude failed-turn revisions', async t => {
+  const f = await fixture(t), info = await createPreparedCloudRegistry({ [f.id]: f.root }).open(f.id).info();
+  const scene = canonicalModelScene({ mode: 'cloud', toronto: [], cloud: { id: f.id, revision: info.revision,
+    frameId: info.descriptor.frameId, localOrigin: [0, 0, 0], points: [] } });
+  const signal = new AbortController().signal;
+  const bound = await bindModelScene(scene, '/unused', signal, undefined, undefined, { [f.id]: f.root });
+  assert.deepEqual(bound.sceneMarkBinding, { mode: 'cloud', cloudId: f.id, artifactRevision: info.revision,
+    frameId: info.descriptor.frameId, units: 'm', localOrigin: [0, 0, 0] });
+  const auth = new ProviderAuth({ mode: 'api-key', apiKey: 'cloud-fixture-only' });
+  let round = 0, retained: any;
+  const model = new ProviderModel(auth, withProductSkills(async (url, init) => {
+    if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'cloud-marks' }] });
+    const body = JSON.parse(String(init?.body));
+    const result = (id: string) => JSON.parse(body.input.find((item: any) => item.type === 'function_call_output' && item.call_id === id).output);
+    const tool = (name: string, args: unknown, call_id: string) => ({ type: 'function_call', namespace: 'scene', name, call_id, arguments: JSON.stringify(args) });
+    let output: unknown[] = [];
+    switch (round++) {
+      case 0:
+        for (const name of ['set_scene_marks', 'get_scene_marks']) assert.ok(body.tools[0].tools.some((tool: any) => tool.name === name));
+        output = [tool('set_scene_marks', { expectedRevision: 0, marks: [{ position: [1, 2, 3], rationale: 'Check this feature.', uncertainty: 'Needs inspection.' }] }, 'cloud-create')]; break;
+      case 1: retained = result('cloud-create'); assert.equal(retained.annotationRevision, 1); assert.deepEqual(retained.binding, bound.sceneMarkBinding); break;
+      case 2: output = [tool('get_scene_marks', {}, 'cloud-read')]; break;
+      case 3: {
+        assert.deepEqual(result('cloud-read'), retained); const mark = retained.marks[0];
+        output = [tool('set_scene_marks', { expectedRevision: 1, marks: [{ id: mark.id, position: [4, 5, 6], rationale: mark.rationale, uncertainty: mark.uncertainty }] }, 'cloud-uncommitted')]; break;
+      }
+      case 4: assert.equal(result('cloud-uncommitted').annotationRevision, 2); throw new Error('Fixture downstream failure');
+      case 5: output = [tool('get_scene_marks', {}, 'cloud-retry')]; break;
+      case 6: assert.deepEqual(result('cloud-retry'), retained); break;
+      default: assert.fail('Unexpected model round');
+    }
+    return new Response(`data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output } })}\n\n`, { headers: { 'content-type': 'text/event-stream' } });
+  }, ['scene-inspection', 'visual-inspection', 'candidate-assessment']));
+  t.after(async () => { model.close(); auth.close(); await bound.close(); });
+  await model.models(signal);
+  const events: ModelChatEvent[] = [];
+  const call = { requestId: 'cloud-marks-first', conversationId: null, generation: auth.credentialGeneration(), model: 'cloud-marks', text: 'Investigate hypotheses.', scene };
+  await model.turn(call, bound, async e => { events.push(e); }, signal);
+  const started = events.find((e): e is Extract<ModelChatEvent, { kind: 'start' }> => e.kind === 'start')!;
+  await assert.rejects(model.turn({ ...call, requestId: 'cloud-marks-failed', conversationId: started.conversationId }, bound, async () => {}, signal));
+  await model.turn({ ...call, requestId: 'cloud-marks-retry', conversationId: started.conversationId }, bound, async () => {}, signal);
+  assert.equal(round, 7); assert.ok(retained.marks[0].id);
+  assert.equal(bound.proposeCad, undefined); assert.equal(bound.proposePointMove, undefined);
+});
+
+test('prepared captured pixels independently resolve original Float64 records without selecting or rebinding', async t => {
+  const { createModelAgentRuntime } = await import('../../apps/server/src/agent/model-agent-runtime');
+  const { ModelBrowserBroker } = await import('../../apps/server/src/agent/model-browser-broker');
+  const f = await fixture(t), info = await createPreparedCloudRegistry({ [f.id]: f.root }).open(f.id).info();
+  const scene = canonicalModelScene({ mode: 'cloud', toronto: [], cloud: { id: f.id, revision: info.revision, frameId: info.descriptor.frameId, localOrigin: [0, 0, 0], points: [] } });
+  const signal = new AbortController().signal, initial = await bindModelScene(scene, '/unused', signal, undefined, undefined, { [f.id]: f.root });
+  const binding = { sourceId: f.id, sourceRevision: info.revision, frameId: info.descriptor.frameId, units: 'm' as const, origin: [0, 0, 0] as const };
+  const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  const observation = { schemaVersion: 1 as const, observationId: 'frozen-cloud', viewGeneration: 0,
+    image: { mimeType: 'image/png' as const, dataUrl: '', sha256: 'a'.repeat(64), byteLength: 1 },
+    viewport: { width: 101, height: 101, pixelRatio: 1, pixelOrigin: 'top-left' as const },
+    camera: { position: [0, 0, 10] as const, quaternion: [0, 0, 0, 1], up: [0, 1, 0] as const, near: .1, far: 100, fov: 50, aspect: 1, zoom: 1, matrixWorld: identity, matrixWorldInverse: identity, projectionMatrix: identity }, binding,
+    coverage: { kind: 'fixture', complete: false, displayedPointCount: 1 } };
+  const call = { requestId: 'verify-cloud', conversationId: null, generation: 'fixture', model: 'fixture', text: 'Inspect', scene, visualObservation: observation };
+  let forged = false, stale = false;
+  const runtime = createModelAgentRuntime(call, initial, '/unused', signal, new ModelBrowserBroker(call.requestId, signal, async () => { throw new Error('No browser selection allowed'); }), undefined, { [f.id]: f.root },
+    async args => ({ status: 'resolved', ...args, provenance: { datasetId: f.id, artifactRevision: stale ? 'b'.repeat(64) : info.revision,
+      key: { sourceFileId: 25, sourceRow: 1 }, position: forged ? [.01000001, 0, 0] : [.01, 0, 0], frameId: binding.frameId, units: 'm', origin: binding.origin, layer: 'native' } }));
+  t.after(() => runtime.close());
+  const args = { observationId: observation.observationId, x: 50, y: 50 };
+  const result = await runtime.resolveVisualPixel!(args, 'verify-one', signal);
+  assert.equal(result.status, 'resolved');
+  if (result.status === 'resolved') {
+    assert.equal(result.provenance.recordValidation, 'server-verified-original-record');
+    assert.deepEqual(result.provenance.position, [.01, 0, 0]);
+    assert.deepEqual(result.provenance.selectReference, { kind: 'cloud-point', cloudId: f.id, revision: info.revision, key: { sourceFileId: 25, sourceRow: 1 } });
+  }
+  assert.equal(scene.cloud!.points.length, 0);
+  forged = true; await assert.rejects(runtime.resolveVisualPixel!(args, 'forged-coordinate', signal), { code: 'invalid-tool-result' });
+  forged = false; stale = true; await assert.rejects(runtime.resolveVisualPixel!(args, 'stale-source', signal), { code: 'invalid-tool-result' });
+  await assert.rejects(runtime.resolveVisualPixel!({ ...args, observationId: 'old' }, 'stale-image', signal), { code: 'invalid-visual-pixel' });
+});

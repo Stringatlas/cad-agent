@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
-import type { ModelCaptureRequest, Vec3 } from '@spatial/contracts';
+import type { LegacyCaptureRequest, Vec3 } from '@spatial/contracts';
 import { createVisualCapture } from '../../apps/web/src/viewer/visual-capture';
 
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
@@ -75,7 +75,7 @@ test('invalid camera requests fail before rendering; explicit current preserves 
     { kind: 'camera', position: [0, 0, 0], target: [0, 0, 0] },
     { kind: 'camera', position: [NaN, 0, 0], target: [0, 0, 0] },
     { kind: 'camera', position: [0, 0, 10], target: [0, 0, 0], up: [0, 0, 1] },
-  ]) await assert.rejects(f.capture.capture(request as ModelCaptureRequest));
+  ]) await assert.rejects(f.capture.capture(request as LegacyCaptureRequest));
   assert.equal(f.frames.length, 0);
   const observation = await f.capture.capture({ kind: 'current' });
   assert.equal(f.frames.length, 1);

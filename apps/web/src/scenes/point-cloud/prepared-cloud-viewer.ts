@@ -1,13 +1,15 @@
 import * as THREE from 'three';
+import { captureDetailView } from '../../viewer/capture-detail';
 import { createElevationSurface } from '../../viewer/elevation-surface';
-import type { ElevationGrid, ModelCaptureColorMode, Vec3 } from '@spatial/contracts';
+import type { ElevationGrid, ModelCaptureColorMode, SceneMarkSnapshot, Vec3 } from '@spatial/contracts';
+import { createPreparedSceneMarks } from './cloud-scene-marks';
 import { createPointCloudViewport } from '../../viewer/point-cloud-viewport';
 import { createViewportSizer } from '../../viewer/viewport-size';
 import { createVisualCapture } from '../../viewer/visual-capture';
 import { focusOrbit, orbitHitPosition } from '../../viewer/orbit-focus';
 import { cloudColors, type CloudColorMode } from '../../viewer/cloud-colors';
 import { createAdaptiveLoader } from '../../viewer/adaptive-loader';
-import type { AdaptiveStats } from '../../viewer/adaptive-plan';
+import { DEFAULT_ADAPTIVE_POINTS, type AdaptiveStats } from '../../viewer/adaptive-plan';
 import { createNativeCloudRender } from '../../viewer/native-cloud-render';
 import { loadPreparedHierarchy, loadPreparedNode, preparedNativePoint } from './prepared-cloud-lod-client';
 import { preparedPoint, type PreparedPoint, type PreparedSample } from './prepared-cloud-client';
@@ -26,20 +28,28 @@ export function createPreparedCloudViewer(host: HTMLElement, sample: PreparedSam
   canvas.style.cssText = 'display:block;width:100%;height:100%;touch-action:none';
   let surface: ReturnType<typeof createElevationSurface> | undefined;
   let surfaceGrid: ElevationGrid | undefined;
-  let mode: CloudColorMode = 'rgb', disposed = false, failed = false, navigated = false;
+  let mode: CloudColorMode = 'rgb', disposed = false, failed = false, navigated = false, capturePacking = false;
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(sample.positions, 3));
   geometry.computeBoundingBox();
   geometry.setAttribute('color', new THREE.BufferAttribute(cloudColors(sample.colors, sample.labels, sample.instances, mode), 3));
   const material = new THREE.PointsMaterial({ size: 2.5, sizeAttenuation: false, vertexColors: true });
   const points = new THREE.Points(geometry, material); scene.add(points);
-  const pointBudget = options.pointBudget ?? 3000000;
+  let pointBudget = options.pointBudget ?? DEFAULT_ADAPTIVE_POINTS;
   const native = createNativeCloudRender(material, pointBudget, sample.cloud.descriptor.instances?.unassigned); scene.add(native.points);
   let stats: AdaptiveStats = { loadedPoints: 0, chunks: 0, pending: 1, budgetLimited: false, error: null };
   const markerGeometry = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0], 3));
   const markerMaterial = new THREE.PointsMaterial({ color: '#ffffff', size: 10, sizeAttenuation: false, depthTest: false });
   const marker = new THREE.Points(markerGeometry, markerMaterial); marker.visible = false; marker.renderOrder = 2; scene.add(marker);
-  const draw = () => { if (!disposed && !failed) renderer.render(scene, camera); };
+  const smoke = new URLSearchParams(location.search).has('smoke');
+  const sceneMarks = createPreparedSceneMarks(scene, camera, controls, sample.cloud, host, () => { visual.invalidate(); draw(); });
+  const draw = () => {
+    if (!disposed && !failed) { sceneMarks.update(host.clientWidth, host.clientHeight); renderer.render(scene, camera); }
+    if (smoke) {
+      host.dataset.camera = JSON.stringify(camera.position.toArray()); host.dataset.cameraTarget = JSON.stringify(controls.target.toArray());
+      host.dataset.adaptiveCapacity = String(native.capacity);
+    }
+  };
   const viewport = createViewportSizer(host, renderer, camera, () => visual?.invalidate());
   const d = sample.cloud.descriptor;
   host.dataset.cloudId = d.id;
@@ -53,16 +63,42 @@ export function createPreparedCloudViewer(host: HTMLElement, sample: PreparedSam
   const fullColorModes: ModelCaptureColorMode[] = ['rgb', ...(sample.labels ? ['semantic' as const, 'type' as const] : []), ...(sample.instances ? ['instance' as const] : [])];
   const supportedColorModes = [...fullColorModes];
   const visual = createVisualCapture({ renderer, scene, camera, target: () => controls.target.toArray() as Vec3,
+    prepare: async (view, focus, height, signal) => {
+      const layer = surfaceGrid;
+      if (layer) return;
+      const lease = await adaptive.capture(captureDetailView(view, focus, height), signal);
+      if (surfaceGrid !== layer) { lease.release(); throw new Error('Capture layer changed while loading'); }
+      // Pack the borrowed target without rendering intermediate live-camera frames.
+      const pack = <T>(action: () => T): T => { capturePacking = true; try { return action(); } finally { capturePacking = false; } };
+      return { ...lease, render() {
+        const borrowed = pack(() => lease.render());
+        return { changed: borrowed.changed, restore: () => pack(borrowed.restore) };
+      } };
+    },
     pointColorMode: { get: () => mode, set: next => applyColors(next === 'type' ? 'semantic' : next) },
     available: () => !disposed && !failed && viewport.sync(),
     binding: () => ({ sourceId: d.id, sourceRevision: sample.cloud.revision, frameId: d.frameId,
       units: 'm', origin: d.coordinates.localOrigin as unknown as Vec3, upAxis: 'Z', handedness: 'right' }),
     coverage: () => ({ kind: surfaceGrid ? 'prepared-elevation-surface' : 'prepared-cloud-adaptive', complete: false, displayedPointCount: surfaceGrid ? 0 : native.count || sample.count,
       datasetPointCount: sample.cloud.totalPoints, pointColorMode: mode,
-      scope: surfaceGrid ? `${surfaceGrid.layer} raster preview; derived cell summaries, not original point provenance` : 'Current camera-driven display only; not whole-source geometry or clearance evidence',
-      ...(surfaceGrid ? { modelRevision: surfaceGrid.info.revision, surfaceLayer: surfaceGrid.layer } : {}) }),
+      scope: surfaceGrid ? `${surfaceGrid.color?.kind ?? surfaceGrid.layer} raster preview; derived cell summaries, not original point provenance` : 'Bounded capture-camera native LOD when captureDetail is present; not whole-source geometry or clearance evidence',
+      ...(surfaceGrid ? { modelRevision: surfaceGrid.info.revision, surfaceLayer: surfaceGrid.color?.kind ?? surfaceGrid.layer, ...(surfaceGrid.color && surfaceGrid.info.terrain ? { terrainRevision: surfaceGrid.info.terrain.revision } : {}) } : {}) }),
     supportedColorModes,
     points: () => [points, native.points],
+    captureSource: object => {
+      if (surfaceGrid) return;
+      if (object === native.points) return { count: native.count, copy: (start, count, originals, keys) => native.copySource(start, count, originals, keys) };
+      if (object === points) return { count: sample.count, copy: (start, count, originals, keys) => {
+        for (let i = 0; i < count; i++) {
+          for (let axis = 0; axis < 3; axis++) originals[i * 3 + axis] = sample.positions[(start + i) * 3 + axis]!;
+          for (let axis = 0; axis < 2; axis++) {
+            const key = sample.sourceIds[(start + i) * 2 + axis]!;
+            if (!Number.isSafeInteger(key) || key < 0 || key > 0xffffffff) throw new Error('Invalid capture source key');
+            keys[i * 2 + axis] = key;
+          }
+        }
+      } };
+    },
     resolve: (object, index) => {
       const entry = object === native.points ? native.resolve(index) : undefined;
       const p = entry ? preparedNativePoint(sample.cloud, entry.payload, entry.index) : object === points ? preparedPoint(sample, index) : undefined;
@@ -75,8 +111,8 @@ export function createPreparedCloudViewer(host: HTMLElement, sample: PreparedSam
     settings: { nearRadius: 30, pixelThreshold: 60, pointBudget },
     hierarchy: signal => loadPreparedHierarchy(sample.cloud, signal),
     load: (node, signal) => loadPreparedNode(sample.cloud, node, signal),
-    add: payload => { native.add(payload); points.visible = !surface && native.count === 0; native.points.visible = !surface && native.count > 0; visual.invalidate(); draw(); },
-    remove: names => { native.remove(names); points.visible = !surface && native.count === 0; native.points.visible = !surface && native.count > 0; visual.invalidate(); draw(); },
+    add: payload => { native.add(payload); points.visible = !surface && native.count === 0; native.points.visible = !surface && native.count > 0; visual.invalidate(); if (!capturePacking) draw(); },
+    remove: names => { native.remove(names); points.visible = !surface && native.count === 0; native.points.visible = !surface && native.count > 0; visual.invalidate(); if (!capturePacking) draw(); },
     status: next => {
       stats = next; options.ondetail?.(next);
       host.dataset.adaptivePoints = String(next.loadedPoints); host.dataset.adaptivePending = String(next.pending);
@@ -144,7 +180,16 @@ export function createPreparedCloudViewer(host: HTMLElement, sample: PreparedSam
   canvas.addEventListener('pointercancel', cancel); canvas.addEventListener('dblclick', focus);
   canvas.addEventListener('keydown', key); canvas.addEventListener('webglcontextlost', contextLost);
   fit();
-  return { fit, visual, setElevation(grid?: ElevationGrid) {
+  return { fit, visual,
+    setSceneMarks: (snapshot?: SceneMarkSnapshot, selected?: string) => { if (!disposed && !failed) sceneMarks.set(snapshot, selected); },
+    refreshSceneMarks: () => { visual.invalidate(); draw(); },
+    focusPosition: sceneMarks.focusPosition,
+    setPointBudget(next: number) {
+    // Expand capacity permission before admission; shrink only after eviction.
+    if (next > pointBudget) native.setBudget(next);
+    adaptive.configure({ pointBudget: next }); native.setBudget(next); pointBudget = next;
+    host.dataset.pointBudget = String(next); visual.invalidate(); draw();
+  }, setElevation(grid?: ElevationGrid) {
     if (grid && (grid.info.cloudId !== d.id || grid.info.sourceRevision !== sample.cloud.revision || grid.info.frameId !== d.frameId)) throw new Error('Stale elevation layer');
     const next = grid ? createElevationSurface(grid) : undefined;
     if (surface) { scene.remove(surface.mesh); surface.dispose(); }
@@ -152,7 +197,7 @@ export function createPreparedCloudViewer(host: HTMLElement, sample: PreparedSam
     supportedColorModes.splice(0, supportedColorModes.length, ...(grid ? [] : fullColorModes));
     if (surface) scene.add(surface.mesh);
     points.visible = !surface && native.count === 0; native.points.visible = !surface && native.count > 0;
-    host.dataset.surfaceLayer = grid?.layer ?? 'points'; host.dataset.surfaceCells = String(grid?.values.filter(value => value !== null).length ?? 0);
+    host.dataset.surfaceLayer = grid?.color?.kind ?? grid?.layer ?? 'points'; host.dataset.surfaceCells = String(grid?.values.filter(value => value !== null).length ?? 0);
     marker.visible = false; visual.invalidate(); draw(); if (!surface) updateDetail();
   }, retryDetail: () => adaptive.retry(), get detail() { return stats; }, setSelection(point?: PreparedPoint) {
     if (point && (point.cloudId !== d.id || point.revision !== sample.cloud.revision)) throw new Error('Stale display selection');
@@ -167,6 +212,6 @@ export function createPreparedCloudViewer(host: HTMLElement, sample: PreparedSam
     canvas.removeEventListener('pointerdown', pointerDown); canvas.removeEventListener('pointerup', pointerUp);
     canvas.removeEventListener('pointercancel', cancel); canvas.removeEventListener('dblclick', focus);
     canvas.removeEventListener('keydown', key); canvas.removeEventListener('webglcontextlost', contextLost);
-    geometry.dispose(); material.dispose(); markerGeometry.dispose(); markerMaterial.dispose(); resources.dispose();
+    sceneMarks.dispose(); geometry.dispose(); material.dispose(); markerGeometry.dispose(); markerMaterial.dispose(); resources.dispose();
   } };
 }

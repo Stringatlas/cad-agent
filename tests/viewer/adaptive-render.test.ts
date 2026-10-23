@@ -451,7 +451,7 @@ test('validation, ownership, clear/disposal, and small hard budget are fail-clos
   const render = createAdaptiveRender(material, { pointBudget: 10 });
   const input = payload('r', 10);
   try {
-    assert.throws(() => createAdaptiveRender(material, { pointBudget: 3_000_001 }), /options/);
+    assert.throws(() => createAdaptiveRender(material, { pointBudget: 50_000_001 }), /options/);
     assert.throws(() => createAdaptiveRender(material, { register() {} }), /options/);
     assert.throws(() => render.add({ ...input, labels: [99] }), /payload/);
     assert.throws(() => render.add({ ...input, labels: Array(10).fill(99) }), /labels/);
@@ -475,4 +475,20 @@ test('validation, ownership, clear/disposal, and small hard budget are fail-clos
     assert.equal(materialDisposed, false); assert.equal(render.count, 0);
     assert.throws(() => render.add(payload('r0', 1)), /disposed/);
   } finally { render.dispose(); material.dispose(); }
+});
+
+test('Toronto bulk capture copies original source spans after compaction and never effective GPU overrides', () => {
+  const material = new THREE.PointsMaterial(), render = createAdaptiveRender(material, { pointBudget: 256 });
+  render.add(payload('r', 2)); render.add(payload('r0', 2, 10)); render.add(payload('r7', 2, 20)); render.remove('r0');
+  const object = render.objects[0], source = render.captureSource(object)!;
+  const originals = new Float64Array(source.count * 3), keys = new Uint32Array(source.count * 2);
+  object.geometry.getAttribute('position').setXYZ(0, 999, 999, 999);
+  source.copy(0, source.count, originals, keys);
+  assert.equal(originals[0], .00000000001);
+  for (let i = 0; i < source.count; i++) {
+    const expected = render.resolve(object, i)!;
+    assert.deepEqual(Array.from(originals.subarray(i * 3, i * 3 + 3)), expected.position);
+    assert.deepEqual(Array.from(keys.subarray(i * 2, i * 2 + 2)), [expected.key.sourceFileId, expected.key.sourceRow]);
+  }
+  render.dispose(); assert.throws(() => source.copy(0, source.count, originals, keys)); material.dispose();
 });

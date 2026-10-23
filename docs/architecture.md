@@ -23,10 +23,32 @@ queries, capture and source-reference selection; its initial overview is sampled
 revision-bound binary routes, sharing the screen-space planner in
 `apps/web/src/viewer/adaptive-plan.ts` with Toronto. A serial loader and bounded
 packed GPU cache refine visible regions, while Float64 CPU arrays retain original
-point identity. Display limits never grant whole-source coverage or edit authority.
+point identity. Display limits never grant whole-source coverage or edit authority. Task087 gives browser captures a frozen camera/frustum and separate bounded
+native-node demand in the shared serial scheduler. Capture loads share resident
+payloads, pause user refinement without evicting visible user geometry, and
+synchronously borrow/restore the existing GPU projection. One user target plus
+one recent capture target bounds CPU payload caching; GPU native points remain
+within one display budget. Missing/error/deadline detail returns unavailable;
+ready metadata distinguishes the admitted LOD target from budget limitation and
+whole-source completeness. Task089 adds latest-only, five-minute immutable capture
+picking snapshots under a separate 192 MiB admission limit. They preserve source
+keys and binary64 positions after borrowed buffers are restored. Pixel resolution
+means a unique supported point center within three image pixels, not exact raster
+identity; unsupported/edited/raster imagery remains usable without grounding.
+Server source rereads verify original records separately from browser visibility.
+Task088 replaces focus-first allocation with coarse visible coverage followed
+by projected-size/camera-distance refinement. The resident point cap defaults to
+3M and permits persistent per-viewer custom values through 50M. Prepared render
+buffers grow on demand; budget changes preserve the live viewer rather than
+remounting it. Source/capture caches and CPU/GPU copies remain separate memory
+consumers; a point cap is not a total process-RAM limit.
 Scene ID, revision, frame and origin bind references and conversation continuation.
-Toronto retains its approval-gated editing adapter. Prepared-cloud editing,
-authored objects, marks and terrain adapters are not implemented. Frames are
+Toronto retains its approval-gated editing adapter. Prepared-cloud editing and
+authored objects remain unavailable. Task089 adds source-bound, conversation-owned
+prepared-cloud hypotheses using the existing bounded marks state machine, stable IDs
+and disposable numbered scene feedback. Successful turns retain them; failed turns
+and context changes clear streamed projections. These marks are not source records
+or geometry. Optional prepared terrain adapters are described under Task085 below. Frames are
 never implicitly merged. Earlier DALES task records describe historical behavior.
 
 Task073 removes the synthetic workspace and its project persistence, parameter-box edits,
@@ -193,6 +215,13 @@ GeoTIFF.js supplies bounded windows through read-only routes and the conditional
 `query_elevation` product tool. Shared contracts carry frame, units, revisions,
 support and NoData. The web viewer owns only a disposable Three.js preview;
 the raster adapter owns measurement values. See [elevation models](elevation-models.md).
+
+Task085 extends that adapter with offline GDAL slope and bounded scientific
+worker operations for regional statistics, profiles, connected regions and mapped
+images. Operator-owned artifact paths and Python configuration never come from
+model arguments. Numerical measurements stay server-side; the viewer owns only
+the slope preview. [Terrain analysis](terrain-analysis.md) documents the runtime
+dependency, capability gates and limits.
 
 The private pnpm 10 workspace targets Node 22 (`>=22.12.0 <23`) with TypeScript 5.9, Svelte 5, Vite 7 and Three.js. Workspace packages export TypeScript source; they are not published or independently emitted distributions.
 

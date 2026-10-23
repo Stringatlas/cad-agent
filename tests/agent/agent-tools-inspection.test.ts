@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import type { ModelChatEvent, ModelScene, ModelTurnRequest } from '@spatial/contracts';
 import type { AgentToolsInspection } from '../../packages/contracts/src/agent-tools-inspection';
 import { inspectAgentTools, registeredSceneTools, buildAgentInstructions, ProviderModel, type BoundModelScene, type ModelAuth } from '../../apps/server/src/agent/provider-model';
+import { captureRequestSchema } from '../../apps/server/src/agent/agent-view-schema';
 import { PRODUCT_SKILLS, loadProductSkill } from '../../apps/server/src/agent/product-agent-skills';
 import { createModelChatRoutes } from '../../apps/server/src/agent/model-chat-routes';
 import { ProviderAuth } from '../../apps/server/src/auth/provider-auth';
@@ -16,7 +17,7 @@ const removed = /assess_utility_box|propose_utility_box|search_placement_sites|p
 const pole: ModelScene = { mode: 'pole', toronto: [] };
 const toronto: ModelScene = { mode: 'toronto', toronto: [{ name: 'Point 1', datasetId: 'toronto3d', artifactRevision: 'a'.repeat(64), key: { sourceFileId: 1, sourceRow: 0 }, position: [0, 0, 0], frameId: 'toronto3d-local-v1', units: 'm', handedness: 'right', upAxis: 'Z', localOrigin: [627285, 4841948, 0] }] };
 const unavailable = async (): Promise<never> => { assert.fail('Inspector must never execute scene tools'); };
-const bound: BoundModelScene = { context: {}, async check() {}, async close() {}, queryPoints: unavailable, queryElevation: unavailable, groundElevation: unavailable,
+const bound: BoundModelScene = { captureCapabilities: { binding: { sourceId: 'toronto3d', sourceRevision: 'a'.repeat(64), frameId: 'toronto3d-local-v1', units: 'm', origin: [627285, 4841948, 0] }, bounds: { min: [-10, -10, -10], max: [10, 10, 10] }, colorModes: ['rgb'], layer: 'current-browser-layer', referenceKind: 'toronto-point', targetKinds: ['original-source-point', 'box', 'polygon-prism'], relativeViews: true }, context: {}, async check() {}, async close() {}, queryPoints: unavailable, queryElevation: unavailable, analyzeTerrain: unavailable, groundElevation: unavailable,
   queryAoiPoints: unavailable, listObjects: unavailable, getObject: unavailable, proposePointCreate: unavailable,
   captureScene: unavailable, selectReference: unavailable, nearestLabel: unavailable,
   proposePointMove: unavailable, proposeNearestPointMove: unavailable, proposeCad: unavailable };
@@ -24,6 +25,11 @@ const bound: BoundModelScene = { context: {}, async check() {}, async close() {}
 function compareSchema(schema: { name: string; description: string; parameters: Record<string, unknown>; strict: boolean }, inspection: AgentToolsInspection) {
   const inspected = inspection.tools.find(tool => tool.name === schema.name);
   assert.ok(inspected, schema.name);
+  if (schema.name === 'capture_scene') {
+    assert.deepEqual(inspected.parameters, captureRequestSchema(undefined, true), 'unbound inspector advertises the complete capture schema');
+    assert.deepEqual(schema.parameters, captureRequestSchema(bound.captureCapabilities), 'runtime capture schema matches exact bound capabilities');
+    assert.equal(inspected.description, schema.description); assert.equal(inspected.strict, schema.strict); return;
+  }
   assert.deepEqual({ name: inspected.name, description: inspected.description, parameters: inspected.parameters, strict: inspected.strict },
     JSON.parse(JSON.stringify({ name: schema.name, description: schema.description, parameters: schema.parameters, strict: schema.strict })));
 }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
-import type { ModelCaptureColorMode, ModelCaptureRequest } from '@spatial/contracts';
+import type { ModelCaptureColorMode, LegacyCaptureRequest } from '@spatial/contracts';
 import { createVisualCapture } from '../../apps/web/src/viewer/visual-capture';
 import { createCropLayer } from '../../apps/web/src/scenes/toronto/display/crop-render';
 import { pointColors } from '../../apps/web/src/scenes/toronto/display/point-colors';
@@ -28,7 +28,7 @@ function fixture(initial: ModelCaptureColorMode = 'rgb', supported = true) {
     points: () => [point], resolve: () => ({ entityId: 'cloud', pointIndex: 0, position: [0, 0, 0] }) });
   return { capture, frames, camera, point, set, mode: () => mode, fail: () => { fail = true; }, failRender: () => { failRender = true; }, rgb, labels };
 }
-const scenarios: { initial: ModelCaptureColorMode; view: ModelCaptureRequest; requested?: ModelCaptureColorMode }[] = [
+const scenarios: { initial: ModelCaptureColorMode; view: LegacyCaptureRequest; requested?: ModelCaptureColorMode }[] = [
   { initial: 'rgb', view: { kind: 'current' } },
   { initial: 'rgb', view: { kind: 'top-down' }, requested: 'type' },
   { initial: 'type', view: { kind: 'camera', position: [0, -10, 0], target: [0, 0, 0] }, requested: 'rgb' },
@@ -66,6 +66,6 @@ test('viewers without source colors reject explicit mode without rendering; omit
 });
 test('invalid mode never recolors or renders', async () => {
   const f = fixture();
-  await assert.rejects(f.capture.capture({ kind: 'current', colorMode: 'bad' } as unknown as ModelCaptureRequest));
+  await assert.rejects(f.capture.capture({ kind: 'current', colorMode: 'bad' } as unknown as LegacyCaptureRequest));
   assert.equal(f.frames.length, 0); assert.equal(f.mode(), 'rgb');
 });

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
-  import { MODEL_VISUAL_LIMITS, modelVisualImageSize, type ModelCaptureRequest, type ModelReferenceSelection, type ModelScene, type ModelVisualObservation, type VisualObservation } from '@spatial/contracts';
+  import { MODEL_VISUAL_LIMITS, modelVisualImageSize, type BrowserCaptureRequest, type ModelReferenceSelection, type ModelScene, type ModelVisualObservation, type VisualObservation } from '@spatial/contracts';
   import ScreenshotCrop from './visual/ScreenshotCrop.svelte';
   import { compressScreenshot } from './visual/screenshot-crop';
   import { placementWitnesses } from '../scenes/toronto/placement/utility-box-evidence';
@@ -90,17 +90,17 @@
   let draftInput: HTMLTextAreaElement;
   let view = $state<ModelChatView>({ catalogPhase: 'idle', model: '', phase: 'idle', code: 'refresh-models', messages: [] });
   let approvalWaiting = $state(false);
-  async function captureForAgent(request: ModelCaptureRequest, isCurrent: () => boolean): Promise<VisualModelAttachment> {
+  async function captureForAgent(request: BrowserCaptureRequest, isCurrent: () => boolean, signal?: AbortSignal): Promise<VisualModelAttachment> {
     const source = visualSource;
     if (!source || !isCurrent()) throw new Error('Scene capture unavailable.');
-    const observation = await source.capture(request);
+    const observation = await (source.captureSnapshot ? source.captureSnapshot(request, signal) : source.capture(request, signal));
     const image = await compressScreenshot(observation, { x: 0, y: 0, width: observation.viewport.width, height: observation.viewport.height }, () => alive && isCurrent());
     return { observation: image, isCurrent: () => source.isCurrent(observation.observationId), resolvePixel: (id, x, y) => source.resolvePixel(id, x, y) };
   }
   const controller = new ModelChatController(value => { view = value; onstreamingchange(value.phase === 'streaming'); }, undefined, undefined, undefined,
     { onproposal: (proposal, current) => onproposal(proposal, current), oninvalidate: () => oninvalidateproposals(), onauthorityproposal: kind => onauthorityproposal(kind),
       oncapture: captureForAgent,
-      onscenemarks: snapshot => { if (!onscenemarks || !alive || scene.mode !== 'toronto') throw new Error('Location annotations unavailable.'); onscenemarks(snapshot); },
+      onscenemarks: snapshot => { if (!onscenemarks || !alive || scene.mode !== 'toronto' && scene.mode !== 'cloud') throw new Error('Location annotations unavailable.'); onscenemarks(snapshot); },
       onareacandidates: (result, current) => { if (!onareacandidates) throw new Error('Candidate display unavailable.'); return onareacandidates(result, current); },
       onplacementsearch: (result, current) => { if (!onplacementsearch) throw new Error('Placement display unavailable.'); return onplacementsearch(result, current); },
       onselectreference: (reference, current) => { if (!onselectreference) throw new Error('Reference selection unavailable.'); return onselectreference(reference, current); },
@@ -144,7 +144,7 @@
       <option value="">Choose a model…</option>
       {#each view.catalog?.models ?? [] as model (model.id)}<option value={model.id}>{model.label}</option>{/each}
     </select>
-    <button type="button" data-testid="model-new-chat" onclick={() => { controller.newChat(); removeAttachment(); }}>New chat</button>
+    <button type="button" data-testid="model-new-chat" onclick={() => { controller.newChat(); visualSource?.releaseGrounding?.(); removeAttachment(); }}>New chat</button>
   </div>
   {#if view.catalogPhase === 'error' || (view.catalogPhase === 'ready' && (!view.catalog?.ready || !view.catalog.models.length))}
     <div class="catalog-recovery" role="alert" data-testid="model-catalog-recovery">
@@ -233,8 +233,6 @@
         </article>
       {/each}
     </div>
-  {:else}
-    <div class="conversation-empty"><h3>What would you like to build?</h3><p>Select in the scene or describe a change.</p></div>
   {/if}
   </div>
   <form class="composer" data-testid="local-draft-form" onsubmit={event => { event.preventDefault(); void send(); }}>
@@ -299,9 +297,6 @@
   .message-image img { display: block; max-width: 100%; max-height: 240px; object-fit: contain; border-radius: 8px; }
   .message-body { margin: 0; }
   .message-text { white-space: pre-wrap; font-size: 13px; line-height: 1.6; color: #ededf2; margin: 0; }
-  .conversation-empty { margin: 28px 8px; color: #d9d9e2; }
-  .conversation-empty h3 { font-size: 16px; font-weight: 550; margin-bottom: 8px; }
-  .conversation-empty p { font-size: 12px; }
   .message-failure { margin-top: 10px; padding: 10px; border: 1px solid #a37e46; border-left: 4px solid #d2a45e; border-radius: 8px; background: #30271c; }
   .message-failure strong { color: #f2d5a6; font-size: 11px; }
   .message-failure p { color: #d9c4a6; margin: 8px 0 0; }

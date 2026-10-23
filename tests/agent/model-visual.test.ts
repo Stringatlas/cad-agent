@@ -89,7 +89,7 @@ test('image pixel roundtrip is nonce-bound, origin-guarded, one-use, truthful an
     if (event.kind !== 'tool-request') return;
     assert.equal(f.requests.length, 1);
     const { kind: _kind, x, y, ...identity } = event;
-    answer = { ...identity, result: { status: 'resolved', observationId: event.observationId, x, y, provenance: { entityId: 'cloud', pointIndex: 3, position: [1, 2, 3] } } };
+    answer = { ...identity, result: { status: 'resolved', observationId: event.observationId, x, y, provenance: { datasetId: 'toronto3d', artifactRevision: f.call.visualObservation!.binding.sourceRevision, key: { sourceFileId: 1, sourceRow: 0 }, position: [0, 0, 0], frameId: 'toronto3d-local-v1', units: 'm', origin: [627285, 4841948, 0], layer: 'overview' } } };
     assert.equal((await f.result(answer, null)).status, 403);
     assert.equal((await f.result(answer, 'https://evil.invalid')).status, 403);
     assert.equal((await f.result({ ...(answer as object), nonce: 'wrong-nonce' })).status, 400);
@@ -105,7 +105,7 @@ test('image pixel roundtrip is nonce-bound, origin-guarded, one-use, truthful an
   assert.deepEqual((input[0].content as unknown[])[1], { type: 'input_image', image_url: f.call.visualObservation!.image.dataUrl, detail: 'high' });
   const inspections = e.filter(v => v.kind === 'request-inspection'); assert.equal(inspections.length, 3); // skill load + pixel call + answer
   for (const inspection of inspections) if (inspection.kind === 'request-inspection') { assert.equal(inspection.inspection.omissions.includes('image-bytes'), true); assert.equal(inspection.inspection.bodyJson.includes('data:image/png'), false); assert.ok(inspection.inspection.bodyJson.includes(f.call.visualObservation!.image.sha256)); assert.ok(inspection.inspection.bodyJson.includes('resolve_visual_pixel')); }
-  const context = e.find(v => v.kind === 'tool' && v.name === 'resolve_visual_pixel'); assert.ok(context?.kind === 'tool'); assert.equal((context.context as { recordValidation: string }).recordValidation, 'not-server-verified');
+  const context = e.find(v => v.kind === 'tool' && v.name === 'resolve_visual_pixel'); assert.ok(context?.kind === 'tool'); assert.equal((context.context as { recordValidation: string }).recordValidation, 'server-verified-original-record');
   const done = e.at(-1); assert.ok(done?.kind === 'done');
   const replay = await readEvents(await f.post({ ...f.call, text: 'Refer to the previous screenshot', visualObservation: undefined, conversationId: done.conversationId }));
   assert.equal(replay.at(-1)?.kind, 'done');
@@ -264,4 +264,21 @@ test('catalog-listed unfamiliar ChatGPT model receives input_image; provider rej
     await assert.rejects(model.turn({ ...call, model: 'forged-not-in-catalog' }, bound, async () => {}, signal()), { code: 'model-unavailable' });
     assert.equal(requests.length, 2);
   } finally { model.close(); }
+});
+
+for (const change of [
+  { key: { sourceFileId: 1, sourceRow: 99 } }, { position: [1, 0, 0] }, { frameId: 'foreign' },
+  { artifactRevision: 'b'.repeat(64) }, { origin: [0, 0, 0] }, { datasetId: 'stpls3d-1' },
+  { units: 'cm' }, { recordValidation: 'server-verified-original-record' },
+]) test(`browser pixel provenance cannot forge verified original evidence: ${JSON.stringify(change)}`, async t => {
+  const f = await fixture(t);
+  const events = await readEvents(await f.post(f.call), async event => {
+    if (event.kind !== 'tool-request') return;
+    const { kind: _kind, x, y, ...identity } = event;
+    const provenance = { datasetId: 'toronto3d', artifactRevision: f.call.visualObservation!.binding.sourceRevision,
+      key: { sourceFileId: 1, sourceRow: 0 }, position: [0, 0, 0], frameId: 'toronto3d-local-v1', units: 'm', origin: [627285, 4841948, 0], layer: 'overview', ...change };
+    assert.equal((await f.result({ ...identity, result: { status: 'resolved', observationId: event.observationId, x, y, provenance } })).status, 204);
+  });
+  assert.equal(events.at(-1)?.kind, 'error'); assert.equal(events.some(e => e.kind === 'tool' && e.name === 'resolve_visual_pixel'), false);
+  assert.equal(f.requests.length, 1);
 });

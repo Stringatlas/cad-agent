@@ -47,6 +47,71 @@ async function turn(f: ReturnType<typeof fixture>, call = f.call(), scene = boun
 }
 const code = (name: string) => (e: unknown) => e instanceof ModelError && e.code === name;
 
+const cloudScene: ModelTurnRequest['scene'] = { mode: 'cloud', toronto: [], cloud: {
+  id: 'stpls3d-1', revision: 'a'.repeat(64), frameId: 'stpls3d-1-local-v1', localOrigin: [1, 2, 3], points: [],
+} };
+
+test('same-cloud continuation reaches provider with prior tool evidence and canonical source binding', async () => {
+  const f = fixture(); await f.model.models(signal());
+  const inspect = { type: 'function_call', namespace: 'scene', name: 'inspect_scene', call_id: 'cloud_inspect', arguments: '{}' };
+  f.queue.push(sse(complete([inspect])), sse(complete()));
+  const initial = await turn(f, f.call({ scene: cloudScene }));
+  const conversationId = (initial.at(-1) as Extract<ModelChatEvent, { kind: 'done' }>).conversationId;
+  const prior = f.requests.at(-1)!.body!.input as unknown[];
+  assert(prior.some(value => (value as { type?: string }).type === 'function_call_output'));
+  f.queue.push(sse(complete()));
+  // Property ordering and attached references do not change source identity.
+  const scene: ModelTurnRequest['scene'] = { ...cloudScene, cloud: { points: [{ name: 'Point 1', key: { sourceFileId: 1, sourceRow: 0 }, position: [0, 0, 0] }],
+    localOrigin: [...cloudScene.cloud!.localOrigin] as [number, number, number], frameId: cloudScene.cloud!.frameId,
+    revision: cloudScene.cloud!.revision, id: cloudScene.cloud!.id } };
+  const events = await turn(f, f.call({ conversationId, scene, text: 'What did you learn?' }));
+  assert.equal(events.at(-1)?.kind, 'done');
+  assert.equal((events[0] as Extract<ModelChatEvent, { kind: 'start' }>).conversationId, conversationId);
+  assert.deepEqual((f.requests.at(-1)!.body!.input as unknown[]).slice(0, prior.length), prior);
+  assert.equal(f.requests.length, 4); f.model.close();
+});
+
+test('cloud continuation rejects source/model/account changes and expired history before inference', async () => {
+  let now = 0; const f = fixture('api-key', () => now); await f.model.models(signal());
+  f.queue.push(sse(complete())); const initial = await turn(f, f.call({ scene: cloudScene }));
+  const conversationId = (initial.at(-1) as Extract<ModelChatEvent, { kind: 'done' }>).conversationId;
+  for (const change of [{ id: 'stpls3d-2' }, { revision: 'b'.repeat(64) }, { frameId: 'other-local-v1' }, { localOrigin: [1, 2, 4] as const }]) {
+    await assert.rejects(turn(f, f.call({ conversationId, scene: { ...cloudScene, cloud: { ...cloudScene.cloud!, ...change } } })), code('stale-conversation'));
+  }
+  await assert.rejects(turn(f, f.call({ conversationId, scene: cloudScene, model: 'model-two' })), code('stale-conversation'));
+  await assert.rejects(turn(f, f.call({ conversationId, scene: cloudScene, generation: 'other-account' })), code('stale-account'));
+  now = L.conversationTtlMs;
+  await assert.rejects(turn(f, f.call({ conversationId, scene: cloudScene })), code('stale-conversation'));
+  assert.equal(f.requests.length, 2);
+  f.auth.logout(); await f.model.models(signal());
+  await assert.rejects(turn(f, f.call({ conversationId, scene: cloudScene })), code('stale-conversation'));
+  assert.equal(f.requests.length, 3); f.model.close();
+});
+
+test('cloud failed continuation and rejected done publication never replace successful history', async () => {
+  const f = fixture(); await f.model.models(signal());
+  f.queue.push(sse(complete())); const initial = await turn(f, f.call({ scene: cloudScene }));
+  const conversationId = (initial.at(-1) as Extract<ModelChatEvent, { kind: 'done' }>).conversationId;
+  f.queue.push(sse(event({ type: 'response.output_text.delta', delta: 'Partial cloud response' })));
+  await assert.rejects(turn(f, f.call({ conversationId, scene: cloudScene, text: 'Failed cloud turn' })), code('interrupted-stream'));
+  f.queue.push(sse(complete([message('Unpublished cloud response')])));
+  await assert.rejects(f.model.turn(f.call({ conversationId, scene: cloudScene, text: 'Rejected completion' }), bound,
+    async event => { if (event.kind === 'done') throw new Error('downstream disconnected'); }, signal()), /downstream disconnected/);
+  f.queue.push(sse(complete()));
+  await turn(f, f.call({ conversationId, scene: cloudScene, text: 'Explicit cloud retry' }));
+  const replay = JSON.stringify(f.requests.at(-1)!.body!.input);
+  for (const text of ['Failed cloud turn', 'Partial cloud response', 'Rejected completion', 'Unpublished cloud response']) assert(!replay.includes(text));
+  assert(replay.includes('Explicit cloud retry')); f.model.close();
+});
+
+for (const mode of ['pole', 'toronto'] as const) test(`${mode}: mode-bound continuation remains valid`, async () => {
+  const f = fixture(); await f.model.models(signal()); const scene = { mode, toronto: [] };
+  f.queue.push(sse(complete())); const initial = await turn(f, f.call({ scene }));
+  const conversationId = (initial.at(-1) as Extract<ModelChatEvent, { kind: 'done' }>).conversationId;
+  f.queue.push(sse(complete())); const events = await turn(f, f.call({ conversationId, scene }));
+  assert.equal(events.at(-1)?.kind, 'done'); assert.equal(f.requests.length, 3); f.model.close();
+});
+
 test('backpressure awaits downstream delta publication before tool continuation or completion', async () => {
   const f = fixture(); await f.model.models(signal());
   f.queue.push(sse(complete([{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Before tool' }] }, { type: 'function_call', namespace: 'scene', name: 'inspect_scene', call_id: 'call_backpressure', arguments: '{}' }])), sse(complete()));

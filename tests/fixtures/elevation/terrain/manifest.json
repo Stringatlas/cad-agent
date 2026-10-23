@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "elevationRevision": "a1b943a60b4c2bdc7eb763986bf663e5337e91daee269385c7e41c1492b0ad36",
+  "sourceRevision": "9d5e9a93c084e648b9380b0108e32599ffc6448794b016b25ccc4ca8ed18637a",
+  "method": {
+    "algorithm": "GDAL-Horn",
+    "unit": "degree",
+    "neighborhood": 3,
+    "scale": 1.0,
+    "horizontalVerticalRatio": 1,
+    "edges": "nodata",
+    "interpolation": "none"
+  },
+  "slope": {
+    "validCells": 0,
+    "min": null,
+    "max": null
+  },
+  "asset": {
+    "bytes": 573,
+    "sha256": "504685bb9039bf5ea24b2dfb70458008c00cce55f94bcc9d0bc74a5632271b60"
+  },
+  "gdal": "3.12.2"
+}

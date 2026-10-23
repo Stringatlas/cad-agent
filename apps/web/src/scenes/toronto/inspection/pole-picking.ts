@@ -48,6 +48,16 @@ function createProvenancePickCache(dataset: DatasetInfo, sourcePositions: ArrayL
   let live = true;
   return {
     dispose() { live = false; },
+    get count() { return count; },
+    copySource(start: number, length: number, originals: Float64Array, keys: Uint32Array) {
+      if (!live || !Number.isSafeInteger(start) || !Number.isSafeInteger(length) || start < 0 || length < 0 || start + length > count || originals.length !== length * 3 || keys.length !== length * 2) throw new Error('Invalid capture source range');
+      originals.set(positions.subarray(start * 3, (start + length) * 3));
+      for (let i = 0; i < length * 2; i++) {
+        const key = sourceIds[start * 2 + i];
+        if (!Number.isSafeInteger(key) || key < 0 || key > 0xffffffff) throw new Error('Invalid capture source key');
+        keys[i] = key;
+      }
+    },
     resolve(index: number): PoleSelection | undefined {
       if (!live || !Number.isSafeInteger(index) || index < 0 || index >= count) return;
       const sourceFileId = sourceIds[index * 2], sourceRow = sourceIds[index * 2 + 1];

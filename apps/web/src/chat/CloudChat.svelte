@@ -4,7 +4,7 @@
   import ModelChat from './ModelChat.svelte';
   import type { VisualModelSource } from './visual/visual-model-source';
   import type { PreparedPoint, PreparedSample } from '../scenes/point-cloud/prepared-cloud-client';
-  let { sample, selected, visualSource, onselectpoint = () => {} }: { sample: PreparedSample; selected?: PreparedPoint; visualSource?: VisualModelSource; onselectpoint?: (point: PreparedPoint) => void } = $props();
+  let { sample, selected, visualSource, onselectpoint = () => {}, onscenemarks }: { sample: PreparedSample; selected?: PreparedPoint; visualSource?: VisualModelSource; onselectpoint?: (point: PreparedPoint) => void; onscenemarks?: (snapshot: unknown) => void } = $props();
   let references = $state<(PreparedPoint & { name: string })[]>([]), next = 1;
   let status = $state('');
   const lifetime = new AbortController();
@@ -49,7 +49,7 @@
       </div>
     {:else}<p>Select a cloud point to attach a reference.</p>{/each}
   </details>
-  <ModelChat {scene} {visualSource} onselectreference={selectReference} />
+  <ModelChat {scene} {visualSource} {onscenemarks} onselectreference={selectReference} />
 </aside>
 <style>
   .cloud-chat { display:flex; flex-direction:column; gap:10px; height:100%; min-height:0; overflow:hidden; padding:12px; background:#202124; }

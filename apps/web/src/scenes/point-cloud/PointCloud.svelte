@@ -1,8 +1,11 @@
 <script lang="ts">
-  import type { ElevationInfo, ElevationQuery } from '@spatial/contracts';
+  import { canonicalSceneMarkSnapshot, type ElevationInfo, type ElevationQuery, type SceneMarkSnapshot } from '@spatial/contracts';
+  import { cloudSceneMarksMatch } from './cloud-scene-marks';
+  import CloudSceneMarks from './CloudSceneMarks.svelte';
   import { loadElevationInfo, loadElevationGrid, queryElevation } from './elevation-client';
   import { elevationColor } from '../../viewer/elevation-surface';
-  import type { AdaptiveStats } from '../../viewer/adaptive-plan';
+  import { DEFAULT_ADAPTIVE_POINTS, MAX_ADAPTIVE_POINTS, type AdaptiveStats } from '../../viewer/adaptive-plan';
+  import { DISPLAY_BUDGET_KEYS, MIN_DISPLAY_POINTS, readDisplayBudget, saveDisplayBudget, validDisplayBudget } from '../../viewer/display-budget';
   import { onMount, untrack } from 'svelte';
   import type { VisualModelSource } from '../../chat/visual/visual-model-source';
   import { instanceColor, semanticColor, UNASSIGNED_COLOR, type CloudColorMode } from '../../viewer/cloud-colors';
@@ -16,17 +19,39 @@
   } = $props();
   let host: HTMLDivElement;
   let scenes = $state<{ id: string; name: string }[]>([]), sceneId = $state('stpls3d-1');
-  let quality = $state('fine'), colorMode = $state<CloudColorMode>('rgb');
+  let pointBudget = $state(DEFAULT_ADAPTIVE_POINTS), budgetDraft = $state(DEFAULT_ADAPTIVE_POINTS), budgetError = $state('');
+  const quality = $derived(pointBudget === 500000 ? 'light' : pointBudget === 1500000 ? 'balanced' : pointBudget === 3000000 ? 'fine' : 'custom');
+  let colorMode = $state<CloudColorMode>('rgb');
   let sample = $state<PreparedSample>(), selected = $state<PreparedPoint>();
   let loading = $state(true), error = $state('');
   let detail = $state<AdaptiveStats>();
   let elevationInfo = $state<ElevationInfo>(), elevationResult = $state<ElevationQuery>();
-  let surfaceLayer = $state<'points' | 'dtm' | 'dsm'>('points'), surfaceLoading = $state(false), surfaceError = $state(''), surfaceNonce = $state(0);
+  let surfaceLayer = $state<'points' | 'dtm' | 'dsm' | 'slope'>('points'), surfaceLoading = $state(false), surfaceError = $state(''), surfaceNonce = $state(0);
   let queryController: AbortController | undefined;
   let controller: AbortController | undefined, disposed = false;
   let viewer = $state<ReturnType<typeof createPreparedCloudViewer>>();
+  let sceneMarks = $state<SceneMarkSnapshot>(), selectedSceneMark = $state<string>();
+  export function receiveSceneMarks(value: unknown): void {
+    if (value === undefined) { sceneMarks = undefined; selectedSceneMark = undefined; viewer?.setSceneMarks(); return; }
+    const snapshot = canonicalSceneMarkSnapshot(value);
+    if (disposed || error || !viewer || !sample || !cloudSceneMarksMatch(snapshot, sample.cloud)) throw new Error('Location annotations no longer match the scene. Explore again.');
+    if (sceneMarks && snapshot.annotationRevision < sceneMarks.annotationRevision) throw new Error('Stale location annotations.');
+    viewer.setSceneMarks(snapshot); sceneMarks = snapshot; selectedSceneMark = undefined;
+  }
+  $effect(() => {
+    if (sceneMarks && (error || !sample || !viewer || !cloudSceneMarksMatch(sceneMarks, sample.cloud))) {
+      sceneMarks = undefined; selectedSceneMark = undefined; viewer?.setSceneMarks();
+    }
+  });
   const classes = $derived(Object.entries(sample?.cloud.descriptor.semantics?.classes ?? {}));
   const unassigned = $derived(sample?.cloud.descriptor.instances?.unassigned ?? -100);
+  function setBudget(value: number) {
+    if (!validDisplayBudget(value)) { budgetError = 'Enter a whole number from 65,536 to 50,000,000.'; return; }
+    try { viewer?.setPointBudget(value); }
+    catch { budgetError = 'Could not apply this point budget. Try a smaller value.'; return; }
+    pointBudget = value; budgetDraft = value;
+    budgetError = saveDisplayBudget(DISPLAY_BUDGET_KEYS.cloud, value) ? '' : 'Applied for this session; browser storage is unavailable.';
+  }
   async function load() {
     controller?.abort(); controller = new AbortController();
     const current = controller, id = sceneId;
@@ -48,6 +73,7 @@
     } finally { if (!disposed && current === controller) loading = false; }
   }
   onMount(() => {
+    pointBudget = readDisplayBudget(DISPLAY_BUDGET_KEYS.cloud); budgetDraft = pointBudget;
     const inventory = new AbortController();
     void (async () => {
       try {
@@ -65,7 +91,7 @@
     if (!current || !host) return;
     try {
       const instance = createPreparedCloudViewer(host, current, {
-        pointBudget: quality === 'light' ? 500000 : quality === 'balanced' ? 1500000 : 3000000,
+        pointBudget: untrack(() => pointBudget),
         ondetail: stats => detail = stats,
         onelevationpick: (x, y) => void inspectElevation(x, y),
         onpick: point => { selected = point; onpoint(point); }, onerror: message => error = message,
@@ -117,12 +143,19 @@
     </div>
     {#if elevationInfo}<select aria-label="Surface layer" bind:value={surfaceLayer}>
       <option value="points">Points</option><option value="dtm">DTM · Ground</option><option value="dsm">DSM · Surface</option>
+      {#if elevationInfo.terrain}<option value="slope">Slope · Ground</option>{/if}
     </select>{/if}
     <button class="fit" onclick={() => viewer?.fit()} disabled={!sample || !!error}>Fit</button>
     <details class="quality"><summary>Display</summary><div class="quality-options">
-      <label>Detail <select aria-label="Display quality" bind:value={quality} onchange={load} disabled={!scenes.length}>
-        <option value="light">Light</option><option value="balanced">Balanced</option><option value="fine">Fine</option>
-      </select></label>{#if detail}<p>{detail.loadedPoints.toLocaleString()} points loaded{detail.pending ? ' · Refining…' : ''}</p>{/if}
+      <label>Detail <select aria-label="Display quality" value={quality} onchange={event => {
+        const preset = event.currentTarget.value;
+        if (preset !== 'custom') setBudget(preset === 'light' ? 500000 : preset === 'balanced' ? 1500000 : 3000000);
+      }} disabled={!scenes.length}>
+        <option value="light">Light</option><option value="balanced">Balanced</option><option value="fine">Fine</option><option value="custom">Custom</option>
+      </select></label>
+      <label>Point budget <input aria-label="Point budget" type="number" min={MIN_DISPLAY_POINTS} max={MAX_ADAPTIVE_POINTS} step="1" bind:value={budgetDraft} onchange={() => setBudget(budgetDraft)} /></label>
+      {#if budgetError}<p role="alert">{budgetError}</p>{/if}
+      {#if detail}<p>{detail.loadedPoints.toLocaleString()} points loaded{detail.pending ? ' · Refining…' : ''}</p>{/if}
     </div></details>
   </div>
   <div class="viewport" bind:this={host}></div>
@@ -132,12 +165,17 @@
   {#if surfaceLoading}<div class="notice" role="status">Loading elevation…</div>{/if}
   {#if surfaceError}<div class="notice error" role="alert">{surfaceError} <button onclick={() => elevationInfo ? surfaceNonce++ : load()}>Retry layer</button></div>{/if}
   <div class="inspection">
+    {#if sceneMarks?.marks.length}
+      <CloudSceneMarks snapshot={sceneMarks} selected={selectedSceneMark} onlayout={() => viewer?.refreshSceneMarks()} onselect={(id, position) => {
+        selectedSceneMark = id; viewer?.setSceneMarks(sceneMarks ? $state.snapshot(sceneMarks) : undefined, id); viewer?.focusPosition(position);
+      }} />
+    {/if}
     {#if surfaceLayer !== 'points' && elevationInfo}
-      {@const range = elevationInfo.layers[surfaceLayer]}
-      <div class="selection" aria-label="Elevation color key"><strong>{surfaceLayer === 'dtm' ? 'Ground elevation' : 'Surface elevation'} · m</strong>
+      {@const range = surfaceLayer === 'slope' ? elevationInfo.terrain!.slope : elevationInfo.layers[surfaceLayer]}
+      <div class="selection" aria-label="Elevation color key"><strong>{surfaceLayer === 'slope' ? 'Ground slope · °' : surfaceLayer === 'dtm' ? 'Ground elevation · m' : 'Surface elevation · m'}</strong>
         <div class="elevation-ramp" style:background={`linear-gradient(to right, ${elevationColor(range.min ?? 0, range.min ?? 0, range.max ?? 0).getStyle()}, ${elevationColor(((range.min ?? 0) + (range.max ?? 0)) / 2, range.min ?? 0, range.max ?? 0).getStyle()}, ${elevationColor(range.max ?? 0, range.min ?? 0, range.max ?? 0).getStyle()})`}></div>
         <div class="elevation-range"><span>{range.min?.toFixed(1) ?? 'No data'}</span><span>{range.max?.toFixed(1) ?? 'No data'}</span></div>
-        <details><summary>Details</summary><p>{elevationInfo.grid.resolution} m source cells · No interpolation</p><p>{surfaceLayer === 'dtm' ? 'Mean classified ground elevation' : 'Maximum observed surface elevation'}</p><p>Gaps have no supporting observations.</p></details>
+        <details><summary>Details</summary><p>{elevationInfo.grid.resolution} m source cells · No interpolation</p><p>{surfaceLayer === 'slope' ? 'GDAL Horn · Complete 3×3 ground neighborhood' : surfaceLayer === 'dtm' ? 'Mean classified ground elevation' : 'Maximum observed surface elevation'}</p><p>Gaps have no supporting observations.</p></details>
       </div>
       {#if elevationResult}<div class="selection" aria-live="polite"><strong>Elevation cell</strong>
         <div>Ground: {elevationResult.dtm === null ? 'No data' : `${elevationResult.dtm.toFixed(3)} m`}</div>
@@ -167,8 +205,8 @@
   .elevation-range { display:flex; justify-content:space-between; gap:30px; font-size:12px; }
   .cloud { height:100%; min-height:0; display:flex; flex-direction:column; position:relative; }
   .scene-controls { display:flex; gap:8px; align-items:center; padding:10px 12px; border-bottom:1px solid #ffffff12; z-index:3; flex-wrap:wrap; }
-  select,button,summary { color:#eeeef2; font:inherit; }
-  select,button { border:1px solid #ffffff20; border-radius:7px; padding:7px 10px; background:#25262b; }
+  select,button,summary,input { color:#eeeef2; font:inherit; }
+  select,button,input { border:1px solid #ffffff20; border-radius:7px; padding:7px 10px; background:#25262b; }
   button { cursor:pointer; } button:disabled { opacity:.4; }
   .scene-controls > select { min-width:0; max-width:240px; }
   .color-modes { display:flex; gap:2px; padding:3px; border:1px solid #ffffff16; border-radius:9px; }
@@ -177,6 +215,8 @@
   summary { cursor:pointer; padding:8px; }
   .quality { position:relative; margin-left:auto; }
   .quality-options { position:absolute; top:100%; right:0; width:210px; padding:12px; border:1px solid #ffffff20; border-radius:10px; background:#25262b; }
+  .quality-options input { width:120px; min-width:0; box-sizing:border-box; }
+  .quality-options label + label { margin-top:10px; }
   .quality-options label { display:flex; justify-content:space-between; align-items:center; gap:8px; }
   .quality-options p { color:#b6b7c0; font-size:11px; margin:10px 0 0; }
   .viewport { flex:1; min-height:0; }

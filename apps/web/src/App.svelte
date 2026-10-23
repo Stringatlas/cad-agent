@@ -6,6 +6,7 @@
   import CloudChat from './chat/CloudChat.svelte';
   import type { PreparedSample, PreparedPoint } from './scenes/point-cloud/prepared-cloud-client';
   let cloudSample = $state<PreparedSample>(), cloudSelected = $state<PreparedPoint>();
+  let cloudViewer = $state<PointCloud>();
   import ClosestPole from './scenes/toronto/inspection/ClosestPole.svelte';
   import Chat from './chat/Chat.svelte';
   import ProviderAccount from './auth/ProviderAccount.svelte';
@@ -78,9 +79,8 @@
   onMount(() => { if (window.matchMedia('(max-width: 640px)').matches) chatOpen = false;  });
 </script>
 
-<svelte:head><title>Spatial</title></svelte:head>
+<svelte:head><title>Workspace</title></svelte:head>
 <header class="workspace-header">
-  <a class="brand" href="#workspace"><span class="brand-icon" aria-hidden="true">◇</span><span>Spatial</span></a>
   <select class="workspace-select" aria-label="Scene source" value={mode} onchange={event => switchSource(event.currentTarget.value as typeof mode)}>
     <option value="cloud">STPLS3D</option>
     <option value="toronto">Toronto3D</option>
@@ -91,12 +91,12 @@
 <div id="workspace" class="integrated-workspace" class:chat-closed={!chatOpen} data-testid="shared-workspace">
   <div class="scene-source">
     {#if mode === 'cloud'}
-      <PointCloud selection={cloudSelected} onscene={value => { cloudSample = value; cloudSelected = undefined; }} onpoint={value => cloudSelected = value} onvisualsource={value => visualSource = value} />
+      <PointCloud bind:this={cloudViewer} selection={cloudSelected} onscene={value => { cloudSample = value; cloudSelected = undefined; }} onpoint={value => cloudSelected = value} onvisualsource={value => visualSource = value} />
     {:else if mode === 'toronto'}
       <Toronto bind:this={toronto} {objectRefresh} onobjectstate={(snapshot, selectedId, blocked) => { objectSnapshot = snapshot; selectedObjectId = selectedId; objectBlocked = blocked; }} onarea={value => areaInput = value} {pointOverrides} {pointPreview} {pointRefresh} onpointstate={(snapshot, proposal, blocked) => { pointOverrides = snapshot; pointPreview = proposal; pointBlocked = !!blocked; }} {cadRefresh} modelStreaming={torontoStreaming} oncadblocked={value => torontoCadBlocked = value} onrevision={value => { if (torontoRevision && torontoRevision !== value) { sourceGeneration++; pointOverrides = undefined; pointPreview = undefined; points = []; } torontoRevision = value; }} onvisualsource={value => visualSource = value} {points} allocatePointName={() => pointSequence.allocate()} onpoint={pinToronto} onpoints={value => { points = value; pointStatus = ''; }} />
     {:else}<ClosestPole />{/if}
   </div>
-  <div class="chat-shell" class:mobile-open={chatOpen}>{#if mode === 'cloud'}{#if cloudSample}{#key cloudSample.cloud.revision}<CloudChat sample={cloudSample} selected={cloudSelected} {visualSource} onselectpoint={value => cloudSelected = value} />{/key}{/if}{:else}<Chat {objectReferences} {selectedObject} onclearobject={() => toronto?.clearObjectSelection()} {objectBlocked} onobjectproposal={() => objectRefresh++} onscenemarks={snapshot => { if (mode !== 'toronto' || !toronto) throw new Error('Location annotations unavailable.'); toronto.receiveSceneMarks(snapshot); }} onareacandidates={async (result, current) => { const source = toronto, generation = sourceGeneration; if (mode !== 'toronto' || !source || !current()) throw new Error('Toronto candidates unavailable.'); await source.receiveAreaCandidates(result, () => mode === 'toronto' && source === toronto && generation === sourceGeneration && current()); }} onplacementsearch={async (result, current) => { const source = toronto, generation = sourceGeneration; if (mode !== 'toronto' || !source || !current()) throw new Error('Toronto placement unavailable.'); await source.receivePlacementSearch(result, () => mode === 'toronto' && source === toronto && generation === sourceGeneration && current()); }} onselectreference={selectAgentReference} onauthorityrefresh={refreshAgentAuthorities} {areaInput} {pointBlocked} onpointproposal={() => pointRefresh++} {torontoCadBlocked} oncadproposal={() => cadRefresh++} ontorontostreaming={value => torontoStreaming = value} {pointOverrides} onverifiedresult={selectVerified} {visualSource} sceneMode={mode} {points} {pointStatus} onclearpoint={name => { points = points.filter(point => point.name !== name); pointStatus = ''; }} />{/if}</div>
+  <div class="chat-shell" class:mobile-open={chatOpen}>{#if mode === 'cloud'}{#if cloudSample}{#key cloudSample.cloud.revision}<CloudChat sample={cloudSample} selected={cloudSelected} {visualSource} onselectpoint={value => cloudSelected = value} onscenemarks={snapshot => { if (mode !== 'cloud' || !cloudViewer) throw new Error('Location annotations unavailable.'); cloudViewer.receiveSceneMarks(snapshot); }} />{/key}{/if}{:else}<Chat {objectReferences} {selectedObject} onclearobject={() => toronto?.clearObjectSelection()} {objectBlocked} onobjectproposal={() => objectRefresh++} onscenemarks={snapshot => { if (mode !== 'toronto' || !toronto) throw new Error('Location annotations unavailable.'); toronto.receiveSceneMarks(snapshot); }} onareacandidates={async (result, current) => { const source = toronto, generation = sourceGeneration; if (mode !== 'toronto' || !source || !current()) throw new Error('Toronto candidates unavailable.'); await source.receiveAreaCandidates(result, () => mode === 'toronto' && source === toronto && generation === sourceGeneration && current()); }} onplacementsearch={async (result, current) => { const source = toronto, generation = sourceGeneration; if (mode !== 'toronto' || !source || !current()) throw new Error('Toronto placement unavailable.'); await source.receivePlacementSearch(result, () => mode === 'toronto' && source === toronto && generation === sourceGeneration && current()); }} onselectreference={selectAgentReference} onauthorityrefresh={refreshAgentAuthorities} {areaInput} {pointBlocked} onpointproposal={() => pointRefresh++} {torontoCadBlocked} oncadproposal={() => cadRefresh++} ontorontostreaming={value => torontoStreaming = value} {pointOverrides} onverifiedresult={selectVerified} {visualSource} sceneMode={mode} {points} {pointStatus} onclearpoint={name => { points = points.filter(point => point.name !== name); pointStatus = ''; }} />{/if}</div>
 </div>
 <style>
   :global(*) { box-sizing: border-box; }
@@ -108,9 +108,7 @@
   :global(:is(button, input, select, textarea, summary, a):focus-visible) { outline: 2px solid #78acff; outline-offset: 3px; }
   :global(summary) { cursor: pointer; }
   :global(button:disabled) { cursor: not-allowed; }
-  .workspace-header { position: relative; z-index: 20; flex: 0 0 58px; display: flex; align-items: center; gap: 24px; padding: 0 20px; border-bottom: 1px solid #ffffff12; background: #202124; }
-  .brand { display: flex; gap: 8px; align-items: center; color: inherit; text-decoration: none; font-size: 17px; font-weight: 600; letter-spacing: -.5px; }
-  .brand-icon { color: #d7d9df; font-size: 27px; line-height: 1; }
+  .workspace-header { position: relative; z-index: 20; flex: 0 0 52px; display: flex; align-items: center; gap: 12px; padding: 0 16px; border-bottom: 1px solid #ffffff12; background: #202124; }
   .workspace-select { max-width: 190px; color: #eeeef2; background: #292a2e; border: 1px solid #ffffff18; border-radius: 7px; padding: 7px 10px; cursor: pointer; }
   .header-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
   .tools-link { display: inline-flex; align-items: center; min-height: 44px; padding: 5px 8px; color: #b4b5be; text-decoration: none; }
@@ -125,10 +123,9 @@
   .chat-shell { border-left: 1px solid #ffffff12; }
   .scene-source { position: relative; background: #151619; }
   @media (min-width: 1600px) { .integrated-workspace { grid-template-columns: minmax(0, 1fr) 390px; } }
-  @media (max-width: 900px) { .workspace-header { gap: 12px; padding: 0 12px; } .brand > span:last-child { display: none; } .header-actions { gap: 5px; } .workspace-select { max-width: 170px; font-size: 12px; } }
+  @media (max-width: 900px) { .workspace-header { gap: 12px; padding: 0 12px; } .header-actions { gap: 5px; } .workspace-select { max-width: 170px; font-size: 12px; } }
   @media (max-width: 640px) {
-    .workspace-header { flex-basis: 58px; gap: 8px; padding: 8px 12px; }
-    .brand { font-size: 15px; }
+    .workspace-header { flex-basis: 52px; gap: 8px; padding: 8px 12px; }
     .workspace-select { max-width: 145px; min-width: 0; }
     .workspace-select { flex: 1; }
     .header-actions { gap: 2px; }

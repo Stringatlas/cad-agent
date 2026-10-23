@@ -111,11 +111,8 @@ export function createModelChatRoutes(auth: ModelAuth, directory: string, transp
         bound = await retryModelSceneRead(() => bindModelScene(call!.scene, directory, controller.signal, visual, editing, clouds), controller.signal);
         broker = new ModelVisualBroker(call.requestId, controller.signal, emit);
         browserBroker = new ModelBrowserBroker(call.requestId, controller.signal, emit);
-        const runtime = createModelAgentRuntime(call, bound, directory, controller.signal, browserBroker, editing, clouds);
-        bound = new Proxy(runtime, { get(target, key) {
-          if (key === 'resolveVisualPixel') return (args: { observationId: string; x: number; y: number }, toolCallId: string) => broker!.resolve(args, toolCallId);
-          return Reflect.get(target, key);
-        } });
+        bound = createModelAgentRuntime(call, bound, directory, controller.signal, browserBroker, editing, clouds,
+          (args, toolCallId) => broker!.resolve(args, toolCallId));
         boundActive = bound;
         await model.turn(call, bound, emit, controller.signal);
         response.end();

@@ -61,7 +61,8 @@ try {
   await capture('desktop-default');
   await quality(); assert.equal(await page.getByTestId('adaptive-display-toggle').isChecked(), true);
   assert.equal(await page.getByTestId('display-budget').inputValue(), '3000000');
-  assert.deepEqual(await page.getByTestId('display-budget').locator('option').evaluateAll(options => options.map(option => Number(option.value))), [500000, 1000000, 2000000, 3000000]);
+  assert.equal(await page.getByTestId('display-budget').getAttribute('max'), '50000000');
+  assert.equal(await page.getByTestId('display-budget').getAttribute('min'), '65536');
   assert.equal(await page.getByTestId('display-depth').count(), 0);
   assert.equal(await page.getByTestId('display-point-size').inputValue(), '4');
   const beforeSize = await state(), sizeRequests = nativeCount();
@@ -73,7 +74,7 @@ try {
   }
   assert.deepEqual(nodes(await state()), nodes(beforeSize)); assert.equal(nativeCount(), sizeRequests);
   await page.getByTestId('toronto-technical').locator(':scope > summary').click();
-  report.checks.push('Default adaptive binary streaming uses 3M budget/hard maximum, bounded GPU batches/draw calls, no automatic crop; point size redraws without refetching nodes; tools stay collapsed');
+  report.checks.push('Default adaptive binary streaming uses 3M default budget and custom 50M upper bound, bounded GPU batches/draw calls, no automatic crop; point size redraws without refetching nodes; tools stay collapsed');
   await capture('desktop-idle');
   await page.waitForTimeout(1000); const idle = nativeCount(), idleFrames = (await state()).renderedFrames;
   await page.waitForTimeout(1800); assert.equal(nativeCount(), idle); assert.equal((await state()).renderedFrames, idleFrames);
@@ -81,7 +82,7 @@ try {
   await orbit(); const orbited = await settled('orbited'); assert.notEqual(orbited.camera, startup.camera); assert.notDeepEqual(nodes(orbited), nodes(startup));
   const r = await viewer.boundingBox(); await page.mouse.move(r.x + r.width / 2, r.y + r.height / 2); await page.mouse.wheel(0, -550); await page.waitForTimeout(800); const zoomed = await settled('zoomed'); assert.notEqual(zoomed.camera, orbited.camera);
   report.checks.push('Orbit and zoom update camera/native request plan');
-  await quality(); await page.getByTestId('display-budget').selectOption('500000'); const small = await settled('budget500k', 500000);
+  await quality(); await page.getByTestId('display-budget').fill('500000'); await page.getByTestId('display-budget').press('Tab'); const small = await settled('budget500k', 500000);
   assert.ok(Number(small.adaptivePoints) < Number(zoomed.adaptivePoints)); assert.ok(Number(small.gpuGeometries) < Number(zoomed.gpuGeometries));
   assert.ok(Number(small.nativeBatches) < Number(zoomed.nativeBatches));
   report.checks.push('Budget shrink evicts logical nodes and reduces packed GPU batches/geometry count');
@@ -135,7 +136,7 @@ try {
   report.checks.push('Independent explicit 0.5m manual crop loads actual exact points without replacing native chunks');
   await page.getByTestId('clear-crop').click();
   await quality(); let failures = 0; await page.route('**/datasets/toronto3d/display-node?*', route => { if (!failures++) return route.fulfill({status:503,body:'Explicit task040 one-node failure fixture'}); return route.continue(); });
-  await page.getByTestId('display-budget').selectOption('1000000'); await page.waitForFunction(() => !!document.querySelector('[data-testid="toronto-viewer"]')?.dataset.adaptiveError);
+  await page.getByTestId('display-budget').fill('1000000'); await page.getByTestId('display-budget').press('Tab'); await page.waitForFunction(() => !!document.querySelector('[data-testid="toronto-viewer"]')?.dataset.adaptiveError);
   const failedCount = nativeCount(); await orbit(); await page.waitForTimeout(2000); assert.equal(nativeCount(), failedCount); assert.ok((await state()).adaptiveError);
   await quality(); await capture('desktop-error'); await page.getByTestId('retry-display').click(); await settled('retried',1000000); await page.unroute('**/datasets/toronto3d/display-node?*');
   report.checks.push('One explicitly injected node HTTP503 latches through camera movement, no retry loop; explicit Retry restores real chunks');

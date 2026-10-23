@@ -1,7 +1,12 @@
 import * as THREE from 'three';
+import { constructAgentCamera, legacyAgentView } from './agent-camera';
+import { canonicalBrowserCaptureRequest, canonicalSceneSourceBinding, canonicalProtocolJson, CaptureViewError, type BrowserCaptureRequest, type AgentViewReceipt } from '@spatial/contracts';
+import { createCaptureGrounding, type CapturePointSource } from './capture-grounding';
+import type { CaptureDetailLease } from './adaptive-loader';
 import { canonicalModelCaptureRequest, VISUAL_OBSERVATION_LIMITS as LIMITS, type ModelCaptureColorMode, type ModelCaptureRequest, type Vec3, type VisualBinding, type VisualCoverage, type VisualObservation, type VisualPixelResolution, type VisualPointProvenance } from '@spatial/contracts';
 
 export interface VisualCaptureOptions {
+  prepare?: (camera: THREE.PerspectiveCamera, focus: Vec3, height: number, signal: AbortSignal) => Promise<CaptureDetailLease | undefined>;
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
@@ -15,6 +20,7 @@ export interface VisualCaptureOptions {
   /** Displayed point layers; blocking scene meshes are included automatically. */
   points: () => THREE.Object3D[];
   resolve: (object: THREE.Object3D, index: number) => VisualPointProvenance | undefined;
+  captureSource?: (object: THREE.Object3D) => CapturePointSource | undefined;
   available: () => boolean;
 }
 
@@ -45,6 +51,19 @@ function visible(object: THREE.Object3D): boolean {
 export function createVisualCapture(options: VisualCaptureOptions) {
   const { renderer, scene, camera } = options;
   let generation = 0, serial = 0, disposed = false;
+  let pending: AbortController | undefined;
+  let snapshot: { id: string; binding: string; data: ReturnType<typeof createCaptureGrounding> } | undefined;
+  let snapshotTimer: ReturnType<typeof setTimeout> | undefined;
+  let snapshotAbort: (() => void) | undefined;
+  const clearSnapshot = () => { snapshot = undefined; snapshotAbort?.(); snapshotAbort = undefined; if (snapshotTimer) clearTimeout(snapshotTimer); snapshotTimer = undefined; };
+  let issuedView: { id: string; binding: string; expires: number } | undefined;
+  let issuedAbort: (() => void) | undefined;
+  const clearIssued = () => { issuedView = undefined; issuedAbort?.(); issuedAbort = undefined; };
+  const loseContext = () => {
+    ++serial; pending?.abort(new Error('Visual capture context lost'));
+    clearSnapshot(); clearIssued();
+  };
+  renderer.domElement.addEventListener?.('webglcontextlost', loseContext);
   let retained: { observation: VisualObservation; signature: string; camera: THREE.PerspectiveCamera; objects: THREE.Object3D[]; generation: number } | undefined;
   const available = () => {
     try { return !disposed && options.available() && !renderer.getContext().isContextLost(); }
@@ -79,80 +98,150 @@ export function createVisualCapture(options: VisualCaptureOptions) {
     return available() && bundle.generation === generation && state().signature === bundle.signature;
   }
   return {
-    async capture(request?: ModelCaptureRequest): Promise<VisualObservation> {
-      retained = undefined;
-      const ticket = ++serial;
-      if (!available()) throw new Error('Visual capture unavailable');
-      const before = state(), viewGeneration = generation;
-      const { x: width, y: height } = before.size;
-      if (![width, height].every(n => Number.isSafeInteger(n) && n > 0 && n <= LIMITS.maxDimension)) throw new Error('Visual viewport exceeds capture limits');
-      const view = canonicalModelCaptureRequest(request ?? { kind: 'current' });
-      if (view.colorMode !== undefined && !options.pointColorMode) throw new Error('Capture point color mode unavailable in this viewer');
-      if (view.colorMode !== undefined && options.supportedColorModes && !options.supportedColorModes.includes(view.colorMode)) throw new Error('Capture color mode unavailable for this dataset');
-      const liveColorMode = options.pointColorMode?.get();
-      const recolor = view.colorMode !== undefined && view.colorMode !== liveColorMode;
-      const frozenCamera = camera.clone();
-      if (view.kind === 'top-down') {
-        // Keep the user's orbit focus, not the dataset/world origin. Without controls,
-        // use a reasonable point ten local meters along the current look direction.
-        const focus = options.target ? new THREE.Vector3(...options.target()) :
-          camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(10).add(camera.position);
-        if (!focus.toArray().every(Number.isFinite)) throw new Error('Invalid capture focus');
-        const distance = Math.max(camera.position.distanceTo(focus), camera.near * 2, 1);
-        frozenCamera.position.copy(focus).add(new THREE.Vector3(0, 0, distance));
-        // Z remains the world's vertical. Looking along -Z needs +Y image-up
-        // rather than a parallel Z-up vector (north-up XY plan view).
-        frozenCamera.up.set(0, 1, 0); frozenCamera.lookAt(focus);
-      } else if (view.kind === 'camera') {
-        frozenCamera.position.set(...view.position);
-        frozenCamera.up.set(...(view.up ?? [0, 0, 1]));
-        const direction = new THREE.Vector3(...view.target).sub(frozenCamera.position);
-        // A vertical look with omitted up uses the same deterministic plan-view up.
-        if (direction.clone().cross(frozenCamera.up).length() < 1e-9) frozenCamera.up.set(0, 1, 0);
-        frozenCamera.lookAt(new THREE.Vector3(...view.target));
-      }
-      frozenCamera.updateMatrixWorld(true);
-      // All rendering/extraction/restoration is synchronous: neither controls nor
-      // the animation loop can observe/mutate a temporary camera or leave its frame.
-      let dataUrl: string, coverage = before.coverage;
+    async capture(request?: BrowserCaptureRequest, signal?: AbortSignal, immutable = false): Promise<VisualObservation> {
+      const previousView = issuedView; clearIssued();
+      clearSnapshot();
+      pending?.abort(new Error('Visual capture replaced or superseded'));
+      const abort = new AbortController(); pending = abort;
+      const cancel = () => abort.abort(signal?.reason);
+      signal?.addEventListener('abort', cancel, { once: true });
+      if (signal?.aborted) cancel();
+      const timeout = setTimeout(() => abort.abort(new Error('Capture detail deadline exceeded')), 11000);
+      let lease: CaptureDetailLease | undefined;
       try {
-        if (recolor) options.pointColorMode!.set(view.colorMode!);
-        coverage = detached(options.coverage(frozenCamera));
-        renderer.render(scene, frozenCamera);
-        dataUrl = renderer.domElement.toDataURL('image/png');
+        abort.signal.throwIfAborted();
+        retained = undefined;
+        const ticket = ++serial;
+        if (!available()) throw new Error('Visual capture unavailable');
+        let before = state();
+        const sourceBinding = JSON.stringify(before.binding);
+        let viewGeneration = generation;
+        const { x: width, y: height } = before.size;
+        if (![width, height].every(n => Number.isSafeInteger(n) && n > 0 && n <= LIMITS.maxDimension)) throw new Error('Visual viewport exceeds capture limits');
+        const view = canonicalBrowserCaptureRequest(request ?? { kind: 'current' });
+        if (view.kind === 'adjust' && (!immutable || !previousView || previousView.id !== view.observationId || previousView.binding !== sourceBinding || performance.now() >= previousView.expires)) throw new CaptureViewError('view-unavailable');
+        if ((view.kind === 'framed' || view.kind === 'adjust') && canonicalProtocolJson(view.binding) !== canonicalProtocolJson(canonicalSceneSourceBinding({ sourceId: before.binding.sourceId, sourceRevision: before.binding.sourceRevision, frameId: before.binding.frameId, units: before.binding.units, origin: before.binding.origin }))) throw new Error('Capture binding changed');
+        if (view.colorMode !== undefined && !options.pointColorMode) throw immutable ? new CaptureViewError('unsupported') : new Error('Capture point color mode unavailable in this viewer');
+        if (view.colorMode !== undefined && options.supportedColorModes && !options.supportedColorModes.includes(view.colorMode)) throw immutable ? new CaptureViewError('unsupported') : new Error('Capture color mode unavailable for this dataset');
+        let frozenCamera = camera.clone();
+        let agentView: AgentViewReceipt | undefined;
+        let focus: Vec3 = options.target?.() ?? camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(10).add(camera.position).toArray() as Vec3;
+        if (view.kind === 'framed' || view.kind === 'adjust') {
+          const framed = constructAgentCamera(view, width / height, String(before.coverage.kind), view.colorMode ?? options.pointColorMode?.get() ?? 'rgb');
+          frozenCamera = framed.camera; focus = framed.focus; agentView = framed.receipt;
+        } else if (view.kind === 'top-down') {
+          // Keep the user's orbit focus, not the dataset/world origin. Without controls,
+          // use a reasonable point ten local meters along the current look direction.
+          const target = new THREE.Vector3(...focus);
+          if (!target.toArray().every(Number.isFinite)) throw new Error('Invalid capture focus');
+          const distance = Math.max(camera.position.distanceTo(target), camera.near * 2, 1);
+          frozenCamera.position.copy(target).add(new THREE.Vector3(0, 0, distance));
+          // Z remains the world's vertical. Looking along -Z needs +Y image-up
+          // rather than a parallel Z-up vector (north-up XY plan view).
+          frozenCamera.up.set(0, 1, 0); frozenCamera.lookAt(target);
+        } else if (view.kind === 'camera') {
+          frozenCamera.position.set(...view.position);
+          frozenCamera.up.set(...(view.up ?? [0, 0, 1]));
+          const direction = new THREE.Vector3(...view.target).sub(frozenCamera.position);
+          // A vertical look with omitted up uses the same deterministic plan-view up.
+          if (direction.clone().cross(frozenCamera.up).length() < 1e-9) frozenCamera.up.set(0, 1, 0);
+          frozenCamera.lookAt(new THREE.Vector3(...view.target));
+          focus = view.target;
+        }
+        frozenCamera.updateMatrixWorld(true);
+        if (immutable && !agentView) agentView = legacyAgentView(frozenCamera, focus, String(before.coverage.kind), view.colorMode ?? options.pointColorMode?.get() ?? 'rgb', view.kind === 'camera');
+        if (options.prepare) {
+          try { lease = await options.prepare(frozenCamera, focus, height, abort.signal); }
+          catch (error) { abort.signal.throwIfAborted(); if (error instanceof CaptureViewError) throw error; throw new CaptureViewError('detail-unavailable'); }
+          abort.signal.throwIfAborted();
+          if (!available() || ticket !== serial || JSON.stringify(options.binding()) !== sourceBinding) throw new Error('Capture scene changed while loading');
+          before = state(); viewGeneration = generation;
+          if (before.size.x !== width || before.size.y !== height) throw new Error('Capture viewport resized while loading');
+        }
+        // All rendering/extraction/restoration is synchronous: neither controls nor
+        // the animation loop can observe/mutate a temporary camera or leave its frame.
+        let dataUrl: string, coverage = before.coverage;
+        let capturedAt = performance.now();
+        let grounding: ReturnType<typeof createCaptureGrounding> | undefined, groundingReason = 'Capture grounding unsupported';
+        const restoreColorMode = options.pointColorMode?.get();
+        const recolor = view.colorMode !== undefined && view.colorMode !== restoreColorMode;
+        let borrowed: ReturnType<CaptureDetailLease['render']> | undefined;
+        try {
+          borrowed = lease?.render();
+          if (recolor) options.pointColorMode!.set(view.colorMode!);
+          coverage = detached({ ...options.coverage(frozenCamera), ...(lease ? { captureDetail: lease.coverage } : {}), ...(agentView ? { agentView: JSON.parse(JSON.stringify(agentView)) } : {}) });
+          renderer.render(scene, frozenCamera);
+          dataUrl = renderer.domElement.toDataURL('image/png');
+          capturedAt = performance.now();
+          if (immutable) {
+            try {
+              if (renderer.clippingPlanes?.length || renderer.getScissorTest?.()) throw new Error('Capture grounding unsupported renderer clipping');
+              grounding = createCaptureGrounding(scene, frozenCamera, width, height, before.binding, object => options.captureSource?.(object));
+            }
+            catch (error) { groundingReason = error instanceof Error ? error.message : groundingReason; }
+            coverage = grounding ? detached({ ...coverage, grounding: { status: 'ready', method: 'point-center-within-3px', bytes: grounding.bytes, expiresInMs: 300000, visibility: 'browser-observed-not-server-verified' } }) : detached({ ...coverage, grounding: { status: 'unavailable', reason: groundingReason } });
+          }
+        } finally {
+          // Restore even on recolor/render/extraction failure, before yielding to hashing.
+          try { if (recolor) options.pointColorMode!.set(restoreColorMode!); }
+          finally {
+            try { borrowed?.restore(); }
+            finally { if (borrowed || recolor || view.kind !== 'current') renderer.render(scene, camera); }
+          }
+        }
+        // Recoloring may advance GPU attribute versions, even after restoring values.
+        // Retain grounding against the restored live scene, not temporary colors.
+        const liveSignature = recolor ? state().signature : before.signature;
+        lease?.release(); lease = undefined;
+        if (!dataUrl.startsWith('data:image/png;base64,') || dataUrl.length > Math.ceil(LIMITS.maxPngBytes / 3) * 4 + 22) throw new Error('PNG unavailable or exceeds capture limit');
+        const binary = atob(dataUrl.slice(22));
+        if (binary.length === 0 || binary.length > LIMITS.maxPngBytes) throw new Error('PNG exceeds capture limit');
+        const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
+        if ([137, 80, 78, 71, 13, 10, 26, 10].some((byte, index) => bytes[index] !== byte)) throw new Error('Invalid PNG capture');
+        const hash = await crypto.subtle.digest('SHA-256', bytes);
+        // PNG extraction and camera metadata were frozen synchronously. Navigation while
+        // hashing cannot invalidate those past pixels; only a newer capture/disposal wins.
+        abort.signal.throwIfAborted();
+        if (disposed || ticket !== serial) throw new Error('Visual capture replaced or disposed');
+        const observation: VisualObservation = Object.freeze({ schemaVersion: 1, observationId: crypto.randomUUID(), viewGeneration,
+          image: Object.freeze({ mimeType: 'image/png', dataUrl, sha256: Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join(''), byteLength: bytes.length }),
+          viewport: Object.freeze({ width, height, pixelRatio: before.pixelRatio, pixelOrigin: 'top-left' }),
+          camera: detached({ position: frozenCamera.position.toArray() as unknown as Vec3, quaternion: frozenCamera.quaternion.toArray(), up: frozenCamera.up.toArray() as unknown as Vec3,
+            near: frozenCamera.near, far: frozenCamera.far, fov: frozenCamera.fov, aspect: frozenCamera.aspect, zoom: frozenCamera.zoom,
+            matrixWorld: frozenCamera.matrixWorld.toArray(), matrixWorldInverse: frozenCamera.matrixWorldInverse.toArray(), projectionMatrix: frozenCamera.projectionMatrix.toArray() }),
+          binding: before.binding, coverage });
+        const bundle = { observation, signature: liveSignature, camera: frozenCamera, objects: before.objects, generation: viewGeneration };
+        if (immutable && agentView && JSON.stringify(options.binding()) === sourceBinding) {
+          issuedView = { id: observation.observationId, binding: sourceBinding, expires: capturedAt + 300000 };
+          const revoke = () => { if (issuedView?.id === observation.observationId) clearIssued(); };
+          signal?.addEventListener('abort', revoke, { once: true }); issuedAbort = () => signal?.removeEventListener('abort', revoke);
+        }
+        if (grounding && JSON.stringify(options.binding()) === sourceBinding) {
+          snapshot = { id: observation.observationId, binding: sourceBinding, data: grounding };
+          const revoke = () => { if (snapshot?.id === observation.observationId) clearSnapshot(); };
+          signal?.addEventListener('abort', revoke, { once: true });
+          snapshotAbort = () => signal?.removeEventListener('abort', revoke);
+          snapshotTimer = setTimeout(clearSnapshot, 300000); (snapshotTimer as unknown as { unref?: () => void }).unref?.();
+        }
+        // Retain live pixel grounding only if the rendered scene still matches. The
+        // observation itself is immutable and does not depend on this disposable cache.
+        try { if (!immutable && !borrowed?.changed && current(bundle)) retained = bundle; }
+        catch { /* Unavailable current metadata cannot invalidate already-captured pixels. */ }
+        return observation;
       } finally {
-        // Restore even on recolor/render/extraction failure, before yielding to hashing.
-        try { if (recolor) options.pointColorMode!.set(liveColorMode!); }
-        finally { if (recolor || view.kind !== 'current') renderer.render(scene, camera); }
+        lease?.release(); clearTimeout(timeout); signal?.removeEventListener('abort', cancel);
+        if (pending === abort) pending = undefined;
       }
-      // Recoloring may advance GPU attribute versions, even after restoring values.
-      // Retain grounding against the restored live scene, not temporary colors.
-      const liveSignature = recolor ? state().signature : before.signature;
-      if (!dataUrl.startsWith('data:image/png;base64,') || dataUrl.length > Math.ceil(LIMITS.maxPngBytes / 3) * 4 + 22) throw new Error('PNG unavailable or exceeds capture limit');
-      const binary = atob(dataUrl.slice(22));
-      if (binary.length === 0 || binary.length > LIMITS.maxPngBytes) throw new Error('PNG exceeds capture limit');
-      const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
-      if ([137, 80, 78, 71, 13, 10, 26, 10].some((byte, index) => bytes[index] !== byte)) throw new Error('Invalid PNG capture');
-      const hash = await crypto.subtle.digest('SHA-256', bytes);
-      // PNG extraction and camera metadata were frozen synchronously. Navigation while
-      // hashing cannot invalidate those past pixels; only a newer capture/disposal wins.
-      if (disposed || ticket !== serial) throw new Error('Visual capture replaced or disposed');
-      const observation: VisualObservation = Object.freeze({ schemaVersion: 1, observationId: crypto.randomUUID(), viewGeneration,
-        image: Object.freeze({ mimeType: 'image/png', dataUrl, sha256: Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join(''), byteLength: bytes.length }),
-        viewport: Object.freeze({ width, height, pixelRatio: before.pixelRatio, pixelOrigin: 'top-left' }),
-        camera: detached({ position: frozenCamera.position.toArray() as unknown as Vec3, quaternion: frozenCamera.quaternion.toArray(), up: frozenCamera.up.toArray() as unknown as Vec3,
-          near: frozenCamera.near, far: frozenCamera.far, fov: frozenCamera.fov, aspect: frozenCamera.aspect, zoom: frozenCamera.zoom,
-          matrixWorld: frozenCamera.matrixWorld.toArray(), matrixWorldInverse: frozenCamera.matrixWorldInverse.toArray(), projectionMatrix: frozenCamera.projectionMatrix.toArray() }),
-        binding: before.binding, coverage });
-      const bundle = { observation, signature: liveSignature, camera: frozenCamera, objects: before.objects, generation: viewGeneration };
-      // Retain live pixel grounding only if the rendered scene still matches. The
-      // observation itself is immutable and does not depend on this disposable cache.
-      try { if (current(bundle)) retained = bundle; }
-      catch { /* Unavailable current metadata cannot invalidate already-captured pixels. */ }
-      return observation;
     },
-    /** Check retention and live view metadata without intersecting displayed geometry. */
+    captureSnapshot(request: BrowserCaptureRequest, signal?: AbortSignal): Promise<VisualObservation> { return this.capture(request, signal, true); },
+    releaseGrounding() { clearSnapshot(); clearIssued(); },
+    /** Snapshot availability or legacy live view check; images themselves remain historical. */
     isCurrent(observationId: string): boolean {
+      if (snapshot?.id === observationId) {
+        try { if (!disposed && !renderer.getContext().isContextLost() && !snapshot.data.expired() && JSON.stringify(options.binding()) === snapshot.binding) return true; }
+        catch { /* Source unavailable. */ }
+        clearSnapshot(); return false;
+      }
       const bundle = retained;
       // A caller checking an old/unknown ID must not discard the latest observation.
       if (!bundle || observationId !== bundle.observation.observationId) return false;
@@ -164,6 +253,12 @@ export function createVisualCapture(options: VisualCaptureOptions) {
     resolvePixel(observationId: string, x: number, y: number): VisualPixelResolution {
       const fail = (status: Exclude<VisualPixelResolution['status'], 'resolved'>, reason: string): VisualPixelResolution => ({ status, observationId, x, y, reason });
       if (typeof observationId !== 'string' || !observationId || !Number.isSafeInteger(x) || !Number.isSafeInteger(y) || x < 0 || y < 0) return fail('invalid', 'Expected observation ID and integer top-left image pixel');
+      if (snapshot?.id === observationId) {
+        try {
+          if (disposed || renderer.getContext().isContextLost() || snapshot.data.expired() || JSON.stringify(options.binding()) !== snapshot.binding) { clearSnapshot(); return fail('unavailable', 'Capture grounding expired or source changed'); }
+          return snapshot.data.resolve(observationId, x, y);
+        } catch { return fail('unavailable', 'Capture grounding unavailable'); }
+      }
       if (!available()) { retained = undefined; return fail('unavailable', 'Viewer unavailable'); }
       const bundle = retained;
       if (!bundle || observationId !== bundle.observation.observationId) return fail('stale', 'Only the latest live observation can be resolved');
@@ -210,6 +305,6 @@ export function createVisualCapture(options: VisualCaptureOptions) {
       } catch { return fail('no-hit', 'Original point provenance unavailable'); }
     },
     invalidate,
-    dispose() { disposed = true; invalidate(); },
+    dispose() { disposed = true; pending?.abort(new Error('Visual capture disposed')); clearSnapshot(); clearIssued(); renderer.domElement.removeEventListener?.('webglcontextlost', loseContext); invalidate(); },
   };
 }

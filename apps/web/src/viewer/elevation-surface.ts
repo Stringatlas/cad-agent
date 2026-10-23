@@ -7,7 +7,8 @@ export function elevationColor(value: number, minimum: number, maximum: number):
 /** Library-rendered raster cells: holes remain absent; no inferred triangles across missing ground. */
 export function createElevationSurface(grid: ElevationGrid) {
   if (grid.values.length !== grid.width * grid.height || grid.values.length > 65536) throw new Error('Invalid elevation mesh size');
-  const range = grid.info.layers[grid.layer], low = range.min ?? 0, high = range.max ?? 0;
+  if (grid.color && grid.color.values.length !== grid.values.length) throw new Error('Invalid slope colors');
+  const range = grid.color ?? grid.info.layers[grid.layer], low = range.min ?? 0, high = range.max ?? 0;
   const columns = Math.max(2, grid.width), rows = Math.max(2, grid.height);
   const [dx, dy] = grid.cellSize;
   const geometry = new THREE.PlaneGeometry(grid.width === 1 ? dx : (grid.width - 1) * dx,
@@ -19,7 +20,9 @@ export function createElevationSurface(grid: ElevationGrid) {
     const at = row * columns + column, z = grid.values[Math.min(row, grid.height - 1) * grid.width + Math.min(column, grid.width - 1)];
     if (z === null) continue;
     if (!Number.isFinite(z)) throw new Error('Invalid raster elevation');
-    valid[at] = 1; position.setZ(at, z); elevationColor(z, low, high).toArray(colors, at * 3);
+    const colorValue = grid.color ? grid.color.values[Math.min(row, grid.height - 1) * grid.width + Math.min(column, grid.width - 1)] : z;
+    if (colorValue === null) continue;
+    valid[at] = 1; position.setZ(at, z); elevationColor(colorValue, low, high).toArray(colors, at * 3);
   }
   // PlaneGeometry owns tessellation. Retain a quad only when all four observed centers exist.
   const source = geometry.getIndex()!, indices: number[] = [];

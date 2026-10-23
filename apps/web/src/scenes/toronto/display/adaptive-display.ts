@@ -1,7 +1,8 @@
-import { planAdaptiveDisplay, checkedView, checkedSettings, DEFAULT_ADAPTIVE_SETTINGS, type AdaptiveNode, type AdaptiveView, type AdaptiveSettings, type AdaptiveStats } from '../../../viewer/adaptive-plan';
+import { createAdaptiveLoader } from '../../../viewer/adaptive-loader';
+import { DEFAULT_ADAPTIVE_SETTINGS, type AdaptiveNode, type AdaptiveStats } from '../../../viewer/adaptive-plan';
 export { planAdaptiveDisplay, DEFAULT_ADAPTIVE_SETTINGS } from '../../../viewer/adaptive-plan';
 export type { AdaptiveNode, AdaptiveView, AdaptiveSettings, AdaptiveStats, AdaptivePlan } from '../../../viewer/adaptive-plan';
-import { ADAPTIVE_BINARY_LIMITS, ADAPTIVE_BINARY_MIME, decodeAdaptiveBinary, type CropBox, type DatasetInfo, type Vec3 } from '@spatial/contracts';
+import { ADAPTIVE_BINARY_LIMITS, ADAPTIVE_BINARY_MIME, decodeAdaptiveBinary, type CropBox, type DatasetInfo } from '@spatial/contracts';
 
 export interface AdaptiveHierarchy { dataset: DatasetInfo; nodes: AdaptiveNode[] }
 export interface AdaptivePayload { dataset: DatasetInfo; name: string; count: number; positions: ArrayLike<number>; colors: ArrayLike<number>; sourceIds: ArrayLike<number>; labels: ArrayLike<number> }
@@ -63,94 +64,29 @@ async function boundedJson(fetcher: typeof fetch, url: string, signal: AbortSign
   return JSON.parse(new TextDecoder().decode(await boundedBytes(fetcher, url, signal, limit)));
 }
 
-/** Single physical request lane, even when an aborted fetch ignores cancellation.
- * Only resident names/counts are retained here; payload ownership transfers to add().
- * Camera motion retains in-flight work; admission replans against the latest view.
- * Binding/configuration/disposal still invalidate outstanding responses.
- * Idle camera planning is throttled (not trailing-edge debounced) to 150ms;
- * an active serial lane keeps progressing during motion. Sub-10cm camera jitter
- * is ignored. retry is explicit: camera movement never spins on a failed request.
- */
+/** Toronto protocol/validation adapter over the shared user/capture scheduler. */
 export function createAdaptiveDisplay(callbacks: AdaptiveCallbacks, fetcher: typeof fetch = fetch) {
-  let settings = { ...DEFAULT_ADAPTIVE_SETTINGS }, dataset: DatasetInfo | undefined, hierarchy: AdaptiveHierarchy | undefined, view: AdaptiveView | undefined;
-  let disposed = false, generation = 0, busy = false, controller: AbortController | undefined, timer: ReturnType<typeof setTimeout> | undefined;
-  let signature = '', error: string | null = null, limited = false, desired: AdaptiveNode[] = [], planDirty = true;
-  const resident = new Map<string, number>();
-  const publish = () => callbacks.status({ loadedPoints: [...resident.values()].reduce((a, b) => a + b, 0), chunks: resident.size, pending: (dataset && !hierarchy ? 1 : desired.filter(n => !resident.has(n.name)).length), budgetLimited: limited, error });
-  const evict = (keep: Set<string>) => {
-    const names = [...resident.keys()].filter(name => !keep.has(name));
-    if (!names.length) return;
-    if (callbacks.removeMany) {
-      callbacks.removeMany(names);
-      for (const name of names) resident.delete(name);
-    } else {
-      for (const name of names) { callbacks.remove(name); resident.delete(name); }
-    }
-  };
-  const invalidate = () => { generation++; planDirty = true; controller?.abort(); };
-  const replan = () => {
-    if (!planDirty) return;
-    if (!hierarchy || !view) { desired = []; return; }
-    const plan = planAdaptiveDisplay(hierarchy, view, settings, new Set(resident.keys())); desired = plan.nodes; limited = plan.budgetLimited; planDirty = false;
-    evict(new Set(desired.map(n => n.name)));
-  };
-  const pump = () => {
-    if (disposed || busy || error || !dataset) return;
-    const bound = dataset, node = hierarchy ? desired.find(n => !resident.has(n.name)) : undefined;
-    if (hierarchy && !node) { publish(); return; }
-    const token = generation, abort = new AbortController(); controller = abort; busy = true; publish();
-    const timeout = setTimeout(() => abort.abort(new Error('Display request timed out; retry.')), 20_000);
-    void (async () => {
-      try {
-        if (!hierarchy) {
-          const result = await boundedJson(fetcher, '/datasets/toronto3d/display-hierarchy', abort.signal, 8 * 1024 * 1024);
-          if (disposed || token !== generation || abort.signal.aborted) return;
-          hierarchy = validateAdaptiveHierarchy(result as AdaptiveHierarchy, bound); replan();
-        } else if (node) {
-          const query = new URLSearchParams({ revision: bound.revision, name: node.name, format: 'binary' });
-          const result = await boundedBytes(fetcher, `/datasets/toronto3d/display-node?${query}`, abort.signal, ADAPTIVE_BINARY_LIMITS.responseBytes, ADAPTIVE_BINARY_MIME);
-          if (disposed || token !== generation || abort.signal.aborted) return;
-          const payload = decodeAdaptiveBinary(result, { dataset: bound, name: node.name, count: node.count });
-          // A response can finish before the camera throttle fires. Evict against
-          // the newest view before admission, never briefly publishing obsolete
-          // chunks or exceeding the current additive point budget.
-          replan();
-          if (desired.some(n => n.name === node.name) && !resident.has(node.name)) {
-            callbacks.add(payload); resident.set(node.name, node.count);
-          }
-        }
-      } catch (failure) {
-        if (!disposed && token === generation) error = failure instanceof Error ? failure.message : String(failure);
-      } finally {
-        clearTimeout(timeout); busy = false; if (controller === abort) controller = undefined;
-        if (!disposed) { publish(); pump(); }
-      }
-    })();
-  };
+  let dataset: DatasetInfo | undefined;
+  const loader = createAdaptiveLoader<AdaptivePayload>({
+    enabled: false, settings: { ...DEFAULT_ADAPTIVE_SETTINGS },
+    hierarchy: async signal => {
+      const bound = dataset!;
+      return validateAdaptiveHierarchy(await boundedJson(fetcher, '/datasets/toronto3d/display-hierarchy', signal, 8 * 1024 * 1024) as AdaptiveHierarchy, bound).nodes;
+    },
+    load: async (node, signal) => {
+      const bound = dataset!, query = new URLSearchParams({ revision: bound.revision, name: node.name, format: 'binary' });
+      const bytes = await boundedBytes(fetcher, `/datasets/toronto3d/display-node?${query}`, signal, ADAPTIVE_BINARY_LIMITS.responseBytes, ADAPTIVE_BINARY_MIME);
+      return decodeAdaptiveBinary(bytes, { dataset: bound, name: node.name, count: node.count });
+    },
+    add: callbacks.add,
+    remove: names => { if (callbacks.removeMany) callbacks.removeMany(names); else for (const name of names) callbacks.remove(name); },
+    status: callbacks.status,
+  });
   return {
+    ...loader,
     bind(next: DatasetInfo) {
-      if (disposed) return;
       if (next.id !== 'toronto3d' || !/^[a-f0-9]{64}$/.test(next.revision) || next.coordinates.units !== 'm' || next.coordinates.upAxis !== 'Z' || next.coordinates.handedness !== 'right' || !validBounds(next.bounds) || !Number.isSafeInteger(next.totalPoints) || next.totalPoints < 0) throw new Error('Invalid adaptive display dataset');
-      invalidate(); if (timer) clearTimeout(timer); timer = undefined; evict(new Set()); dataset = structuredClone(next); hierarchy = undefined; desired = []; limited = false; error = null; publish(); pump();
+      dataset = structuredClone(next); loader.reset();
     },
-    update(next: AdaptiveView) {
-      if (disposed) return; checkedView(next);
-      const key = JSON.stringify([next.position.map(n => Math.round(n * 10)), next.focus?.map(n => Math.round(n * 10)), next.planes.map(p => p.map((n, i) => Math.round(n * (i === 3 ? 10 : 1000)))), next.viewportHeight, next.fovDegrees]);
-      if (key === signature) return; signature = key; view = structuredClone(next); planDirty = true;
-      if (!timer) timer = setTimeout(() => {
-        timer = undefined; if (disposed) return;
-        // Timer callbacks have no caller to catch renderer failures. Keep the
-        // resident set and latch the failure until an explicit retry instead.
-        try { if (!error) replan(); }
-        catch (failure) { error = failure instanceof Error ? failure.message : String(failure); }
-        publish(); pump();
-      }, 150);
-    },
-    configure(next: Partial<AdaptiveSettings>) {
-      if (disposed) return; const checked = checkedSettings({ ...settings, ...next });
-      invalidate(); if (timer) clearTimeout(timer); timer = undefined; settings = checked; replan(); publish(); pump();
-    },
-    retry() { if (disposed) return; invalidate(); error = null; replan(); publish(); pump(); },
-    dispose() { if (disposed) return; disposed = true; invalidate(); if (timer) clearTimeout(timer); timer = undefined; desired = []; evict(new Set()); },
   };
 }

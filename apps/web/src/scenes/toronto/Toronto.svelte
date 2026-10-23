@@ -29,6 +29,8 @@
   import { effectivePosition } from './points/point-override-client';
   import { representativeStreetChunk } from './display/street-chunk';
   import { observedPointLabel } from './points/point-presentation';
+  import { DISPLAY_BUDGET_KEYS, MIN_DISPLAY_POINTS, readDisplayBudget, saveDisplayBudget, validDisplayBudget } from '../../viewer/display-budget';
+  import { MAX_ADAPTIVE_POINTS } from '../../viewer/adaptive-plan';
   import { DEFAULT_ADAPTIVE_SETTINGS, type AdaptiveStats } from './display/adaptive-display';
 
   let { objectRefresh = 0, onobjectstate = () => {}, onarea = () => {}, points = [], pointOverrides, pointPreview, pointRefresh = 0, onpointstate = () => {}, cadRefresh = 0, modelStreaming = false, oncadblocked = () => {}, onrevision = () => {}, allocatePointName, onpoint, onpoints = () => {}, onvisualsource = () => {} }: {
@@ -128,7 +130,14 @@
   let displayBudget = $state(50_000), displayDepth = $state(3);
   let nearRadius = $state(DEFAULT_ADAPTIVE_SETTINGS.nearRadius);
   let pixelThreshold = $state(DEFAULT_ADAPTIVE_SETTINGS.pixelThreshold);
-  let pointBudget = $state(DEFAULT_ADAPTIVE_SETTINGS.pointBudget);
+  let pointBudget = $state(DEFAULT_ADAPTIVE_SETTINGS.pointBudget), budgetDraft = $state(DEFAULT_ADAPTIVE_SETTINGS.pointBudget), budgetError = $state('');
+  function setBudget() {
+    if (!validDisplayBudget(budgetDraft)) { budgetError = 'Enter a whole number from 65,536 to 50,000,000.'; return; }
+    try { viewer?.configureAdaptive({ nearRadius, pixelThreshold, pointBudget: budgetDraft }); }
+    catch { budgetError = 'Could not apply this point budget. Try a smaller value.'; return; }
+    pointBudget = budgetDraft;
+    budgetError = saveDisplayBudget(DISPLAY_BUDGET_KEYS.toronto, pointBudget) ? '' : 'Applied for this session; browser storage is unavailable.';
+  }
   let adaptiveStats = $state<AdaptiveStats>({ loadedPoints: 0, chunks: 0, pending: 0, budgetLimited: false, error: null });
   function tuneDisplay() {
     if (!Number.isFinite(nearRadius) || nearRadius < 0 || nearRadius > 200) return;
@@ -340,11 +349,12 @@
     catch (error) { if (alive && request === displayRequest) displayStatus = String(error); }
   }
   onMount(() => {
+    pointBudget = readDisplayBudget(DISPLAY_BUDGET_KEYS.toronto); budgetDraft = pointBudget;
     try {
       viewer = createTorontoViewer(host, placeBox, undefined, viewerFailure, pinPoint, stats => { adaptiveStats = stats; }, (corners, error) => { void selectArea(corners, error); }, () => { boxInitialized = true; }, selectObject);
       tuneDisplay(); mounted = true;
       const current = viewer;
-      onvisualsource({ capture: request => current.capture(request), isCurrent: id => current.isCaptureCurrent(id), resolvePixel: (id, x, y) => current.resolvePixel(id, x, y) });
+      onvisualsource({ capture: (request, signal) => current.capture(request, signal), captureSnapshot: (request, signal) => current.captureSnapshot(request, signal), releaseGrounding: () => current.releaseGrounding(), isCurrent: id => current.isCaptureCurrent(id), resolvePixel: (id, x, y) => current.resolvePixel(id, x, y) });
       void loadDisplay();
     }
     catch (error) { viewerError = String(error); }
@@ -355,13 +365,18 @@
 <main>
   <div class="workspace">
     <section class="scene-panel">
-      <div class="toolbar"><button data-testid="focus-street" disabled={!display || cropPhase === 'loading'} onclick={focusStreet}>Street chunk</button>
+      <div class="toolbar" role="group" aria-label="Scene controls">
+      <SceneObjects {areaInput} view={objectView} controller={objectController} hiddenIds={hiddenObjectIds} onvisibility={(id, visible) => { hiddenObjectIds = visible ? hiddenObjectIds.filter(hidden => hidden !== id) : [...hiddenObjectIds, id]; if (!visible && selectedObjectId === id) selectObject(); }} {points} overrides={sceneSnapshot} selectedId={selectedObjectId} {selectedSource} streaming={modelStreaming} onselect={selectObject} onsource={name => { selectedSource = name; selectedObjectId = undefined; const point = points.find(point => point.name === name); if (point) viewer?.focusPosition(point.position); }} onpending={id => void focusPending(id)} onfocus={position => viewer?.focusPosition(position)} />
+      <button data-testid="focus-street" disabled={!display || cropPhase === 'loading'} onclick={focusStreet} title="Return to the street view">Street view</button>
+      <details class="navigation" name="scene-display"><summary>View</summary><div class="tools-content"><button disabled={!display || !!viewerError} onclick={() => viewer?.frameDataset()}>Fit scene</button><details><summary>Navigation help</summary><dl><dt>Orbit</dt><dd>Drag</dd><dt>Pan</dt><dd>Right-drag or two-finger drag</dd><dt>Zoom</dt><dd>Scroll or pinch</dd><dt>Attach a point</dt><dd>⌘ / Ctrl-click</dd><dt>Select an area</dt><dd>Shift-drag</dd></dl></details></div></details>
+      <details class="technical" data-testid="display-quality" name="scene-display"><summary>Display</summary>
+      <div class="tools-content">
         <select class="color-mode" data-testid="point-color-mode" aria-label="Point colors" bind:value={colorMode} disabled={!display || !!viewerError} onchange={event => { colorMode = event.currentTarget.value as PointColorMode; viewer?.setColorMode(colorMode); }}>
           <option value="rgb">Natural RGB</option><option value="type">Point types</option>
         </select>
         {#if colorMode === 'type'}
-          <details class="color-key" data-testid="point-type-key" name="scene-display">
-            <summary>Key</summary>
+          <details class="color-key" data-testid="point-type-key">
+            <summary>Point type key</summary>
             <ul aria-label="Point type color key">
               {#each [...POINT_TYPE_KEY, { label: -1, name: 'Unknown', color: UNKNOWN_POINT_COLOR }] as entry}
                 <li><span style:background={entry.color} aria-hidden="true"></span>{entry.name}</li>
@@ -369,14 +384,14 @@
             </ul>
           </details>
         {/if}
-      <details class="technical" data-testid="display-quality" name="scene-display"><summary>Display quality</summary>
-      <div class="tools-content">
+      <label>Point size <select data-testid="display-point-size" bind:value={pointSize} onchange={event => { pointSize = Number(event.currentTarget.value); viewer?.setPointSize(pointSize); }}><option value={2}>2 px</option><option value={3}>3 px</option><option value={4}>4 px</option><option value={5}>5 px</option><option value={6}>6 px</option></select></label>
+      <details><summary>Detail settings</summary>
       <label class="mode-toggle"><input data-testid="adaptive-display-toggle" type="checkbox" bind:checked={adaptiveEnabled} onchange={event => { adaptiveEnabled = event.currentTarget.checked; toggleAdaptive(); }} disabled={!display || !!viewerError} />Camera-driven detail</label>
       {#if adaptiveEnabled}
       <label>Full detail within (m)<input data-testid="display-near-radius" type="number" min="0" max="200" step="5" bind:value={nearRadius} onchange={tuneDisplay} /></label>
       <label>Distant detail <select data-testid="display-threshold" bind:value={pixelThreshold} onchange={event => { pixelThreshold = Number(event.currentTarget.value); tuneDisplay(); }}><option value={160}>Coarse</option><option value={80}>Balanced</option><option value={40}>Fine</option><option value={20}>Very fine</option></select></label>
-      <label>Point budget <select data-testid="display-budget" bind:value={pointBudget} onchange={event => { pointBudget = Number(event.currentTarget.value); tuneDisplay(); }}><option value={500_000}>500,000</option><option value={1_000_000}>1 million</option><option value={2_000_000}>2 million</option><option value={3_000_000}>3 million</option></select></label>
-      <label>Point size <select data-testid="display-point-size" bind:value={pointSize} onchange={event => { pointSize = Number(event.currentTarget.value); viewer?.setPointSize(pointSize); }}><option value={2}>2 px</option><option value={3}>3 px</option><option value={4}>4 px</option><option value={5}>5 px</option><option value={6}>6 px</option></select></label>
+      <label>Point budget <input data-testid="display-budget" type="number" min={MIN_DISPLAY_POINTS} max={MAX_ADAPTIVE_POINTS} step="1" bind:value={budgetDraft} onchange={setBudget} /></label>{#if budgetError}<p role="alert">{budgetError}</p>{/if}
+
       <p data-testid="display-status" aria-live="polite">{adaptiveStats.error ? 'Detail unavailable.' : adaptiveStats.pending ? 'Loading detail…' : adaptiveStats.budgetLimited ? 'Point budget reached' : displayStatus === 'Ready' ? 'Ready' : displayStatus}</p>
       {#if adaptiveStats.error}<button data-testid="retry-display" onclick={() => viewer?.retryAdaptive()}>Retry detail</button>{/if}
       {:else}
@@ -385,6 +400,7 @@
       <p data-testid="display-status" aria-live="polite">{displayStatus}</p>
       {/if}
       <button onclick={loadDisplay}>Reload display</button>
+      </details>
       </div>
       </details>
       </div>
@@ -401,7 +417,6 @@
           </section>
         {/if}
       </div>
-      <SceneObjects {areaInput} view={objectView} controller={objectController} hiddenIds={hiddenObjectIds} onvisibility={(id, visible) => { hiddenObjectIds = visible ? hiddenObjectIds.filter(hidden => hidden !== id) : [...hiddenObjectIds, id]; if (!visible && selectedObjectId === id) selectObject(); }} {points} overrides={sceneSnapshot} selectedId={selectedObjectId} {selectedSource} streaming={modelStreaming} onselect={selectObject} onsource={name => { selectedSource = name; selectedObjectId = undefined; const point = points.find(point => point.name === name); if (point) viewer?.focusPosition(point.position); }} onpending={id => void focusPending(id)} onfocus={position => viewer?.focusPosition(position)} />
       <ApprovalReview items={reviewItems} focusId={reviewFocusId} />
       <div class="scene-feedback" hidden={cropPhase === 'idle' || cropPhase === 'complete'}>
         <p class="crop-summary" data-testid="crop-summary" aria-live="polite">{cropStatus}</p>
@@ -423,22 +438,26 @@
 <style>
   main, .workspace, .scene-panel { position: relative; width: 100%; height: 100%; min-width: 0; min-height: 0; }
   main { color: #f5f5f7; background: #151619; overflow: hidden; }
-  .viewport { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; }
+  .scene-panel { display: flex; flex-direction: column; }
+  .viewport { position: relative; flex: 1; width: 100%; min-height: 0; }
   :global(canvas) { display: block; touch-action: none; }
-  .toolbar { position: absolute; z-index: 5; top: 16px; left: 16px; display: flex; flex-wrap: wrap; max-width: calc(100% - 32px); align-items: center; gap: 10px; padding: 5px 10px; border: 1px solid #ffffff12; border-radius: 12px; background: #202124ed; font-size: 12px; }
-  .toolbar .color-mode { width: auto; margin: 0; padding: 7px 5px; }
-  .color-key summary { padding: 8px 0; }
-  .toolbar .technical { position: static; }
-  .toolbar .technical[open] { width: auto; }
-  .toolbar .tools-content { position: absolute; top: calc(100% + 8px); right: 0; width: min(300px, calc(100vw - 48px)); padding: 4px 14px 14px; border: 1px solid #ffffff24; border-radius: 10px; background: #202124fa; }
-  .color-key ul { position: absolute; top: calc(100% + 8px); left: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 9px 14px; list-style: none; margin: 0; padding: 12px; border: 1px solid #ffffff24; border-radius: 10px; background: #202124f5; width: 240px; box-shadow: 0 8px 24px #0004; }
+  .toolbar { position: relative; z-index: 5; flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-bottom: 1px solid #ffffff12; background: #1c1d20; font-size: 12px; }
+  .toolbar > details { position: relative; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+  .toolbar > details[open] { width: auto; }
+  .toolbar > details > summary { padding: 8px 10px; min-height: 36px; }
+  .toolbar .tools-content { position: absolute; top: calc(100% + 8px); left: 0; width: min(300px, calc(100vw - 32px)); padding: 12px; border: 1px solid #ffffff24; border-radius: 10px; background: #242528; box-shadow: 0 8px 24px #0004; }
+  .toolbar .technical { margin-left: auto; }
+  .toolbar .technical .tools-content { left: auto; right: 0; }
+  .toolbar .color-mode { width: 100%; margin: 0; }
+  .color-key ul { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; list-style: none; margin: 0; padding: 8px 0; }
   .color-key li { display: flex; align-items: center; gap: 7px; font-size: 11px; }
   .color-key li span { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+  dt { color: #f5f5f7; } dd { margin: 0 0 10px; color: #b9bac1; }
   .point-confirmation { position: absolute; right: 16px; top: 72px; z-index: 12; width: min(340px, calc(100% - 32px)); max-height: 25%; overflow-y: auto; overscroll-behavior: contain; }
   .cad-recovery { margin-top: 8px; padding: 12px; border: 1px solid #ffffff20; border-radius: 14px; background: #202124f5; }
   .cad-recovery [role="alert"] { position: static; padding: 0; margin: 0 0 8px; border: 0; background: none; max-height: none; color: #ffd187; }
   .cad-recovery button { margin: 0; }
-  .toolbar button { background: transparent; border-color: transparent; color: #a8caff; padding: 6px; }
+  .toolbar > button { background: transparent; border-color: transparent; color: #d5d6dc; padding: 8px 10px; margin: 0; min-height: 36px; }
   .scene-feedback { position: absolute; z-index: 1; left: 16px; bottom: 16px; max-width: min(520px, calc(100% - 32px)); max-height: 25%; overflow-y: auto; border: 1px solid #ffffff12; border-radius: 10px; background: #202124ed; }
   .scene-panel .area-error { position: absolute; z-index: 2; left: 16px; top: 140px; max-width: calc(100% - 32px); border-radius: 8px; background: #202124ed; font-size: 12px; padding: 0 12px; color: #ffd1a3; }
   .crop-summary { font-size: 11px; color: #b9bac1; padding: 9px 12px; margin: 0; overflow-wrap: anywhere; }
@@ -460,6 +479,12 @@
   button:not(:disabled):hover { border-color: #72737b; }
   button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid #5b9cff; outline-offset: 2px; }
   [role="alert"] { position: absolute; z-index: 1; left: 16px; right: 16px; top: 64px; max-height: 25%; overflow-y: auto; margin: 0; color: #ffb2aa; background: #202124f5; border: 1px solid #ffb2aa44; border-radius: 10px; padding: 10px 14px; overflow-wrap: anywhere; }
-  @media (max-width: 600px) { .toolbar { top: 12px; left: 12px; gap: 4px; padding: 5px 8px; flex-wrap: wrap; max-width: calc(100% - 24px); } .toolbar .color-mode { font-size: 11px; } .scene-panel .area-error { top: 180px; } .toolbar button { font-size: 11px; } aside { top: auto; bottom: 12px; right: 12px; max-width: calc(100% - 24px); max-height: 45%; } .scene-feedback { left: 12px; bottom: 12px; max-width: calc(100% - 24px); } }
-
+  @media (pointer: coarse) { .toolbar > button, .toolbar > details > summary { min-height: 44px; } }
+  @media (max-width: 600px) {
+    .toolbar { padding: 4px 8px; gap: 0; }
+    .toolbar > button, .toolbar > details > summary { padding: 10px 8px; font-size: 12px; }
+    .scene-panel .area-error { top: 112px; }
+    aside { top: auto; bottom: 12px; right: 12px; max-width: calc(100% - 24px); max-height: 45%; }
+    .scene-feedback { left: 12px; bottom: 12px; max-width: calc(100% - 24px); }
+  }
 </style>

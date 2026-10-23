@@ -17,6 +17,7 @@ export interface TerrainImage {
 }
 export interface TerrainResult {
   readonly kind: 'terrain-analysis'; readonly operation: TerrainOperation;
+  readonly queryId: string;
   readonly cloudId: string; readonly frameId: string; readonly units: 'm'; readonly localOrigin: readonly number[];
   readonly sourceRevision: string; readonly modelRevision: string; readonly terrainRevision: string;
   readonly resolution: number; readonly slopeMethod: TerrainInfo['method']; readonly evidenceScope: string;
@@ -41,7 +42,7 @@ export function canonicalTerrainArgs(operation: TerrainOperation, value: unknown
   const polygon: TerrainPolygon = a.polygon.map(p => [...p] as [number, number]);
   if (operation === 'query_terrain_region') return { polygon };
   if (operation === 'terrain_image') {
-    if (!['dtm', 'dsm', 'ndsm', 'slope'].includes(String(a.layer)) || !Number.isInteger(a.maxSize) || !finite(a.maxSize, 128, 512)) return fail();
+    if (typeof a.layer !== 'string' || !['dtm', 'dsm', 'ndsm', 'slope'].includes(a.layer) || !Number.isInteger(a.maxSize) || !finite(a.maxSize, 128, 512)) return fail();
     return { polygon, layer: a.layer as TerrainLayer, maxSize: a.maxSize };
   }
   if (!finite(a.maxSlopeDegrees, 0, 90) || !finite(a.minArea, .0625, 1e8) || a.maxHeightAboveGround !== null && !finite(a.maxHeightAboveGround, 0, 1e7) || !Number.isInteger(a.maxRegions) || !finite(a.maxRegions, 1, 16)) return fail();

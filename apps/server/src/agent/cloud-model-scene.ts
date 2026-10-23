@@ -1,4 +1,5 @@
 import { openPreparedElevation } from '../datasets/prepared-elevation';
+import { openPreparedTerrain } from '../datasets/prepared-terrain';
 import { canonicalModelScene, type ModelScene, type Vec3 } from '@spatial/contracts';
 import { createPreparedCloudRegistry } from '../datasets/prepared-cloud';
 import { canonicalPerceptionQuery } from './model-perception';
@@ -15,6 +16,9 @@ export async function bindCloudModelScene(input: ModelScene, registrations: Read
   let elevationStatus = 'not-prepared';
   try { elevation = await openPreparedElevation(registrations[binding.id], info, signal); if (elevation) elevationStatus = 'ready'; }
   catch { signal.throwIfAborted(); elevationStatus = 'unavailable'; }
+  let terrain: Awaited<ReturnType<typeof openPreparedTerrain>>;
+  try { if (elevation) terrain = await openPreparedTerrain(registrations[binding.id], elevation, signal); }
+  catch { signal.throwIfAborted(); }
   let closed = false, busy = false;
   const check = async () => {
     signal.throwIfAborted();
@@ -27,17 +31,24 @@ export async function bindCloudModelScene(input: ModelScene, registrations: Read
   const labels = Object.keys(descriptor.semantics?.classes ?? {}).map(Number);
   return {
     semanticLabels: labels,
+    sceneMarkBinding: { mode: 'cloud', cloudId: descriptor.id, artifactRevision: info.revision,
+      frameId: descriptor.frameId, units: 'm', localOrigin: descriptor.coordinates.localOrigin },
     context: { mode: 'cloud', dataset: { id: descriptor.id, artifactRevision: info.revision,
       frameId: descriptor.frameId, ...descriptor.coordinates, bounds: info.bounds, totalPoints: info.totalPoints },
       elevation: elevation ? elevation.info : { status: elevationStatus },
+      terrain: terrain ? terrain.info : { status: 'unavailable' },
       semanticClasses: descriptor.semantics?.classes ?? {}, instanceMapping: descriptor.instances ?? null,
-      references: binding.points, capabilities: { queryPoints: true, queryElevation: !!elevation, sourceReferences: true, geometryMutation: false, editing: false },
+      references: binding.points, capabilities: { queryPoints: true, queryElevation: !!elevation, terrainAnalysis: !!terrain, sourceReferences: true, sceneMarks: true, geometryMutation: false, editing: false },
       evidenceScope: 'Original prepared records; displayed samples and screenshots do not establish whole-source coverage or clearance.' },
     ...(elevation ? { async queryElevation(args: { x: number; y: number }, querySignal: AbortSignal) {
       const combined = AbortSignal.any([signal, querySignal]); combined.throwIfAborted();
       await check(); const result = await elevation!.query(args, combined); await check();
       return result;
     } } : {}),
+    ...(terrain ? { analyzeTerrain: async (operation, args, querySignal) => {
+      const combined = AbortSignal.any([signal, querySignal]); await check();
+      const result = await terrain!.analyze(operation, args, combined); await check(); return result;
+    } } satisfies Pick<BoundModelScene, 'analyzeTerrain'> : {}),
     async queryPoints(args, querySignal) {
       const combined = AbortSignal.any([signal, querySignal]); combined.throwIfAborted();
       if (busy) throw new ModelError('busy');

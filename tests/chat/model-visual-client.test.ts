@@ -318,3 +318,14 @@ test('controller keeps history through reactive screenshots and scene selection 
     assert.equal(client.view.messages.filter(message => message.attachments?.length).length, 1);
   } finally { client.dispose(); }
 });
+
+for (const safe of [true, false]) test(`capture recovery carries only closed known reasons, never exception text: safe=${safe}`, async () => {
+  const { CaptureViewError } = await import('@spatial/contracts');
+  const r = request(); let result: unknown;
+  await streamModelTurn(r, signal(), () => {}, async (path, init) => {
+    if (path === '/chat/turn') return response([start(r), { kind: 'browser-request', requestId: r.requestId, toolCallId: 'capture', nonce: 'capture-nonce', action: { kind: 'capture', request: { kind: 'current' } } }, done(r)]);
+    assert.equal(path, '/chat/browser-result'); result = JSON.parse(String(init?.body)).result; return new Response(null, { status: 204 });
+  }, undefined, { async oncapture() { throw safe ? new CaptureViewError('unsupported') : new Error('PRIVATE-renderer-error-token'); } });
+  assert.deepEqual(result, safe ? { status: 'unavailable', reason: 'unsupported' } : { status: 'unavailable' });
+  assert(!JSON.stringify(result).includes('PRIVATE'));
+});

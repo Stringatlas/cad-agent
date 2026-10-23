@@ -1,6 +1,8 @@
 import * as THREE from 'three';
+import { captureDetailView } from '../../viewer/capture-detail';
+import { MAX_ADAPTIVE_POINTS } from '../../viewer/adaptive-plan';
 import { createPointCloudViewport } from '../../viewer/point-cloud-viewport';
-import { SCENE_POINT_LIMIT, type CropBox, type CropSelection, type PointObservation, type DatasetInfo, type Vec3, type PointOverrideSnapshot, type PointMoveProposal, type TorontoCadSnapshot, type ModelCaptureRequest } from '@spatial/contracts';
+import { SCENE_POINT_LIMIT, type CropBox, type CropSelection, type PointObservation, type DatasetInfo, type Vec3, type PointOverrideSnapshot, type PointMoveProposal, type TorontoCadSnapshot, type BrowserCaptureRequest } from '@spatial/contracts';
 import type { SceneObjectSnapshot } from '@spatial/contracts';
 import { createSceneObjectRender } from './objects/scene-object-render';
 import { createVisualCapture } from '../../viewer/visual-capture';
@@ -69,7 +71,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
   Object.assign(overlay.style, { position: 'absolute', pointerEvents: 'none', border: '2px solid #ffd65a', background: '#ffd65a22', zIndex: '3', boxSizing: 'border-box' });
   host.appendChild(overlay);
   let gpuFailed = false;
-  const failGpu = (message: string) => { if (!gpuFailed) { gpuFailed = true; visual.invalidate(); onFailure?.(message); } };
+  const failGpu = (message: string) => { if (!gpuFailed) { gpuFailed = true; captureAdaptive?.dispose(); adaptive?.dispose(); visual.dispose(); onFailure?.(message); } };
   const contextLost = (event: Event) => { event.preventDefault(); failGpu('GPU context lost — full resolution incomplete. Clear detail and reload the scene; no downsampling.'); };
   renderer.domElement.addEventListener('webglcontextlost', contextLost);
   const selection = new THREE.Box3Helper(new THREE.Box3(), 0xffd65a); selection.visible = false;
@@ -88,7 +90,9 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       '#include <clipping_planes_fragment>\nif (dot(gl_PointCoord - 0.5, gl_PointCoord - 0.5) > 0.25) discard;');
   };
   nativeMaterial.customProgramCacheKey = () => 'opaque-circular-splats-v1';
+  nativeMaterial.userData.captureCenterPicking = 'opaque-circle-v1';
   const native = createAdaptiveRender(nativeMaterial, {
+    pointBudget: MAX_ADAPTIVE_POINTS,
     register: (object, ids) => pointOverrides.register(object, ids),
     unregister: object => pointOverrides.unregister(object),
   });
@@ -103,6 +107,20 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
   let disposed = false, renderDirty = true, renderedFrames = 0;
   const captureSource = createVisualCapture({
     renderer, scene, camera, target: () => controls.target.toArray() as [number, number, number],
+    prepare: async (view, focus, height, signal) => {
+      const loader = adaptive ?? captureAdaptive ?? makeAdaptive?.();
+      if (!loader || !dataset) throw new Error('Capture detail unavailable');
+      const temporary = loader !== adaptive;
+      const unbound = temporary && loader !== captureAdaptive;
+      if (temporary) captureAdaptive = loader;
+      try {
+        // A user can disable background detail without disabling bounded agent
+        // observations. The same scheduler/protocol runs without user demand.
+        if (unbound) { loader.configure(adaptiveSettings); loader.bind(dataset); }
+        const lease = await loader.capture(captureDetailView(view, focus, height), signal);
+        return lease;
+      } catch (cause) { if (temporary) { loader.dispose(); if (captureAdaptive === loader) captureAdaptive = undefined; } throw cause; }
+    },
     pointColorMode: { get: () => colorMode, set: applyColorMode },
     supportedColorModes: ['rgb', 'type', 'semantic'],
     available: () => !disposed && !gpuFailed && !!dataset && !!overview && viewport.sync(),
@@ -113,10 +131,10 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
     },
     coverage: captureCamera => ({ kind: 'sampled-overview-with-adaptive-and-manual-detail', complete: false,
       ...(captureCamera && candidateEvidence?.assessment ? { areaCandidateEvidence: candidateCaptureEvidence(captureCamera) } : {}),
-      displayedPointCount: (points.visible ? overview?.count ?? 0 : 0) + cropLayer.count + adaptiveStats.loadedPoints,
+      displayedPointCount: (points.visible ? overview?.count ?? 0 : 0) + cropLayer.count + native.count,
       // Keep capture metadata bounded even after hundreds of native nodes settle.
       // Actual geometry participates in the capture signature independently of this sample.
-      adaptive: adaptive ? { ...adaptiveStats, nodes: native.names.slice(0, 32), nodeCount: native.names.length,
+      adaptive: adaptive || captureAdaptive ? { loadedPoints: native.count, chunks: native.names.length, nodes: native.names.slice(0, 32), nodeCount: native.names.length,
         omittedNodeCount: Math.max(0, native.names.length - 32), settings: { ...adaptiveSettings } } : null,
       datasetPointCount: dataset?.totalPoints ?? 0,
       overview: overview ? { displayedPointCount: points.visible ? overview.count : 0, sampleHash: overview.sampleHash, lod: { budget: overview.lod.budget, depth: overview.lod.depth },
@@ -130,6 +148,11 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       pointCountScope: 'overview-adaptive-manual-detail-only-excludes-edit-preview-and-fallback-markers',
       scope: 'Displayed scene including CAD solids, pending ghosts, point edits and overlays when present; not whole-dataset or authoritative geometry evidence' }),
     points: () => [...(points.visible ? [points] : []), ...native.objects, ...cropLayer.group.children],
+    captureSource: object => {
+      if (pointOverrides.captureBlocked || authoredObjects.count) return;
+      const cache = object === points ? pickCache : detailCaches.get(object);
+      return cache ? { count: cache.count, copy: (start, count, originals, keys) => cache.copySource(start, count, originals, keys) } : native.captureSource(object);
+    },
     resolve: (object, index) => {
       // Original pick caches do not describe effective/preview positions. Keep image
       // capture usable but do not falsely ground edited imagery to original coordinates.
@@ -167,6 +190,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
   const viewport = createViewportSizer(host, renderer, camera, () => visual.invalidate());
   let adaptiveSettings: Partial<AdaptiveSettings> = {};
   let adaptive: ReturnType<typeof createAdaptiveDisplay> | undefined;
+  let captureAdaptive: ReturnType<typeof createAdaptiveDisplay> | undefined;
   const makeAdaptive = onAdaptiveStatus ? () => createAdaptiveDisplay({
     add(payload) {
       if (disposed || gpuFailed || payload.dataset.revision !== dataset?.revision) throw new Error('Scene unavailable; reload display.');
@@ -435,6 +459,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
     },
     startAdaptive() {
       if (disposed || !dataset || !makeAdaptive) return;
+      if (captureAdaptive) { adaptive = captureAdaptive; captureAdaptive = undefined; adaptiveRevision = dataset.revision; }
       if (!adaptive) { adaptive = makeAdaptive(); adaptive.configure(adaptiveSettings); }
       if (adaptiveRevision !== dataset.revision) {
         adaptiveRevision = dataset.revision; adaptive.bind(dataset);
@@ -442,12 +467,13 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       visual.invalidate();
     },
     stopAdaptive() {
+      captureAdaptive?.dispose(); captureAdaptive = undefined;
       adaptive?.dispose(); adaptive = undefined; adaptiveRevision = undefined;
       adaptiveStats = { loadedPoints: 0, chunks: 0, pending: 0, budgetLimited: false, error: null };
       onAdaptiveStatus?.(adaptiveStats); visual.invalidate();
     },
     configureAdaptive(settings: Partial<AdaptiveSettings>) {
-      adaptive?.configure(settings); adaptiveSettings = { ...adaptiveSettings, ...settings }; visual.invalidate();
+      captureAdaptive?.configure(settings); adaptive?.configure(settings); adaptiveSettings = { ...adaptiveSettings, ...settings }; visual.invalidate();
     },
     retryAdaptive() { adaptive?.retry(); },
     setPointSize(size: number) {
@@ -458,16 +484,18 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       if (disposed) return;
       visual.invalidate(); preprocessing.set(summary);
     },
-    capture: (request?: ModelCaptureRequest) => {
+    capture: (request?: BrowserCaptureRequest, signal?: AbortSignal) => {
       // Preserve the existing manual screenshot/crop stabilization. Model requests
       // never update controls or navigate the user's live viewport.
       if (!request) {
         const damping = controls.enableDamping;
         controls.enableDamping = false; controls.update(); controls.enableDamping = damping;
       }
-      return visual.capture(request);
+      return visual.capture(request, signal);
     },
     isCaptureCurrent: visual.isCurrent,
+    captureSnapshot: (request: BrowserCaptureRequest, signal?: AbortSignal) => visual.captureSnapshot(request, signal),
+    releaseGrounding: visual.releaseGrounding,
     resolvePixel: visual.resolvePixel,
     setAreaCandidates(result?: AreaCandidateResult, selected?: string) {
       if (disposed || gpuFailed) return;
@@ -523,7 +551,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
       const previous = points.geometry;
       points.geometry = geometry;
       previous.dispose();
-      if (dataset && dataset.revision !== sample.dataset.revision) clearDetail();
+      if (dataset && dataset.revision !== sample.dataset.revision) { captureAdaptive?.dispose(); captureAdaptive = undefined; clearDetail(); }
       dataset = sample.dataset; pickVersion++;
       if (adaptive && adaptiveRevision && adaptiveRevision !== dataset.revision) {
         adaptiveRevision = dataset.revision; adaptive.bind(dataset);
@@ -607,7 +635,7 @@ export function createTorontoViewer(host: HTMLElement, onPick?: (center: Vec3) =
     viewCenter(): Vec3 { return controls.target.toArray() as [number, number, number]; },
     frameDataset,
     dispose() {
-      adaptive?.dispose(); native.dispose(); scene.remove(native.group); nativeMaterial.dispose();
+      captureAdaptive?.dispose(); adaptive?.dispose(); native.dispose(); scene.remove(native.group); nativeMaterial.dispose();
       renderer.domElement.removeEventListener('dblclick', doubleClick);
       flight.dispose(); visual.dispose(); areaOverlay.dispose();
       controls.removeEventListener('change', controlsChanged);

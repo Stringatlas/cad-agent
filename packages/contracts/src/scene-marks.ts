@@ -9,11 +9,16 @@ export interface SceneMark {
 export interface SceneMarkSnapshot {
   readonly kind: 'scene-marks'; readonly annotationRevision: number;
   readonly binding: {
+    readonly mode?: never; readonly cloudId?: never;
     readonly artifactRevision: string; readonly frameId: 'toronto3d-local-v1'; readonly units: 'm';
     readonly localOrigin: readonly [627285, 4841948, 0];
     readonly points?: { readonly sessionId: string; readonly revision: number };
     readonly cad?: { readonly sessionId: string; readonly revision: number };
     readonly objects?: { readonly sessionId: string; readonly revision: number };
+  } | {
+    readonly mode: 'cloud'; readonly cloudId: string; readonly artifactRevision: string;
+    readonly frameId: string; readonly units: 'm'; readonly localOrigin: Vec3;
+    readonly points?: never; readonly cad?: never; readonly objects?: never;
   };
   readonly marks: readonly SceneMark[];
 }
@@ -50,7 +55,16 @@ export function canonicalSceneMarkSnapshot(value: unknown): SceneMarkSnapshot {
   const r = copy(value); protocolKeys(r, ['kind', 'annotationRevision', 'binding', 'marks']);
   if (r.kind !== 'scene-marks') throw new TypeError('Invalid annotation snapshot');
   protocolInteger(r.annotationRevision); marks(r.marks, true);
-  const b = protocolRecord(r.binding); protocolKeys(b, ['artifactRevision', 'frameId', 'units', 'localOrigin'], ['points', 'cad', 'objects']);
+  const b = protocolRecord(r.binding);
+  if (b.mode === 'cloud') {
+    protocolKeys(b, ['mode', 'cloudId', 'artifactRevision', 'frameId', 'units', 'localOrigin']);
+    protocolHash(b.artifactRevision);
+    const identifier = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
+    if (typeof b.cloudId !== 'string' || !identifier.test(b.cloudId) || typeof b.frameId !== 'string' || !identifier.test(b.frameId) ||
+      b.units !== 'm' || !Array.isArray(b.localOrigin) || b.localOrigin.length !== 3 || !b.localOrigin.every(n => typeof n === 'number' && Number.isFinite(n))) throw new TypeError('Invalid annotation cloud binding');
+    return freezeProtocolValue(r) as unknown as SceneMarkSnapshot;
+  }
+  protocolKeys(b, ['artifactRevision', 'frameId', 'units', 'localOrigin'], ['points', 'cad', 'objects']);
   protocolHash(b.artifactRevision);
   if (b.frameId !== 'toronto3d-local-v1' || b.units !== 'm' || !Array.isArray(b.localOrigin) || b.localOrigin.length !== 3 || b.localOrigin.some((n, i) => n !== [627285, 4841948, 0][i])) throw new TypeError('Invalid annotation frame');
   for (const key of ['points', 'cad', 'objects']) if (b[key] !== undefined) {

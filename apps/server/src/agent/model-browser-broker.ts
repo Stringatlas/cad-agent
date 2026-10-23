@@ -2,8 +2,9 @@ import { randomBytes } from 'node:crypto';
 import { MODEL_VISUAL_LIMITS, protocolRecord, protocolKeys, canonicalModelScene, canonicalModelVisualObservation,
   type ModelBrowserAction, type ModelChatEvent, type ModelScene, type ModelVisualObservation } from '@spatial/contracts';
 import { ModelError } from './provider-model';
+import { canonicalCaptureReason, type CaptureUnavailableReason } from '@spatial/contracts';
 
-export type BrowserAnswer = { readonly status: 'unavailable' } | { readonly status: 'captured'; readonly observation: ModelVisualObservation } |
+export type BrowserAnswer = { readonly status: 'unavailable'; readonly reason?: CaptureUnavailableReason } | { readonly status: 'captured'; readonly observation: ModelVisualObservation } |
   { readonly status: 'selected'; readonly scene: ModelScene };
 /** One-use turn-bound capability for observation/selection only. Never approves geometry. */
 export class ModelBrowserBroker {
@@ -29,7 +30,7 @@ export class ModelBrowserBroker {
     const p = this.pending;
     if (!p || this.signal.aborted || r.requestId !== this.requestId || r.toolCallId !== p.toolCallId || r.nonce !== p.nonce) throw new ModelError('invalid-tool-result');
     const a = protocolRecord(r.result); let result: BrowserAnswer;
-    if (a.status === 'unavailable') { protocolKeys(a, ['status']); result = { status: 'unavailable' }; }
+    if (a.status === 'unavailable') { protocolKeys(a, ['status'], p.action.kind === 'capture' ? ['reason'] : []); result = { status: 'unavailable', ...(a.reason === undefined ? {} : { reason: canonicalCaptureReason(a.reason) }) }; }
     else if (a.status === 'captured' && p.action.kind === 'capture') { protocolKeys(a, ['status', 'observation']); result = { status: 'captured', observation: canonicalModelVisualObservation(a.observation) }; }
     else if (a.status === 'selected' && p.action.kind === 'select-reference') { protocolKeys(a, ['status', 'scene']); result = { status: 'selected', scene: canonicalModelScene(a.scene) }; }
     else throw new ModelError('invalid-tool-result');

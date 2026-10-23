@@ -65,6 +65,10 @@ Latest: [079 — Test suite cleanup](079-test-suite-cleanup.md) — remove obsol
 
 Approved remaining product TODOs: [queue](../TODO.md), [full roadmap](../plans/2026-10-13-harness-must-haves.md). Provider visual integration, item3 evaluation, broader item4 verified-tool orchestration and project-integrated item7 remain unassigned. Tasks014/015 implement the authorized bounded items5–6; task013 independently implements the CAD sandbox foundation.
 
+## Active long-running work
+
+- [089 — Composable agentic scene exploration](089-agentic-scene-exploration.md): in progress; phased checklist, beginning with cloud continuation, then grounded navigation, shared spatial evidence, generic inspection/measurement and evaluation. Independent reviews remain separate.
+
 ## Workflow
 
 1. State scope, exclusions and acceptance criteria before implementation.

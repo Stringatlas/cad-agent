@@ -7,3 +7,10 @@ no-ground roof cell DSM=25, insufficient-ground cell DSM=7, empty cells NoData.
 The TS fixture copies source assets and rebinds manifest source metadata to their
 new runtime filesystem revision; raster bytes/hashes remain unchanged. GeoTIFF
 embedded source tags are descriptive; the checked manifest is the binding.
+
+`terrain/` was generated from these same base rasters by
+`scripts/prepare-terrain.py`, using GDAL 3.12.2 Horn slope. This two-row fixture
+has no complete 3×3 ground neighborhood, so all slope cells are NoData. The TS
+terrain helper rebinds the manifest to the temporary base manifest revision;
+slope bytes remain unchanged. Numeric 45° planes and connected patches are
+checked separately by `tests/preprocessing/terrain.test.py`.

@@ -105,3 +105,32 @@ test('confirmed failed exploration clears streamed revisions before explicit ret
     assert.equal('history' in requests[2]!, false);
   } finally { client.dispose(); }
 });
+
+test('prepared-cloud hypotheses clear on failed turns and explicit context resets', async () => {
+  const { canonicalSceneMarkSnapshot } = await import('@spatial/contracts');
+  const cloudScene: ModelScene = { mode: 'cloud', toronto: [], cloud: { id: 'test-cloud', revision: 'a'.repeat(64), frameId: 'test-cloud-local', localOrigin: [0, 0, 0], points: [] } };
+  const checkpoint = canonicalSceneMarkSnapshot({ kind: 'scene-marks', annotationRevision: 1,
+    binding: { mode: 'cloud', cloudId: 'test-cloud', artifactRevision: 'a'.repeat(64), frameId: 'test-cloud-local', units: 'm', localOrigin: [0, 0, 0] },
+    marks: [{ id: 'cloud-checkpoint', rank: 1, position: [1, 2, 3], rationale: 'Investigate feature.', uncertainty: 'Unverified.' }] });
+  let visible: typeof checkpoint | undefined, fail = false;
+  const received: (number | undefined)[] = [];
+  const client = new ModelChatController(() => {}, async (path, init) => {
+    if (path === '/chat/models') return Response.json(catalog);
+    const r = JSON.parse(String(init?.body)) as ModelTurnRequest;
+    return response([start(r), { kind: 'tool', requestId: r.requestId, name: 'set_scene_marks', context: checkpoint },
+      ...(fail ? [{ kind: 'error', requestId: r.requestId, code: 'tool-limit' }] : [done(r)])]);
+  }, undefined, undefined, { onscenemarks(value) { visible = value === undefined ? undefined : canonicalSceneMarkSnapshot(value); received.push(visible?.annotationRevision); } });
+  try {
+    client.bind(cloudScene); await client.refreshModels();
+    await client.send('First hypotheses.'); assert.deepEqual(visible, checkpoint);
+    fail = true; await client.send('Incomplete further exploration.'); assert.equal(visible, undefined);
+    assert.equal(client.view.continuationActive, true); assert.equal(received.at(-1), undefined);
+    fail = false; await client.send('Restore retained hypotheses.'); assert.deepEqual(visible, checkpoint);
+    client.newChat(); assert.equal(visible, undefined);
+    await client.send('New hypotheses.'); assert.deepEqual(visible, checkpoint);
+    client.bind({ ...cloudScene, cloud: { ...cloudScene.cloud!, localOrigin: [1, 0, 0] } });
+    assert.equal(visible, undefined); assert.equal(client.view.continuationActive, false);
+    client.bind(cloudScene); await client.send('Another investigation.'); assert.deepEqual(visible, checkpoint);
+    client.accountChanged(); assert.equal(visible, undefined); assert.equal(client.view.continuationActive, false);
+  } finally { client.dispose(); }
+});

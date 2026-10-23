@@ -1,3 +1,5 @@
+import { canonicalSceneEvidenceLookup, canonicalEvidenceRetention } from './exploration-evidence';
+import { PolygonTopologyError } from './polygon-topology';
 import { assertVec3, type Vec3 } from './index';
 import { canonicalSceneObjectReference, type AuthoredObjectReference } from './scene-objects';
 import { canonicalModelVisualObservation } from './model-visual';
@@ -5,6 +7,8 @@ import type { ModelVisualObservation } from './model-visual';
 import { SCENE_POINT_LIMIT, canonicalScenePointName, type ScenePointName } from './scene-points';
 import { protocolRecord, protocolKeys, protocolToken, protocolHash, protocolInteger, canonicalProtocolJson } from './tool-protocol';
 import { canonicalModelCloudScene, type ModelCloudScene } from './cloud-scene';
+import { canonicalSceneRegion, canonicalSceneSourceBinding } from './spatial-region';
+import { canonicalBrowserCaptureRequest, canonicalRelativeAdjustment, CaptureViewError, type BrowserCaptureRequest, type FrameTarget, type RelativeViewAdjustment } from './agent-view';
 
 export const MODEL_CHAT_LIMITS = Object.freeze({ requestBytes: 65536, textChars: 12000, conversations: 8,
   conversationTtlMs: 30 * 60 * 1000, turns: 16, historyBytes: 512 * 1024, imageHistoryBytes: 12 * 1024 * 1024, providerBytes: 4 * 1024 * 1024, streamBytes: 16 * 1024 * 1024,
@@ -45,11 +49,13 @@ export interface ModelRequestInspection {
 }
 export type ModelRequestPhase = 'dispatched' | 'completed' | 'failed' | 'cancelled';
 export type ModelCaptureColorMode = 'rgb' | 'type' | 'semantic' | 'instance';
-export type ModelCaptureRequest = { readonly kind: 'current'; readonly colorMode?: ModelCaptureColorMode } | { readonly kind: 'top-down'; readonly colorMode?: ModelCaptureColorMode } |
+export type LegacyCaptureRequest = { readonly kind: 'current'; readonly colorMode?: ModelCaptureColorMode } | { readonly kind: 'top-down'; readonly colorMode?: ModelCaptureColorMode } |
   { readonly kind: 'camera'; readonly position: Vec3; readonly target: Vec3; readonly up?: Vec3; readonly colorMode?: ModelCaptureColorMode };
+export type ModelCaptureRequest = LegacyCaptureRequest | { readonly kind: 'frame'; readonly target: FrameTarget; readonly orientation: 'top' | 'oblique'; readonly colorMode?: ModelCaptureColorMode } |
+  ({ readonly kind: 'relative'; readonly observationId: string; readonly colorMode?: ModelCaptureColorMode } & RelativeViewAdjustment);
 export type ModelReferenceSelection = { readonly kind: 'toronto-point'; readonly key: { readonly sourceFileId: number; readonly sourceRow: number } } |
   { readonly kind: 'cloud-point'; readonly cloudId: string; readonly revision: string; readonly key: { readonly sourceFileId: number; readonly sourceRow: number } };
-export type ModelBrowserAction = { readonly kind: 'capture'; readonly request: ModelCaptureRequest } | { readonly kind: 'select-reference'; readonly reference: ModelReferenceSelection };
+export type ModelBrowserAction = { readonly kind: 'capture'; readonly request: BrowserCaptureRequest } | { readonly kind: 'select-reference'; readonly reference: ModelReferenceSelection };
 export type ModelProposalAuthority = 'points' | 'cad' | 'objects';
 export function canonicalModelCaptureRequest(value: unknown): ModelCaptureRequest {
   const r = protocolRecord(value);
@@ -57,6 +63,27 @@ export function canonicalModelCaptureRequest(value: unknown): ModelCaptureReques
   if (r.kind === 'current' || r.kind === 'top-down') {
     protocolKeys(r, ['kind'], ['colorMode']);
     return { kind: r.kind, ...(r.colorMode === undefined ? {} : { colorMode: r.colorMode as ModelCaptureColorMode }) };
+  }
+  if (r.kind === 'relative') {
+    protocolKeys(r, ['kind', 'observationId', 'azimuthDeltaDegrees', 'elevationDeltaDegrees', 'distanceScale'], ['colorMode']); protocolToken(r.observationId);
+    return { kind: 'relative', observationId: r.observationId, ...canonicalRelativeAdjustment({ azimuthDeltaDegrees: r.azimuthDeltaDegrees, elevationDeltaDegrees: r.elevationDeltaDegrees, distanceScale: r.distanceScale }), ...(r.colorMode === undefined ? {} : { colorMode: r.colorMode as ModelCaptureColorMode }) };
+  }
+  if (r.kind === 'frame') {
+    protocolKeys(r, ['kind', 'target', 'orientation'], ['colorMode']); if (r.orientation !== 'top' && r.orientation !== 'oblique') throw new TypeError('Invalid frame orientation');
+    const t = protocolRecord(r.target); let target: FrameTarget;
+    if (t.kind === 'reference') {
+      protocolKeys(t, ['kind', 'reference', 'spanMeters']);
+      if (typeof t.spanMeters !== 'number' || !Number.isFinite(t.spanMeters) || t.spanMeters < .2 || t.spanMeters > 100000) throw new CaptureViewError('invalid-region');
+      target = { kind: 'reference', reference: canonicalModelReferenceSelection(t.reference), spanMeters: t.spanMeters };
+    } else {
+      protocolKeys(t, ['kind', 'region']); if (t.kind !== 'region') throw new TypeError('Invalid frame target');
+      // Binding/protocol identity remains a hard failure. Malformed declared
+      // topology is safe to revise and still consumes the previous capture base.
+      canonicalSceneSourceBinding(protocolRecord(t.region).binding);
+      try { target = { kind: 'region', region: canonicalSceneRegion(t.region) }; }
+      catch (error) { if (error instanceof PolygonTopologyError) throw new CaptureViewError('invalid-region'); throw error; }
+    }
+    return { kind: 'frame', target, orientation: r.orientation, ...(r.colorMode === undefined ? {} : { colorMode: r.colorMode as ModelCaptureColorMode }) };
   }
   protocolKeys(r, ['kind', 'position', 'target'], ['up', 'colorMode']);
   if (r.kind !== 'camera') throw new TypeError('Invalid camera kind');
@@ -86,7 +113,7 @@ export function canonicalModelReferenceSelection(value: unknown): ModelReference
 }
 export function canonicalModelBrowserAction(value: unknown): ModelBrowserAction {
   const r = protocolRecord(value);
-  if (r.kind === 'capture') { protocolKeys(r, ['kind', 'request']); return { kind: r.kind, request: canonicalModelCaptureRequest(r.request) }; }
+  if (r.kind === 'capture') { protocolKeys(r, ['kind', 'request']); return { kind: r.kind, request: canonicalBrowserCaptureRequest(r.request) }; }
   protocolKeys(r, ['kind', 'reference']); if (r.kind !== 'select-reference') throw new TypeError('Invalid action');
   return { kind: r.kind, reference: canonicalModelReferenceSelection(r.reference) };
 }
@@ -98,7 +125,7 @@ export type ModelChatEvent =
   | { readonly kind: 'approval-result'; readonly requestId: string; readonly proposalId: string; readonly authority: ModelProposalAuthority; readonly outcome: 'accepted' | 'declined' | 'invalidated'; readonly scene: ModelScene }
   | { readonly kind: 'start'; readonly requestId: string; readonly conversationId: string; readonly model: string }
   | { readonly kind: 'delta'; readonly requestId: string; readonly text: string }
-  | { readonly kind: 'tool'; readonly requestId: string; readonly name: 'query_points' | 'query_elevation' | 'ground_elevation' | 'set_scene_marks' | 'get_scene_marks' | 'list_skills' | 'load_skill' | 'finalize_area_candidates' | 'scan_area_candidates' | 'search_placement_sites' | 'propose_placement_site' | 'query_aoi_points' | 'list_objects' | 'get_object' | 'propose_point_create' | 'inspect_scene' | 'capture_scene' | 'select_reference' | 'resolve_visual_pixel' | 'nearest_label' | 'propose_point_move' | 'propose_point_move_to_nearest_label' | 'propose_cad_box' | 'propose_cad_cylinder' | 'assess_utility_box' | 'propose_utility_box'; readonly context: unknown }
+  | { readonly kind: 'tool'; readonly requestId: string; readonly name: 'query_points' | 'get_scene_evidence' | 'query_elevation' | 'query_terrain_region' | 'terrain_profile' | 'filter_terrain_regions' | 'terrain_image' | 'ground_elevation' | 'set_scene_marks' | 'get_scene_marks' | 'list_skills' | 'load_skill' | 'finalize_area_candidates' | 'scan_area_candidates' | 'search_placement_sites' | 'propose_placement_site' | 'query_aoi_points' | 'list_objects' | 'get_object' | 'propose_point_create' | 'inspect_scene' | 'capture_scene' | 'select_reference' | 'resolve_visual_pixel' | 'nearest_label' | 'propose_point_move' | 'propose_point_move_to_nearest_label' | 'propose_cad_box' | 'propose_cad_cylinder' | 'assess_utility_box' | 'propose_utility_box'; readonly context: unknown }
   | { readonly kind: 'tool-request'; readonly requestId: string; readonly toolCallId: string; readonly nonce: string; readonly observationId: string; readonly x: number; readonly y: number }
   | { readonly kind: 'done'; readonly requestId: string; readonly conversationId: string }
   | { readonly kind: 'error'; readonly requestId: string; readonly code: string };
@@ -198,7 +225,10 @@ export function canonicalModelChatEvent(value: unknown): ModelChatEvent {
       if (r.kind === 'approval-result') { if (typeof r.outcome !== 'string' || !['accepted', 'declined', 'invalidated'].includes(r.outcome)) throw new TypeError('Invalid approval outcome'); canonicalModelScene(r.scene); } break;
     case 'start': protocolKeys(r, ['kind', 'requestId', 'conversationId', 'model']); protocolToken(r.conversationId); boundedText(r.model, 256); break;
     case 'delta': protocolKeys(r, ['kind', 'requestId', 'text']); boundedText(r.text, MODEL_CHAT_LIMITS.outputChars); break;
-    case 'tool': protocolKeys(r, ['kind', 'requestId', 'name', 'context']); if (typeof r.name !== 'string' || !['query_points', 'query_elevation', 'ground_elevation', 'set_scene_marks', 'get_scene_marks', 'list_skills', 'load_skill', 'finalize_area_candidates', 'scan_area_candidates', 'search_placement_sites', 'propose_placement_site', 'query_aoi_points', 'list_objects', 'get_object', 'propose_point_create', 'inspect_scene', 'capture_scene', 'select_reference', 'resolve_visual_pixel', 'nearest_label', 'propose_point_move', 'propose_point_move_to_nearest_label', 'propose_cad_box', 'propose_cad_cylinder', 'assess_utility_box', 'propose_utility_box'].includes(String(r.name)) || canonicalProtocolJson(r.context).length > MODEL_CHAT_LIMITS.frameBytes / 2) throw new TypeError('Invalid tool context'); break;
+    case 'tool': protocolKeys(r, ['kind', 'requestId', 'name', 'context']); if (typeof r.name !== 'string' || !['query_points', 'get_scene_evidence', 'query_elevation', 'query_terrain_region', 'terrain_profile', 'filter_terrain_regions', 'terrain_image', 'ground_elevation', 'set_scene_marks', 'get_scene_marks', 'list_skills', 'load_skill', 'finalize_area_candidates', 'scan_area_candidates', 'search_placement_sites', 'propose_placement_site', 'query_aoi_points', 'list_objects', 'get_object', 'propose_point_create', 'inspect_scene', 'capture_scene', 'select_reference', 'resolve_visual_pixel', 'nearest_label', 'propose_point_move', 'propose_point_move_to_nearest_label', 'propose_cad_box', 'propose_cad_cylinder', 'assess_utility_box', 'propose_utility_box'].includes(String(r.name)) || canonicalProtocolJson(r.context).length > MODEL_CHAT_LIMITS.frameBytes / 2) throw new TypeError('Invalid tool context');
+      if (r.name === 'get_scene_evidence') canonicalSceneEvidenceLookup(r.context);
+      if (['query_points', 'capture_scene', 'resolve_visual_pixel'].includes(String(r.name)) && protocolRecord(r.context).explorationEvidence !== undefined) canonicalEvidenceRetention(protocolRecord(r.context).explorationEvidence);
+      break;
     case 'tool-request': protocolKeys(r, ['kind', 'requestId', 'toolCallId', 'nonce', 'observationId', 'x', 'y']);
       if (typeof r.toolCallId !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/u.test(r.toolCallId)) throw new TypeError('Invalid tool call ID');
       protocolToken(r.nonce); protocolToken(r.observationId); protocolInteger(r.x, 4095); protocolInteger(r.y, 4095); break;

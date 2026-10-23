@@ -11,12 +11,14 @@ export async function loadElevationInfo(cloud: PreparedScene, signal: AbortSigna
   if (!response.ok) throw new Error('Elevation model unavailable. Retry loading.');
   const info = await response.json() as ElevationInfo; validInfo(info, cloud); return info;
 }
-export async function loadElevationGrid(cloud: PreparedScene, info: ElevationInfo, layer: ElevationLayer, signal: AbortSignal): Promise<ElevationGrid> {
+export async function loadElevationGrid(cloud: PreparedScene, info: ElevationInfo, layer: ElevationLayer | 'slope', signal: AbortSignal): Promise<ElevationGrid> {
   const params = new URLSearchParams({ revision: cloud.revision, modelRevision: info.revision, layer, maxSize: '192' });
-  const response = await fetch(`${base(info.cloudId)}/elevation-grid?${params}`, { signal, cache: 'no-store' });
+  if (layer === 'slope') { if (!info.terrain) throw new Error('Slope unavailable'); params.delete('layer'); params.set('terrainRevision', info.terrain.revision); }
+  const response = await fetch(`${base(info.cloudId)}/${layer === 'slope' ? 'terrain-grid' : 'elevation-grid'}?${params}`, { signal, cache: 'no-store' });
   if (!response.ok) throw new Error('Elevation layer unavailable. Retry layer.');
   const grid = await response.json() as ElevationGrid; validInfo(grid.info, cloud);
-  if (grid.info.revision !== info.revision || grid.layer !== layer || !Number.isInteger(grid.width) || !Number.isInteger(grid.height) || grid.width < 1 || grid.height < 1 || grid.width > 256 || grid.height > 256 || !Array.isArray(grid.values) || grid.values.length !== grid.width * grid.height || !grid.values.every(value => value === null || Number.isFinite(value)) || !Array.isArray(grid.origin) || grid.origin.length !== 2 || !grid.origin.every(Number.isFinite) || !Array.isArray(grid.cellSize) || grid.cellSize.length !== 2 || !grid.cellSize.every(n => Number.isFinite(n) && n > 0)) throw new Error('Invalid elevation display');
+  if (grid.info.revision !== info.revision || grid.layer !== (layer === 'slope' ? 'dtm' : layer) || !Number.isInteger(grid.width) || !Number.isInteger(grid.height) || grid.width < 1 || grid.height < 1 || grid.width > 256 || grid.height > 256 || !Array.isArray(grid.values) || grid.values.length !== grid.width * grid.height || !grid.values.every(value => value === null || Number.isFinite(value)) || !Array.isArray(grid.origin) || grid.origin.length !== 2 || !grid.origin.every(Number.isFinite) || !Array.isArray(grid.cellSize) || grid.cellSize.length !== 2 || !grid.cellSize.every(n => Number.isFinite(n) && n > 0)) throw new Error('Invalid elevation display');
+  if (layer === 'slope' && (grid.info.terrain?.revision !== info.terrain?.revision || !grid.color || grid.color.kind !== 'slope' || grid.color.units !== 'degrees' || grid.color.values.length !== grid.values.length || !grid.color.values.every(n => n === null || Number.isFinite(n) && n >= 0 && n <= 90))) throw new Error('Invalid slope display');
   return grid;
 }
 export async function queryElevation(cloud: PreparedScene, info: ElevationInfo, x: number, y: number, signal: AbortSignal): Promise<ElevationQuery> {

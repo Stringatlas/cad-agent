@@ -39,58 +39,63 @@ test('near includes full native leaves plus ancestors; far remains coarse; budge
   assert.equal(planAdaptiveDisplay(hierarchy, view, { ...settings, pointBudget: 1 }).budgetLimited, true);
 });
 
-test('inspection focus reaches a far/edge branch instead of spending its budget on near-camera foreground', () => {
+test('coarse visible coverage precedes distance-based refinement; orbit focus cannot starve the foreground', () => {
   const edge: AdaptiveHierarchy = { dataset: { ...dataset, totalPoints: 10 }, nodes: [...hierarchy.nodes,
     { name: 'r77', count: 2, bounds: { min: [6, 6, 6], max: [8, 8, 8] } },
   ] };
-  const tight = { ...settings, nearRadius: 1, pointBudget: 6 };
-  const names = (v: AdaptiveView) => planAdaptiveDisplay(edge, v, tight).nodes.map(n => n.name);
-  assert.deepEqual(names(view), ['r', 'r0', 'r00'], 'foreground previously starved the inspected far branch');
+  const tight = { ...settings, nearRadius: 1, pointBudget: 8 };
+  const names = (v: AdaptiveView, pointBudget = tight.pointBudget) => planAdaptiveDisplay(edge, v, { ...tight, pointBudget }).nodes.map(n => n.name);
   const focused = { ...view, focus: [7, 7, 7] as const };
-  assert.deepEqual(names(focused), ['r', 'r7', 'r77']);
-  assert.deepEqual(names({ ...focused, focus: [1, 1, 1] }), ['r', 'r0', 'r00'], 'moving the focus restores detail at the other edge');
+  assert.deepEqual(names(focused, 6), ['r', 'r0', 'r7'], 'both visible coarse octants precede deeper refinement');
+  assert.deepEqual(names(focused), ['r', 'r0', 'r7', 'r00'], 'near foreground refines despite distant orbit focus');
+  assert.deepEqual(names({ ...focused, focus: [1, 1, 1] }), names(focused), 'orbit target cannot redirect display budget');
+  assert.deepEqual(names({ ...focused, position: [7, 7, 7] }), ['r', 'r7', 'r0', 'r77'], 'camera movement reverses refinement priority');
   for (const pointBudget of [1, 2, 3, 4, 5, 6, 8, 10]) {
     const plan = planAdaptiveDisplay(edge, focused, { ...tight, pointBudget });
     assert.ok(plan.points <= pointBudget);
     for (const node of plan.nodes) if (node.name !== 'r') assert.ok(plan.nodes.some(n => n.name === node.name.slice(0, -1)));
   }
   assert.equal(planAdaptiveDisplay(edge, focused, tight).budgetLimited, true);
-  assert.deepEqual(names({ ...focused, planes: [[-1, 0, 0, 3]] }), ['r', 'r0', 'r00'], 'focus never bypasses frustum culling');
-  assert.deepEqual(names({ ...focused, position: [10000, 10000, 10000] }), ['r'], 'focus does not invent distant full-detail eligibility');
+  assert.deepEqual(names({ ...focused, planes: [[-1, 0, 0, 3]] }), ['r', 'r0', 'r00']);
+  assert.deepEqual(names({ ...focused, position: [10000, 10000, 10000] }), ['r']);
   for (const focus of [[NaN, 0, 0], [Infinity, 0, 0], [1, 2]]) {
     assert.throws(() => planAdaptiveDisplay(edge, { ...view, focus: focus as unknown as AdaptiveView['position'] }, tight), /camera/);
   }
 });
 
-test('focus-only motion replans and evicts within budget even if camera pose and frustum stay unchanged', async () => {
-  const visible = new Set<string>(); let points = 0;
-  const fetcher: typeof fetch = async input => response(String(input).endsWith('display-hierarchy') ? hierarchy : payload(new URL(String(input), 'http://local').searchParams.get('name')!));
+test('focus-only motion preserves loaded detail; camera distance changes replan within budget', async () => {
+  const visible = new Set<string>(); let points = 0, calls = 0;
+  const fetcher: typeof fetch = async input => { calls++; return response(String(input).endsWith('display-hierarchy') ? hierarchy : payload(new URL(String(input), 'http://local').searchParams.get('name')!)); };
   const channel = createAdaptiveDisplay({ add(p) { visible.add(p.name); }, remove(n) { visible.delete(n); }, status(s) { points = s.loadedPoints; assert.ok(points <= 4); } }, fetcher);
   try {
     channel.configure({ ...settings, pointBudget: 4 }); channel.update({ ...view, focus: [1, 1, 1] }); channel.bind(dataset);
     await until(() => points === 4); assert.deepEqual([...visible], ['r', 'r0']);
-    channel.update({ ...view, focus: [7, 7, 7] });
+    const before = calls;
+    channel.update({ ...view, focus: [7, 7, 7] }); await pause(180);
+    assert.deepEqual([...visible], ['r', 'r0']); assert.equal(calls, before);
+    channel.update({ ...view, position: [7, 7, 7] });
     await until(() => visible.has('r7')); assert.deepEqual([...visible], ['r', 'r7']);
   } finally { channel.dispose(); }
 });
 
-test('default and maximum budget are hard-capped at three million native points', () => {
+test('default stays three million; custom cap permits more native points and rejects over fifty million', () => {
   assert.equal(DEFAULT_ADAPTIVE_SETTINGS.pointBudget, 3_000_000);
   const names = ['r', ...Array.from({ length: 8 }, (_, i) => `r${i}`), ...Array.from({ length: 64 }, (_, i) => `r${i >> 3}${i % 8}`)];
   const large = { dataset, nodes: names.map(name => ({ name, count: 65_536, bounds: dataset.bounds })) };
   const plan = planAdaptiveDisplay(large, view);
   assert.equal(plan.points, Math.floor(3_000_000 / 65_536) * 65_536);
   assert.equal(plan.budgetLimited, true);
-  assert.throws(() => planAdaptiveDisplay(large, view, { ...settings, pointBudget: 3_000_001 }), /settings/);
+  assert.throws(() => planAdaptiveDisplay(large, view, { ...settings, pointBudget: 50_000_001 }), /settings/);
+  assert.equal(planAdaptiveDisplay(large, view, { ...settings, pointBudget: 6000000 }).points, names.length * 65536);
   const channel = createAdaptiveDisplay({ add() {}, remove() {}, status() {} });
-  try { assert.throws(() => channel.configure({ pointBudget: 3_000_001 }), /settings/); } finally { channel.dispose(); }
+  try { assert.throws(() => channel.configure({ pointBudget: 50_000_001 }), /settings/); } finally { channel.dispose(); }
 });
 
 test('frustum and screen hysteresis retain only modest boundary crossings; settings and camera validated', () => {
   const boundary = { ...view, planes: [[1, 0, 0, -8.2] as const] };
   assert.equal(planAdaptiveDisplay(hierarchy, boundary, settings).nodes.length, 0);
   assert.ok(planAdaptiveDisplay(hierarchy, boundary, settings, new Set(['r'])).nodes.length > 0);
-  for (const bad of [{ pointBudget: 0 }, { pointBudget: 4_000_001 }, { nearRadius: -1 }, { pixelThreshold: NaN }]) assert.throws(() => planAdaptiveDisplay(hierarchy, view, { ...settings, ...bad }), /settings/);
+  for (const bad of [{ pointBudget: 0 }, { pointBudget: 50_000_001 }, { nearRadius: -1 }, { pixelThreshold: NaN }]) assert.throws(() => planAdaptiveDisplay(hierarchy, view, { ...settings, ...bad }), /settings/);
   assert.throws(() => planAdaptiveDisplay(hierarchy, { ...view, fovDegrees: 180 }, settings), /camera/);
 });
 

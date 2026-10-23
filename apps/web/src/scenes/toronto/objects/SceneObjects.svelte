@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { SceneObjectReference, PointOverrideSnapshot } from '@spatial/contracts';
+  import { pointSemanticName } from '../points/point-presentation';
   import type { TorontoDraftPoint } from '../../../chat/draft-context';
   import type { AreaOfInterestInput } from '../placement/area-of-interest';
   import { authoredReference, type SceneObjectController, type SceneObjectView } from './scene-object-client';
@@ -48,14 +49,22 @@
 
 <svelte:window onkeydown={navigate} />
 <div class="navigator" data-testid="scene-hierarchy" bind:this={navigator} role="group" aria-label="Scene hierarchy">
-  <button class="heading" aria-expanded={open} onclick={() => open = !open}>Scene <span aria-hidden="true">{open ? '−' : '+'}</span></button>
+  <button class="heading" aria-expanded={open} onclick={() => open = !open}>Objects <span aria-hidden="true">{open ? '−' : '+'}</span></button>
+  <div class="popover">
   {#if selected}
     <section class="selection" aria-label="Selected datum point" data-testid="selected-datum">
       <strong>{selected.name} · Datum point</strong>
       <div class="selection-actions"><button onclick={() => onfocus(selected!.position)}>Focus</button><button onclick={() => onselect(undefined)}>Clear selection</button></div>
       <details><summary>Details</summary><p>[{selected.position.join(', ')}] m · Toronto local · Z-up</p><pre>{JSON.stringify(reference, null, 2)}</pre></details>
     </section>
+  {:else if source}
+    <section class="selection" aria-label="Selected source point" data-testid="selected-source">
+      <strong>{source.name} · {pointSemanticName(source)}</strong>
+      <div class="selection-actions"><button onclick={() => onsource(source!.name)}>Focus</button><button onclick={() => onselect(undefined)}>Clear selection</button></div>
+      <details><summary>Details</summary><p>Source [{source.position.join(', ')}] m · Toronto local · Z-up</p></details>
+    </section>
   {/if}
+  {#if areaInput && !open}<div class="area-context"><span>{areaInput.pending ? 'Capturing area…' : 'Area selected'}</span><button onclick={() => areaInput?.clear()}>Clear</button></div>{/if}
   {#if open}
     <div class="contents">
       {#if areaInput}
@@ -65,7 +74,7 @@
         </div>
       {/if}
       <details><summary>Sources</summary><button class="row" onclick={() => { onselect(undefined); }}>▧ Toronto3D cloud</button>
-        {#each points as point (point.name)}<button class="row nested" aria-pressed={selectedSource === point.name && !selectedId} onclick={() => onsource(point.name)}>{point.name} · Source point</button>{/each}
+        {#each points as point (point.name)}<button class="row nested" aria-pressed={selectedSource === point.name && !selectedId} onclick={() => onsource(point.name)}>{point.name} · {pointSemanticName(point)}</button>{/each}
       </details>
       <details open><summary>Design</summary>
         {#each view.snapshot?.objects ?? [] as object (object.id)}
@@ -90,17 +99,20 @@
     </div>
   {/if}
   {#if view.error}<div class="recovery" role="alert"><p>{view.error}</p><button disabled={view.busy} onclick={() => void controller.refresh()}>Refresh objects</button></div>{/if}
+  </div>
 </div>
 
 <style>
-  .navigator { position: absolute; left: 16px; top: 70px; z-index: 4; max-width: calc(100% - 32px); width: 248px; color: #eeeef2; font-size: 12px; }
+  .navigator { position: relative; z-index: 4; flex-shrink: 0; color: #eeeef2; font-size: 12px; }
   .area-row { display: flex; align-items: center; gap: 8px; padding: 4px 0 8px; color: #8be6d4; } .area-row span { flex: 1; } .area-row small { display: block; margin-top: 3px; font-size: 11px; color: #a8a9b0; }
   .object-row { display: flex; gap: 4px; align-items: stretch; } .object-row .row { flex: 1; min-width: 0; overflow-wrap: anywhere; } .visibility { flex-shrink: 0; }
-  .heading { display: flex; gap: 24px; justify-content: space-between; width: auto; padding: 9px 12px; }
-  .contents, .recovery { margin-top: 6px; padding: 10px; border: 1px solid #ffffff24; border-radius: 12px; background: #202124f5; max-height: min(55dvh, 480px); overflow: auto; overscroll-behavior: contain; box-shadow: 0 8px 24px #0004; }
+  .heading { display: flex; gap: 8px; align-items: center; width: auto; padding: 8px 10px; margin: 0; min-height: 36px; border-color: transparent; background: transparent; }
+  .popover { position: absolute; left: 0; top: calc(100% + 8px); width: min(280px, calc(100vw - 32px)); max-height: calc(100dvh - 180px); overflow-y: auto; overscroll-behavior: contain; }
+  .area-context { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 10px; border: 1px solid #ffffff20; border-radius: 8px; background: #242528; }
+  .contents, .recovery { margin-top: 6px; padding: 10px; border: 1px solid #ffffff24; border-radius: 12px; background: #202124f5; box-shadow: 0 8px 24px #0004; }
   details { margin: 5px 0; } summary { cursor: pointer; padding: 7px 0; } .quiet { font-size: 11px; color: #a8a9b0; margin: 6px 0; }
   button, input, select { font: inherit; color: inherit; background: #292a2e; border: 1px solid #ffffff20; border-radius: 7px; padding: 8px; box-sizing: border-box; }
-  button { cursor: pointer; margin: 3px 0; } button:disabled { opacity: .45; cursor: default; } button[aria-pressed="true"] { border-color: #82e3e0; background: #334448; } .row { display: block; width: 100%; text-align: left; } .row span { display: block; font-size: 10px; color: #b8b9c1; padding-left: 15px; } .nested { padding-left: 18px; } label { display: block; margin: 7px 0; } input, select { display: block; width: 100%; margin-top: 4px; min-width: 0; } .axes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; } .selection { margin: 6px 0; padding: 10px; border: 1px solid #ffffff24; border-radius: 10px; background: #202124f5; max-height: 25dvh; overflow: auto; } .selection-actions { display: flex; gap: 6px; } .selection strong { display: block; } pre { font-size: 10px; white-space: pre-wrap; overflow-wrap: anywhere; } .recovery { color: #ffd187; }
+  button { cursor: pointer; margin: 3px 0; } button:disabled { opacity: .45; cursor: default; } button[aria-pressed="true"] { border-color: #82e3e0; background: #334448; } .row { display: block; width: 100%; text-align: left; } .row span { display: block; font-size: 10px; color: #b8b9c1; padding-left: 15px; } .nested { padding-left: 18px; } label { display: block; margin: 7px 0; } input, select { display: block; width: 100%; margin-top: 4px; min-width: 0; } .axes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; } .selection { margin: 6px 0; padding: 10px; border: 1px solid #ffffff24; border-radius: 10px; background: #202124f5; } .selection-actions { display: flex; gap: 6px; } .selection strong { display: block; } pre { font-size: 10px; white-space: pre-wrap; overflow-wrap: anywhere; } .recovery { color: #ffd187; }
   @media(pointer: coarse) { button { min-height: 44px; } }
-  @media(max-width: 600px) { .navigator { left: 12px; top: 112px; width: 224px; } .contents { max-height: 35dvh; } }
+
 </style>

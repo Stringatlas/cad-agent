@@ -5,6 +5,8 @@ export { ADAPTIVE_BINARY_MIME, ADAPTIVE_BINARY_LIMITS, encodeAdaptiveBinary, dec
 export type { AdaptiveBinaryIdentity, AdaptiveBinaryInput, AdaptiveBinaryPayload } from './adaptive-binary';
 export * from './scene-objects';
 export * from './scene-marks';
+export * from './spatial-region';
+export * from './agent-view';
 export type { AreaCandidate, AreaCandidateResult, AreaCandidateSettings } from './area-candidates';
 export { canonicalPlacementIntent, unresolvedPlacementFields, canonicalResolvedPlacementSpecification } from './placement';
 export type { PlacementBinding, PlacementArea, PlacementRankingMetric, PlacementValues, PlacementField, PlacementAssumption, PlacementIntent, ResolvedPlacementSpecification } from './placement';
@@ -20,7 +22,7 @@ export type { ModelVisualToolResult } from './model-visual';
 export { VISUAL_OBSERVATION_LIMITS } from './visual-observation';
 export type { VisualJson, VisualBinding, VisualCoverage, VisualPointProvenance, VisualObservation, VisualPixelResolution } from './visual-observation';
 export { canonicalModelCaptureRequest, canonicalModelReferenceSelection, canonicalModelBrowserAction, MODEL_CHAT_LIMITS, MODEL_INSPECTION_LIMITS, canonicalModelScene, canonicalModelTurnRequest, canonicalModelCatalog, canonicalModelChatEvent } from './model-chat';
-export type { ModelCaptureColorMode, ModelCaptureRequest, ModelReferenceSelection, ModelBrowserAction, ModelProposalAuthority, ModelAreaOfInterest, ModelTorontoPoint, ModelScene, ModelCatalog, ModelTurnRequest, ModelChatEvent, ModelRequestInspection, ModelRequestPhase, ModelInspectionOmission } from './model-chat';
+export type { LegacyCaptureRequest, ModelCaptureColorMode, ModelCaptureRequest, ModelReferenceSelection, ModelBrowserAction, ModelProposalAuthority, ModelAreaOfInterest, ModelTorontoPoint, ModelScene, ModelCatalog, ModelTurnRequest, ModelChatEvent, ModelRequestInspection, ModelRequestPhase, ModelInspectionOmission } from './model-chat';
 export { SCENE_POINT_LIMIT, canonicalScenePointName } from './scene-points';
 export type { ScenePointName } from './scene-points';
 export { CAD_OPERATIONS, CAD_LIMITS, CadError, canonicalCadBodyRef, canonicalCadOperation, canonicalCadRequest } from './cad';
@@ -128,3 +130,5 @@ export function assertProjectState(value: unknown): asserts value is ProjectStat
     throw new TypeError('Selection must be null or reference an existing entity');
   }
 }
+
+export * from './exploration-evidence';

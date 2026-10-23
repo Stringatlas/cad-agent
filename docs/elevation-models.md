@@ -84,6 +84,9 @@ Browser checks cover both layers, source-cell clicks, agent queries and capture,
 layer retry, scene changes, negative elevations and mobile controls.
 
 Future work includes a Toronto adapter, evaluated interpolation and ground
-filtering, outlier handling, and tiled adaptive raster rendering. Implementation
+filtering, outlier handling, and tiled adaptive raster rendering.
+[Terrain analysis](terrain-analysis.md) adds slope, regional summaries, profiles,
+connected-region filters and coordinate-bound images using the same source cells.
+Implementation
 does not complete the separate shared scene-interaction refactor. Fresh-session
 review remains pending; exact commands and artifacts are recorded in Task084.

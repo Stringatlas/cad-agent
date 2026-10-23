@@ -1,4 +1,5 @@
 import { openPreparedElevation } from './prepared-elevation';
+import { openPreparedTerrain } from './prepared-terrain';
 import { canonicalElevationCoordinates, type ElevationLayer } from '@spatial/contracts';
 import { encodePreparedNode, PREPARED_NODE_MIME } from '@spatial/contracts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -31,18 +32,20 @@ export function createPreparedCloudRoutes(registrations = preparedCloudRegistrat
       send(200, { scenes: [...ids].map(id => ({ id, name: preparedCloudName(id) })) });
       return true;
     }
-    const match = /^\/datasets\/prepared\/([a-zA-Z0-9][a-zA-Z0-9._:-]{0,127})(\/(?:sample|point|display-hierarchy|display-node|elevation|elevation-grid|elevation-query))?$/.exec(url.pathname);
+    const match = /^\/datasets\/prepared\/([a-zA-Z0-9][a-zA-Z0-9._:-]{0,127})(\/(?:sample|point|display-hierarchy|display-node|elevation|elevation-grid|elevation-query|terrain-grid))?$/.exec(url.pathname);
     if (!match || !ids.has(match[1])) { send(404, { error: 'Unknown scene' }); return true; }
     const sample = match[2] === '/sample', point = match[2] === '/point', keys = [...url.searchParams.keys()];
-    const elevation = match[2] === '/elevation' || match[2] === '/elevation-grid' || match[2] === '/elevation-query';
+    const terrainGrid = match[2] === '/terrain-grid';
+    const elevation = match[2] === '/elevation' || match[2] === '/elevation-grid' || match[2] === '/elevation-query' || terrainGrid;
     const elevationGrid = match[2] === '/elevation-grid', elevationQuery = match[2] === '/elevation-query';
     const hierarchy = match[2] === '/display-hierarchy', native = match[2] === '/display-node';
     const revision = url.searchParams.get('revision') ?? '', budget = url.searchParams.get('budget') ?? '', depth = url.searchParams.get('depth') ?? '';
     const fileId = url.searchParams.get('sourceFileId') ?? '', row = url.searchParams.get('sourceRow') ?? '';
     if (elevation) {
-      const required = ['revision', ...(elevationGrid ? ['modelRevision', 'layer', 'maxSize'] : elevationQuery ? ['modelRevision', 'x', 'y'] : [])];
+      const required = ['revision', ...(terrainGrid ? ['modelRevision', 'terrainRevision', 'maxSize'] : elevationGrid ? ['modelRevision', 'layer', 'maxSize'] : elevationQuery ? ['modelRevision', 'x', 'y'] : [])];
       let valid = keys.length === required.length && new Set(keys).size === keys.length && keys.every(k => required.includes(k)) && /^[a-f0-9]{64}$/.test(revision);
-      if (elevationGrid || elevationQuery) valid &&= /^[a-f0-9]{64}$/.test(url.searchParams.get('modelRevision') ?? '');
+      if (elevationGrid || elevationQuery || terrainGrid) valid &&= /^[a-f0-9]{64}$/.test(url.searchParams.get('modelRevision') ?? '');
+      if (terrainGrid) valid &&= /^[a-f0-9]{64}$/.test(url.searchParams.get('terrainRevision') ?? '') && /^(1[6-9]|[2-9]\d|1[0-8]\d|19[0-2])$/.test(url.searchParams.get('maxSize') ?? '');
       if (elevationGrid) valid &&= ['dtm', 'dsm', 'ndsm'].includes(url.searchParams.get('layer') ?? '') && /^(1[6-9]|[2-9]\d|1\d{2}|2[0-4]\d|25[0-6])$/.test(url.searchParams.get('maxSize') ?? '');
       if (elevationQuery) { try { canonicalElevationCoordinates({ x: Number(url.searchParams.get('x')), y: Number(url.searchParams.get('y')) }); valid &&= ['x', 'y'].every(k => !!url.searchParams.get(k)?.trim()); } catch { valid = false; } }
       if (!valid) { send(400, { error: 'Invalid elevation query' }); return true; }
@@ -70,9 +73,20 @@ export function createPreparedCloudRoutes(registrations = preparedCloudRegistrat
         if (source.revision !== revision) throw new Error('Stale source revision');
         const model = await openPreparedElevation(registrations[match[1]], source, controller.signal);
         if (!model) { send(404, { error: 'Elevation model not prepared' }); return true; }
-        if ((elevationGrid || elevationQuery) && model.info.revision !== url.searchParams.get('modelRevision')) throw new Error('Stale model revision');
+        if ((elevationGrid || elevationQuery || terrainGrid) && model.info.revision !== url.searchParams.get('modelRevision')) throw new Error('Stale model revision');
+        let terrain: Awaited<ReturnType<typeof openPreparedTerrain>>;
+        if (!elevationGrid && !elevationQuery) {
+          try { terrain = await openPreparedTerrain(registrations[match[1]], model, controller.signal); }
+          catch (error) { if (terrainGrid) throw error; controller.signal.throwIfAborted(); }
+        }
+        if (terrainGrid) {
+          if (!terrain || terrain.info.revision !== url.searchParams.get('terrainRevision')) throw new Error('Terrain unavailable or changed');
+          const grid = await terrain.grid(Number(url.searchParams.get('maxSize')), controller.signal);
+          if ((await reader.info(controller.signal)).revision !== revision) throw new Error('Source changed');
+          send(200, grid); return true;
+        }
         const result = elevationGrid ? await model.grid(url.searchParams.get('layer') as ElevationLayer, Number(url.searchParams.get('maxSize')), controller.signal)
-          : elevationQuery ? await model.query({ x: Number(url.searchParams.get('x')), y: Number(url.searchParams.get('y')) }, controller.signal) : model.info;
+          : elevationQuery ? await model.query({ x: Number(url.searchParams.get('x')), y: Number(url.searchParams.get('y')) }, controller.signal) : { ...model.info, ...(terrain ? { terrain: terrain.info } : {}) };
         if ((await reader.info(controller.signal)).revision !== revision) throw new Error('Source changed');
         send(200, result); return true;
       }

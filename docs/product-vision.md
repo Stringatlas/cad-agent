@@ -18,13 +18,21 @@ Example end-state: select Point 1 and Point 2, ask “build a channel between th
 
 Follow the standing [UX principles](ux-principles.md): **YAGNI, Apple-style restraint, clear information hierarchy and progressive disclosure**. The scene, selected object/type, chat intent and per-change approval are primary. Session IDs, revisions, provenance narration, routine status and methodological caveats remain accessible on demand—not permanent paragraphs/panels over the scene. Selected points expose semantic types; derived clusters/layers have compact accessible meaning through a key or contextual inspection. Preserve actionable failures/recovery and truthful estimate labels without turning safety into repetitive engineering copy. Validate the idle workspace as carefully as pending/error states, on desktop and mobile. Every future agent must follow this guidance, not merely copy the current UI.
 
+[Task086](tasks/086-workspace-ui-restraint.md) makes the workspace chrome unbranded. Toronto controls live above the canvas: Objects for scene references and datum tools, View for framing and navigation help, and Display for colors and point size. Advanced detail settings remain disclosed. A selected source point shows its semantic type even with chat closed; per-change approval and actionable recovery remain contextual.
+
 ## Dataset workspace
 [Task081](tasks/081-shared-cloud-workspace.md) makes STPLS3D the default scene
 and deletes the DALES viewer code. Its 25 independently bound scenes offer RGB,
 native-instance and semantic display, original-source queries, captures and
 numbered references through shared viewer/agent interfaces. Task082 adds four
 real-world scenes, and Task083 adds camera-driven native octree refinement within
-a bounded point budget. Exact source queries operate independently of display LOD. Toronto remains an
+a bounded point budget. Exact source queries operate independently of display LOD.
+[Task087](tasks/087-capture-camera-lod.md) gives agent images their own bounded
+camera-dependent detail demand without navigating or changing the user’s display.
+Capture coverage remains an observation of admitted LOD, never whole-source evidence.
+[Task088](tasks/088-distance-lod-budget.md) prioritizes camera-distance detail after
+coarse visible coverage, with a 3M default point cap and persistent custom caps.
+Changing a display cap preserves the person’s camera, selection, colors and layer. Toronto remains an
 explicit alternative with its existing human-approved editing capabilities.
 Prepared-cloud editing is not implemented; no scene inherits another scene's
 taxonomy, frame or authority. Scene switching clears old references and continuation.
@@ -36,6 +44,8 @@ Toronto3D is the actual editing workspace. Synthetic geometry is a development/t
 The product agent owns decomposition, visual/spatial exploration, hypotheses, candidate generation, measurement choices, judgement and iteration. Tools should be composable scene interfaces—not prepackaged decision algorithms wrapped in chat narration. Deterministic computation is appropriate for factual measurements, efficient source access, geometry verification and authority checks, not a mandatory candidate universe. Runtime skills explain these interfaces and evidence limits without prescribing a fixed task chain.
 
 [Task069](tasks/069-model-directed-scene-exploration.md) implements bounded coordinate queries, observed ground elevation and lightweight C1–Cn hypotheses that the model can generate/revise/reorder independently of scan pools. These annotations do not create geometry or certify suitability. Mock-provider browser evidence establishes transport/rendering, not real-model exploration quality; geometry proposals still require each human approval.
+
+[Task089](tasks/089-agentic-scene-exploration.md) tracks the long-running implementation of composable scene agency: reliable conversation continuation, capture-scoped grounding, region/reference view framing, shared spatial evidence and hypotheses, entity inspection, geometry measurements, resilient exploration and evaluated model behavior. Cloud conversation continuity, bounded single-pixel capture grounding, prepared-cloud disposable hypotheses and source-reference/region framing with current-turn relative views are implemented and independently reviewed; the checklist distinguishes these accepted slices from pending work. The model chooses its observations and reasoning sequence; geometry publication retains individual human approval.
 
 ## Required scene understanding
 
@@ -57,6 +67,12 @@ NoData; ground under buildings and suitability are not inferred.
 [Methods and limits](elevation-models.md) distinguish source cells from the
 disposable preview. Toronto integration and evaluated terrain filtering remain
 future work.
+
+[Task085](tasks/085-terrain-agent-analysis.md) adds composable regional elevation
+and slope measurements, caller-controlled connected-region filters, profiles and
+coordinate-bound raster images. The agent chooses hypotheses and thresholds;
+these tools do not rank terrain as suitable or publish geometry. Coverage,
+resolution and NoData remain explicit in every regional result.
 Task033 exposes model `scene.propose_box_create` and `scene.propose_box_update` for the bound synthetic project. Exact retained proposals appear as translucent scene ghosts with individual Accept/Decline. Parameter checks, stale-revision rejection, explicit Save and checked Undo reuse project authority. Acceptance invalidates other proposals from the old revision; they are never silently rebased. Ghosts are excluded from authoritative picking and remain non-authoritative in screenshot observations. Task045 permits mixed-scene captures and historical images without cancelling chat on camera motion; capture-time metadata and conservative pixel grounding never replace current tool/approval bindings.
 
 These synthetic edits remain **box parameter edits, not OpenCascade solids**. Task034 now adds separate Toronto-native OpenCascade box/cylinder candidates and AI source-point proposals with human approval; the original sandbox remains independent. Toronto uses its own authority and local frame, with no Toronto-to-synthetic mapping. Channels, booleans in the workspace, durable CAD bodies and broader verified modification tools remain future milestones.

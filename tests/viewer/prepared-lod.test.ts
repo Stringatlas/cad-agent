@@ -89,3 +89,16 @@ test('LOD errors latch until explicit retry; disposed late responses never publi
   loader.retry(); await wait(() => !!release); loader.dispose(); release!(payload());
   await new Promise(resolve => setTimeout(resolve, 20)); assert.equal(added, 0);
 });
+
+test('prepared bulk capture copy preserves active source order and Float64 after eviction', () => {
+  const material = new THREE.PointsMaterial(), render = createNativeCloudRender(material, 65536);
+  render.add(payload('r')); render.add(payload('r0')); render.add(payload('r7')); render.remove(['r0']);
+  const originals = new Float64Array(9), keys = new Uint32Array(6);
+  render.copySource(1, 3, originals, keys);
+  for (let i = 0; i < 3; i++) {
+    const source = render.resolve(i + 1)!;
+    assert.deepEqual(Array.from(originals.subarray(i * 3, i * 3 + 3)), Array.from(source.payload.positions.subarray(source.index * 3, source.index * 3 + 3)));
+    assert.deepEqual(Array.from(keys.subarray(i * 2, i * 2 + 2)), Array.from(source.payload.sourceIds.subarray(source.index * 2, source.index * 2 + 2)));
+  }
+  render.dispose(); assert.throws(() => render.copySource(0, 3, originals, keys)); material.dispose();
+});

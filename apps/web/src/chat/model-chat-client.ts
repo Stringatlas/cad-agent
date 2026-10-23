@@ -1,6 +1,6 @@
-import { MODEL_CHAT_LIMITS, MODEL_INSPECTION_LIMITS, MODEL_VISUAL_LIMITS, canonicalModelVisualToolResult, canonicalModelVisualObservation, modelVisualImageSize, modelVisualSourcePixel, type ModelVisualObservation, type VisualPixelResolution, type ModelRequestInspection, type ModelRequestPhase, canonicalModelScene, canonicalModelTurnRequest, canonicalModelCatalog, canonicalModelChatEvent,
+import { CaptureViewError, MODEL_CHAT_LIMITS, MODEL_INSPECTION_LIMITS, MODEL_VISUAL_LIMITS, canonicalModelVisualToolResult, canonicalModelVisualObservation, modelVisualImageSize, modelVisualSourcePixel, type ModelVisualObservation, type VisualPixelResolution, type ModelRequestInspection, type ModelRequestPhase, canonicalModelScene, canonicalModelTurnRequest, canonicalModelCatalog, canonicalModelChatEvent,
   canonicalProtocolJson, freezeProtocolValue, protocolKeys, protocolRecord, protocolToken,
-  type ModelCaptureRequest, type ModelReferenceSelection, type ModelAreaOfInterest, type ModelCatalog, type ModelScene, type ModelTurnRequest, type ModelChatEvent } from '@spatial/contracts';
+  type BrowserCaptureRequest, type ModelReferenceSelection, type ModelAreaOfInterest, type ModelCatalog, type ModelScene, type ModelTurnRequest, type ModelChatEvent } from '@spatial/contracts';
 import type { TorontoDraftPoint } from './draft-context';
 
 export const MODEL_CLIENT_LIMITS = Object.freeze({ catalogBytes: 1024 * 1024, streamBytes: MODEL_CHAT_LIMITS.streamBytes,
@@ -54,8 +54,8 @@ export function validateModelEvent(value: unknown, request: ModelTurnRequest): M
   if (r.kind === 'delta' && (typeof r.text !== 'string' || !r.text.length || r.text.length > MODEL_CLIENT_LIMITS.outputChars)) throw new Error('Invalid text delta');
   if (r.kind === 'tool') {
     if (!['list_skills', 'load_skill', 'inspect_scene', 'capture_scene', 'select_reference'].includes(String(r.name)) &&
-      !(['query_points', 'query_elevation'].includes(String(r.name)) && request.scene.mode === 'cloud') &&
-      !(['query_points', 'query_elevation', 'ground_elevation', 'set_scene_marks', 'get_scene_marks'].includes(String(r.name)) && request.scene.mode === 'toronto') &&
+      !(['query_points', 'get_scene_evidence', 'query_elevation', 'query_terrain_region', 'terrain_profile', 'filter_terrain_regions', 'terrain_image', 'set_scene_marks', 'get_scene_marks'].includes(String(r.name)) && request.scene.mode === 'cloud') &&
+      !(['query_points', 'get_scene_evidence', 'query_elevation', 'query_terrain_region', 'terrain_profile', 'filter_terrain_regions', 'terrain_image', 'ground_elevation', 'set_scene_marks', 'get_scene_marks'].includes(String(r.name)) && request.scene.mode === 'toronto') &&
       !(['query_aoi_points', 'search_placement_sites', 'scan_area_candidates', 'finalize_area_candidates'].includes(String(r.name)) && request.scene.mode === 'toronto' && request.scene.areaOfInterest) &&
       !(r.name === 'propose_placement_site' && request.scene.mode === 'toronto') && !(r.name === 'resolve_visual_pixel' && request.visualObservation) &&
       !(['nearest_label', 'assess_utility_box', 'propose_utility_box'].includes(String(r.name)) && request.scene.mode === 'toronto' && request.scene.toronto.length > 0) &&
@@ -121,7 +121,7 @@ export interface ModelAgentCallbacks {
   /** Current shared-session shortlist; validate before rendering. Never re-search to display it. */
   onplacementsearch?: (result: unknown, isCurrent: () => boolean) => void | Promise<void>;
   onareacandidates?: (result: unknown, isCurrent: () => boolean) => void | Promise<void>;
-  oncapture?: (request: ModelCaptureRequest, isCurrent: () => boolean) => Promise<VisualModelAttachment>;
+  oncapture?: (request: BrowserCaptureRequest, isCurrent: () => boolean, signal?: AbortSignal) => Promise<VisualModelAttachment>;
   onselectreference?: (reference: ModelReferenceSelection, isCurrent: () => boolean) => Promise<ModelScene>;
   onapprovalwait?: (waiting: boolean) => void;
   onauthorityrefresh?: () => Promise<ModelScene>;
@@ -176,10 +176,10 @@ export async function streamModelTurn(request: ModelTurnRequest, signal: AbortSi
       let result: unknown = { status: 'unavailable' };
       if (event.action.kind === 'capture' && agent.oncapture) {
         try {
-          attachment = await abortable(agent.oncapture(event.action.request, () => !signal.aborted), signal); guard(); observation = attachment.observation;
+          attachment = await abortable(agent.oncapture(event.action.request, () => !signal.aborted, signal), signal); guard(); observation = attachment.observation;
           request = { ...request, visualObservation: observation };
           result = { status: 'captured', observation };
-        } catch { guard(); }
+        } catch (error) { guard(); if (error instanceof CaptureViewError) result = { status: 'unavailable', reason: error.code }; }
       } else if (event.action.kind === 'select-reference' && agent.onselectreference) {
         const scene = canonicalModelScene(await abortable(agent.onselectreference(event.action.reference, () => !signal.aborted), signal)); guard();
         request = { ...request, scene }; result = { status: 'selected', scene };
@@ -376,7 +376,8 @@ export class ModelChatController {
       if (objectApprovalChange || selectionChange || cloudSelectionChange) { this.acceptAgentScene(scene); return; }
     }
     const sameSession = this.scene?.mode === scene.mode && (scene.mode !== 'cloud' ||
-      this.scene.cloud?.id === scene.cloud?.id && this.scene.cloud?.revision === scene.cloud?.revision && this.scene.cloud?.frameId === scene.cloud?.frameId);
+      this.scene.cloud?.id === scene.cloud?.id && this.scene.cloud?.revision === scene.cloud?.revision && this.scene.cloud?.frameId === scene.cloud?.frameId &&
+      canonicalProtocolJson(this.scene.cloud?.localOrigin) === canonicalProtocolJson(scene.cloud?.localOrigin));
     if (!this.active && sameSession) {
       this.proposalEvents.oninvalidate?.(); this.acceptAgentScene(scene); return;
     }
@@ -385,7 +386,7 @@ export class ModelChatController {
   }
   /** Retained messages are display-only: only the volatile handle can continue server history. */
   private contextReset(reason: string) {
-    if (this.scene?.mode === 'toronto') this.proposalEvents.onscenemarks?.(undefined);
+    if (this.scene?.mode === 'toronto' || this.scene?.mode === 'cloud') this.proposalEvents.onscenemarks?.(undefined);
     this.proposalEvents.oninvalidate?.();
     this.invalidate(); this.conversationId = null;
     this.set({ phase: 'idle', code: 'new-conversation-context',
@@ -398,7 +399,7 @@ export class ModelChatController {
     this.contextReset('Account connection changed');
     this.set({ catalogPhase: 'idle', catalog: undefined, model: '', code: 'refresh-models' });
   }
-  newChat() { if (this.scene?.mode === 'toronto') this.proposalEvents.onscenemarks?.(undefined); this.proposalEvents.oninvalidate?.(); this.invalidate(); this.conversationId = null; this.set({ messages: [], historyNotice: undefined, phase: 'idle', code: 'new-chat' }); }
+  newChat() { if (this.scene?.mode === 'toronto' || this.scene?.mode === 'cloud') this.proposalEvents.onscenemarks?.(undefined); this.proposalEvents.oninvalidate?.(); this.invalidate(); this.conversationId = null; this.set({ messages: [], historyNotice: undefined, phase: 'idle', code: 'new-chat' }); }
   selectModel(model: string) {
     if (!this.view.catalog?.ready || (model !== '' && !this.view.catalog.models.some(m => m.id === model))) return;
     if (model === this.view.model) return;
@@ -406,7 +407,7 @@ export class ModelChatController {
   }
   cancel() {
     if (!this.active && !this.catalogActive) return;
-    if (this.scene?.mode === 'toronto') this.proposalEvents.onscenemarks?.(undefined);
+    if (this.scene?.mode === 'toronto' || this.scene?.mode === 'cloud') this.proposalEvents.onscenemarks?.(undefined);
     this.proposalEvents.oninvalidate?.();
     ++this.catalogSequence; this.catalogActive?.abort(); this.catalogActive = undefined;
     this.invalidate(); this.conversationId = null;
@@ -491,14 +492,15 @@ export class ModelChatController {
         if (messageBytes([...next.slice(0, -1), updated]) > MODEL_CLIENT_LIMITS.historyBytes) throw new ModelTurnFailure('history-limit-new-chat-required');
         next[next.length - 1] = updated; next = boundInspections(next);
         this.set({ messages: [...next], code: event.kind === 'tool' ? 'inspecting-bound-scene' : 'receiving-model-response' });
+        if (event.kind === 'tool' && (request.scene.mode === 'toronto' || request.scene.mode === 'cloud') &&
+          (event.name === 'set_scene_marks' || event.name === 'get_scene_marks') && protocolRecord(event.context).kind === 'scene-marks') {
+          if (!this.proposalEvents.onscenemarks) throw new ModelTurnFailure('invalid-or-unavailable-stream');
+          this.proposalEvents.onscenemarks(event.context);
+        }
         if (event.kind === 'tool' && request.scene.mode === 'toronto') {
           if (event.name === 'propose_point_create' && protocolRecord(event.context).kind === 'scene-object-proposal') this.proposalEvents.onauthorityproposal?.('objects');
           if (event.name === 'propose_point_move' || (event.name === 'propose_point_move_to_nearest_label' && protocolRecord(event.context).status === 'pending')) this.proposalEvents.onauthorityproposal?.('points');
           if (event.name === 'propose_cad_box' || event.name === 'propose_cad_cylinder' || event.name === 'propose_utility_box' || event.name === 'propose_placement_site') this.proposalEvents.onauthorityproposal?.('cad');
-          if ((event.name === 'set_scene_marks' || event.name === 'get_scene_marks') && protocolRecord(event.context).kind === 'scene-marks') {
-            if (!this.proposalEvents.onscenemarks) throw new ModelTurnFailure('invalid-or-unavailable-stream');
-            this.proposalEvents.onscenemarks(event.context);
-          }
           if (event.name === 'scan_area_candidates' || event.name === 'finalize_area_candidates') {
             const context = protocolRecord(event.context); protocolKeys(context, ['kind', 'result'], ['candidateAssessmentCapture']);
             if (context.kind !== 'area-candidate-result' || !this.proposalEvents.onareacandidates) throw new ModelTurnFailure('invalid-or-unavailable-stream');
@@ -513,8 +515,8 @@ export class ModelChatController {
           }
         }
       }, this.fetcher, attachment, {
-        oncapture: this.proposalEvents.oncapture ? async (capture, isCurrent) => {
-          const captured = await this.proposalEvents.oncapture!(capture, isCurrent);
+        oncapture: this.proposalEvents.oncapture ? async (capture, isCurrent, signal) => {
+          const captured = await this.proposalEvents.oncapture!(capture, isCurrent, signal);
           if (current() && !controller.signal.aborted) {
             const bytes = next.reduce((total, message) => total + (message.attachments ?? []).reduce((sum, image) => sum + encoder.encode(image.image.dataUrl).length, 0), 0);
             if (bytes + encoder.encode(captured.observation.image.dataUrl).length > MODEL_CHAT_LIMITS.imageHistoryBytes) throw new ModelTurnFailure('history-limit');
@@ -541,7 +543,7 @@ export class ModelChatController {
       if (current()) {
         // The server commits annotations only with a successful whole turn.
         // Streamed hypotheses from this failed attempt must not outlive rollback.
-        if (request.scene.mode === 'toronto') this.proposalEvents.onscenemarks?.(undefined);
+        if (request.scene.mode === 'toronto' || request.scene.mode === 'cloud') this.proposalEvents.onscenemarks?.(undefined);
         this.proposalEvents.oninvalidate?.();
         const code = controller.signal.aborted ? 'deadline-incomplete' : error instanceof ModelTurnFailure ? error.code : 'invalid-or-unavailable-stream';
         // A validated server error + EOF proves this turn was not committed. Keep
